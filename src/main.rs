@@ -1,7 +1,7 @@
 //! Wallflex: lightweight desktop widgets drawn behind the icons.
 //!
-//! Milestone 1 draws a solid background on every monitor, between the
-//! wallpaper and the desktop icons, so its cost can be measured.
+//! Milestone 2 draws a solid background on every monitor, between the
+//! wallpaper and the desktop icons, with a plain-text sensor panel.
 
 // Release builds have no console window; debug builds keep one for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -9,14 +9,19 @@
 mod args;
 mod color;
 mod geometry;
+mod sensors;
+mod text;
 mod win32;
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use args::Command;
 
 /// Exit code for a bad command line.
 const EXIT_USAGE: u8 = 2;
+/// Gap between the two readings `--sensors` takes (rates need two).
+const SENSOR_WARMUP: Duration = Duration::from_secs(1);
 
 fn main() -> ExitCode {
     // Lets `--help`, `--diagnose` and errors print when a release build
@@ -34,6 +39,15 @@ fn main() -> ExitCode {
     match options.command {
         Command::Help => {
             println!("{}", args::USAGE);
+            ExitCode::SUCCESS
+        }
+        Command::Sensors => {
+            let mut sensors = win32::sensors::Sensors::new();
+            let _first = sensors.sample();
+            std::thread::sleep(SENSOR_WARMUP);
+            for line in text::lines(&sensors.sample()) {
+                println!("{line}");
+            }
             ExitCode::SUCCESS
         }
         Command::Diagnose => {

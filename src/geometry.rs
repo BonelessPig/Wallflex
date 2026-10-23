@@ -34,6 +34,14 @@ impl Rect {
         self.bottom.saturating_sub(self.top).max(0)
     }
 
+    /// Whether the two rectangles share any pixels.
+    pub fn intersects(self, other: Self) -> bool {
+        self.left < other.right
+            && other.left < self.right
+            && self.top < other.bottom
+            && other.top < self.bottom
+    }
+
     /// The same rectangle measured from `origin` instead of from the
     /// desktop's (0, 0). Used to turn a monitor's desktop position into a
     /// position inside a parent window whose top-left is at `origin`.
@@ -74,6 +82,31 @@ mod tests {
             bottom: 0,
         };
         assert_eq!((r.width(), r.height()), (0, 0));
+    }
+
+    #[test]
+    fn detects_overlap() {
+        let panel = Rect {
+            left: 100,
+            top: 100,
+            right: 200,
+            bottom: 200,
+        };
+        let touching = Rect {
+            left: 200,
+            top: 100,
+            right: 300,
+            bottom: 200,
+        };
+        let overlapping = Rect {
+            left: 150,
+            top: 150,
+            right: 160,
+            bottom: 160,
+        };
+        assert!(!panel.intersects(touching));
+        assert!(panel.intersects(overlapping));
+        assert!(overlapping.intersects(panel));
     }
 
     #[test]

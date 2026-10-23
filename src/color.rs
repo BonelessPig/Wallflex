@@ -14,9 +14,6 @@ pub struct Rgb {
 /// Number of hex digits in an `RRGGBB` colour.
 const HEX_DIGITS: usize = 6;
 
-/// Largest channel value, as a float, for converting to 0.0..=1.0.
-const CHANNEL_MAX: f32 = 255.0;
-
 impl Rgb {
     /// Black, the default background.
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
@@ -44,11 +41,6 @@ impl Rgb {
     /// The colour as a Win32 `COLORREF` value (`0x00BBGGRR`).
     pub fn to_colorref(self) -> u32 {
         u32::from_le_bytes([self.r, self.g, self.b, 0])
-    }
-
-    /// Red, green and blue scaled to 0.0..=1.0, as Direct2D expects.
-    pub fn to_unit(self) -> [f32; 3] {
-        [self.r, self.g, self.b].map(|c| f32::from(c) / CHANNEL_MAX)
     }
 }
 
@@ -82,18 +74,5 @@ mod tests {
             b: 0x33,
         };
         assert_eq!(c.to_colorref(), 0x0033_2211);
-    }
-
-    #[test]
-    fn converts_to_unit_floats() {
-        let [r, g, b] = Rgb {
-            r: 255,
-            g: 0,
-            b: 51,
-        }
-        .to_unit();
-        assert!((r - 1.0).abs() < f32::EPSILON);
-        assert!(g.abs() < f32::EPSILON);
-        assert!((b - 0.2).abs() < 1e-6);
     }
 }

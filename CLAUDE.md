@@ -47,16 +47,26 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - `src/main.rs`: entry point, dispatches on the command.
 - `src/args.rs`, `src/color.rs`, `src/geometry.rs`: safe, unit-tested
   logic.
+- `src/sensors.rs`: the `Snapshot` types and the pure sensor maths
+  (rates, GPU usage by Task Manager's method, storage descriptor
+  parsing). `src/text.rs`: snapshot to panel lines.
 - `src/win32/`: the Win32 layer.
   - `desktop.rs`: finds where to draw. Explorer's split desktop has two
     shapes: **Raised** (Windows 11 24H2+: surfaces are layered children
     of `Progman`, directly below `SHELLDLL_DefView`) and **Classic**
     (surfaces inside the wallpaper `WorkerW`). Undocumented; message
     `0x052C` with wParam `0xD` asks Explorer to split.
-  - `app.rs`: hidden controller window and message loop. Health check
-    every 5 s; rebuilds on Explorer restart (`TaskbarCreated`), display
-    change and resume from sleep.
-  - `surface.rs`: one window per monitor. `render.rs`: GDI or Direct2D.
+  - `app.rs`: hidden controller window and message loop. Sensors every
+    1 s (repaints only the panel); health check every 5 s; rebuilds on
+    Explorer restart (`TaskbarCreated`), display change and resume.
+  - `surface.rs`: one window per monitor. `paint.rs`: GDI background
+    plus the text panel, drawn off-screen and copied in one go.
+  - `sensors/`: raw readings, all from built-in Windows sources with no
+    admin: `pdh.rs` (CPU per core and clock, GPU engine use, VRAM in
+    use), `gpu.rs` (D3DKMT: temperature, fan, power, VRAM size),
+    `net.rs` (interface byte counters), `disk.rs` (SSD temperature
+    query; hard drives skipped so they never spin up). Ported from the
+    user's own `windows_sensors.py`.
 - `wallflex.manifest`: per-monitor DPI v2 and Windows 8+ support (needed
   for layered child windows); embedded by `build.rs`.
 
@@ -83,4 +93,12 @@ Milestone 1 (23 Oct 2026, release build, both monitors):
 
 Direct2D keeps a buffer the size of each monitor, so it must not be used
 for full-monitor windows. Paint backgrounds with GDI; draw widgets in
-windows (or buffers) sized to the widget.
+windows (or buffers) sized to the widget. The Direct2D modes were removed
+in milestone 2.
+
+Milestone 2 (23 Oct 2026, release build, 60 s, sensors every second):
+13.5 MB working set, 6.4 MB private, 0.07% of the CPU (0.86% of one
+core), 3 threads, no GPU driver. The PDH libraries account for most of
+the growth from milestone 1. Readings match the old PerformanceMonitor
+service (GPU, SSD, RAM, network exactly; CPU within a few points, since
+the two can't sample the same instant).

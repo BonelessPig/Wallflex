@@ -9,15 +9,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, HTTRANSPARENT,
     HWND_TOP, IsWindow, LWA_ALPHA, RegisterClassExW, SW_SHOWNA, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SetLayeredWindowAttributes, SetWindowPos,
-    ShowWindow, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT,
-    WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE,
+    ShowWindow, WINDOW_EX_STYLE, WM_DPICHANGED_AFTERPARENT, WM_ERASEBKGND,
+    WM_NCHITTEST, WM_PAINT, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE,
 };
 use windows::core::{PCWSTR, w};
 
 use super::app;
 use super::desktop::{DesktopHost, Layout};
-use super::render::Renderer;
+use super::paint::Painter;
 use super::struct_size;
 use crate::args::Options;
 use crate::geometry::{Point, Rect};
@@ -27,12 +27,12 @@ const SURFACE_CLASS: PCWSTR = w!("WallflexSurface");
 /// Fully opaque, for the layered-window alpha.
 const OPAQUE: u8 = 255;
 
-/// One monitor's window and the renderer that paints it.
+/// One monitor's window and the painter that paints it.
 pub struct Surface {
     /// The window, destroyed on drop.
     hwnd: HWND,
     /// Paints the window.
-    renderer: Renderer,
+    painter: Painter,
 }
 
 impl Surface {
@@ -86,14 +86,27 @@ impl Surface {
         let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
     }
 
-    /// Handles `WM_PAINT`.
-    pub fn paint(&mut self) {
-        self.renderer.paint(self.hwnd);
+    /// Asks Windows to repaint just the text panel.
+    pub fn invalidate_panel(&mut self) {
+        match self.painter.panel_rect(self.hwnd) {
+            Some(panel) => {
+                // SAFETY: plain handle and rectangle; failure only skips
+                // one repaint.
+                let _ = unsafe {
+                    InvalidateRect(
+                        Some(self.hwnd),
+                        Some(&raw const panel),
+                        false,
+                    )
+                };
+            }
+            None => self.invalidate(),
+        }
     }
 
-    /// Handles `WM_SIZE`.
-    pub fn resize(&mut self) {
-        self.renderer.resize(self.hwnd);
+    /// Handles `WM_PAINT`, drawing `lines` in the text panel.
+    pub fn paint(&mut self, lines: &[String]) {
+        self.painter.paint(self.hwnd, lines);
     }
 }
 
@@ -130,14 +143,14 @@ pub fn register_class(instance: HINSTANCE) -> windows::core::Result<()> {
 ///
 /// # Errors
 ///
-/// When the window or its renderer can't be created or placed.
+/// When the window or its painter can't be created or placed.
 pub fn create(
     host: &DesktopHost,
     monitor: Rect,
     instance: HINSTANCE,
     options: Options,
 ) -> windows::core::Result<Surface> {
-    let renderer = Renderer::new(options.render, options.background)?;
+    let painter = Painter::new(options.background)?;
 
     let mut origin = POINT::default();
     // SAFETY: `origin` is a valid place for the call to write to.
@@ -178,7 +191,7 @@ pub fn create(
         )
     }?;
     // From here on, dropping `surface` destroys the window.
-    let surface = Surface { hwnd, renderer };
+    let surface = Surface { hwnd, painter };
 
     if layered {
         // SAFETY: our own layered window; plain values.
@@ -202,15 +215,17 @@ unsafe extern "system" fn surface_proc(
 ) -> LRESULT {
     match msg {
         WM_PAINT => {
-            if app::with_surface(hwnd, Surface::paint) {
+            if app::paint_surface(hwnd) {
                 return LRESULT(0);
             }
         }
         // WM_PAINT covers the whole window; skipping the erase avoids a
         // flash of the class background.
         WM_ERASEBKGND => return LRESULT(1),
-        WM_SIZE => {
-            let _found = app::with_surface(hwnd, Surface::resize);
+        // Moved to a monitor with different scaling: redo the panel.
+        WM_DPICHANGED_AFTERPARENT => {
+            // SAFETY: plain handle; failure only skips one repaint.
+            let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
             return LRESULT(0);
         }
         // Let clicks fall through to the desktop.

@@ -7,7 +7,8 @@ pub mod app;
 pub mod console;
 mod desktop;
 mod monitors;
-mod render;
+mod paint;
+pub mod sensors;
 mod surface;
 
 use windows::Win32::Foundation::{HWND, RECT};

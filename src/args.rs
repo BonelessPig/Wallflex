@@ -8,12 +8,12 @@ use crate::color::Rgb;
 pub const USAGE: &str = "\
 Usage: wallflex [options]
 
-Draws a solid background behind the desktop icons on every monitor.
+Draws a solid background with a sensor panel behind the desktop icons
+on every monitor.
 
 Options:
-  --render <mode>   gdi (default), d2d-hw (Direct2D on the GPU)
-                    or d2d-sw (Direct2D on the CPU)
   --color <RRGGBB>  background colour (default 000000)
+  --sensors         print one sensor reading, then exit
   --diagnose        print how the desktop windows are laid out, then exit
   --quit            stop the running copy of Wallflex
   -h, --help        show this help";
@@ -21,25 +21,16 @@ Options:
 /// What the program was asked to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Draw the background until told to quit.
+    /// Draw until told to quit.
     Run,
     /// Ask a running copy to quit.
     Quit,
     /// Print the desktop window layout.
     Diagnose,
+    /// Print one sensor reading.
+    Sensors,
     /// Print the help text.
     Help,
-}
-
-/// How the background is painted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenderMode {
-    /// A plain GDI fill. Loads no graphics driver.
-    Gdi,
-    /// Direct2D on the GPU.
-    D2dHardware,
-    /// Direct2D on the CPU.
-    D2dSoftware,
 }
 
 /// Everything parsed from the command line.
@@ -47,8 +38,6 @@ pub enum RenderMode {
 pub struct Options {
     /// What to do.
     pub command: Command,
-    /// How to paint.
-    pub render: RenderMode,
     /// Background colour.
     pub background: Rgb,
 }
@@ -57,7 +46,6 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             command: Command::Run,
-            render: RenderMode::Gdi,
             background: Rgb::BLACK,
         }
     }
@@ -109,22 +97,16 @@ where
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--render" => {
-                let value = value_for("--render", args.next())?;
-                options.render =
-                    parse_render(&value).ok_or(ArgError::BadValue {
-                        option: "--render",
-                        value,
-                    })?;
-            }
             "--color" => {
-                let value = value_for("--color", args.next())?;
+                let value =
+                    args.next().ok_or(ArgError::MissingValue("--color"))?;
                 options.background =
                     Rgb::from_hex(&value).ok_or(ArgError::BadValue {
                         option: "--color",
                         value,
                     })?;
             }
+            "--sensors" => options.command = Command::Sensors,
             "--diagnose" => options.command = Command::Diagnose,
             "--quit" => options.command = Command::Quit,
             "-h" | "--help" => options.command = Command::Help,
@@ -134,27 +116,9 @@ where
     Ok(options)
 }
 
-/// Returns the option's value, or an error when it's missing.
-fn value_for(
-    option: &'static str,
-    value: Option<String>,
-) -> Result<String, ArgError> {
-    value.ok_or(ArgError::MissingValue(option))
-}
-
-/// Maps a `--render` value to its mode.
-fn parse_render(value: &str) -> Option<RenderMode> {
-    match value {
-        "gdi" => Some(RenderMode::Gdi),
-        "d2d-hw" => Some(RenderMode::D2dHardware),
-        "d2d-sw" => Some(RenderMode::D2dSoftware),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ArgError, Command, Options, RenderMode, parse};
+    use super::{ArgError, Command, Options, parse};
     use crate::color::Rgb;
 
     fn run(args: &[&str]) -> Result<Options, ArgError> {
@@ -167,13 +131,11 @@ mod tests {
     }
 
     #[test]
-    fn reads_render_and_color() {
-        let options = run(&["--render", "d2d-sw", "--color", "#ff0000"]);
+    fn reads_color() {
         assert_eq!(
-            options,
+            run(&["--color", "#ff0000"]),
             Ok(Options {
                 command: Command::Run,
-                render: RenderMode::D2dSoftware,
                 background: Rgb { r: 255, g: 0, b: 0 },
             })
         );
@@ -184,6 +146,7 @@ mod tests {
         let command = |args| run(args).map(|o| o.command);
         assert_eq!(command(&["--quit"]), Ok(Command::Quit));
         assert_eq!(command(&["--diagnose"]), Ok(Command::Diagnose));
+        assert_eq!(command(&["--sensors"]), Ok(Command::Sensors));
         assert_eq!(command(&["-h"]), Ok(Command::Help));
     }
 
@@ -193,12 +156,12 @@ mod tests {
             run(&["--bogus"]),
             Err(ArgError::Unknown("--bogus".to_owned()))
         );
-        assert_eq!(run(&["--render"]), Err(ArgError::MissingValue("--render")));
+        assert_eq!(run(&["--color"]), Err(ArgError::MissingValue("--color")));
         assert_eq!(
-            run(&["--render", "vulkan"]),
+            run(&["--color", "red"]),
             Err(ArgError::BadValue {
-                option: "--render",
-                value: "vulkan".to_owned(),
+                option: "--color",
+                value: "red".to_owned(),
             })
         );
     }

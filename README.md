@@ -3,8 +3,11 @@
 Lightweight desktop widgets for Windows, drawn behind the desktop icons.
 No Wallpaper Engine, no browser engine, no admin rights.
 
-**Status: milestone 1.** Wallflex paints a solid background on every
-monitor, between the wallpaper and the icons. Widgets come next.
+**Status: milestone 2.** Wallflex paints a solid background on every
+monitor, between the wallpaper and the icons, with a plain-text panel of
+live sensor readings in the top-right corner: CPU per core and clock,
+RAM, network, each GPU's use, temperature, fan, power and VRAM, and SSD
+temperatures. Graphical widgets come next.
 
 ## Build
 
@@ -19,9 +22,9 @@ The exe is `target\release\wallflex.exe`.
 ## Run
 
 ```
-wallflex                      black background on every monitor
+wallflex                      black background and sensor panel
 wallflex --color 203040       any colour, as RRGGBB
-wallflex --render d2d-hw      paint with Direct2D instead of GDI
+wallflex --sensors            print one sensor reading and exit
 wallflex --quit               stop the running copy
 wallflex --diagnose           show how Explorer's desktop windows are laid out
 ```
@@ -31,8 +34,8 @@ builds (`cargo run`) keep a console, and Ctrl+C stops them.
 
 ## Measuring
 
-`tools\measure.ps1` starts each render mode in turn and reports RAM, CPU,
-threads and whether a GPU driver was loaded:
+`tools\measure.ps1` runs the release build and reports RAM, CPU, threads
+and whether a GPU driver was loaded:
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\measure.ps1 -Seconds 30

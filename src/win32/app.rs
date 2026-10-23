@@ -21,9 +21,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, PCWSTR, w};
 
 use super::desktop::{self, DesktopHost, Layout};
+use super::sensors::Sensors;
 use super::surface::{self, Surface};
 use super::{monitors, struct_size};
 use crate::args::Options;
+use crate::text;
 
 /// Window class of the hidden controller window. Also how `--quit` and
 /// the single-instance check find a running copy.
@@ -41,6 +43,10 @@ const DISPLAY_SETTLE_MS: u32 = 1_000;
 /// Wait after Explorer restarts before rebuilding, in milliseconds,
 /// while it recreates the desktop.
 const EXPLORER_SETTLE_MS: u32 = 2_000;
+/// Timer that takes a sensor reading and refreshes the text panel.
+const SENSOR_TIMER: usize = 3;
+/// How often sensors are read, in milliseconds.
+const SENSOR_INTERVAL_MS: u32 = 1_000;
 /// Health checks to skip after a failed attempt, so a desktop that won't
 /// split is asked again every 30 seconds rather than every 5.
 const RETRY_SKIP_TICKS: u32 = 5;
@@ -64,6 +70,10 @@ struct State {
     skip_ticks: u32,
     /// A rebuild is already scheduled, so nothing else asks for one.
     rebuild_pending: bool,
+    /// Sensor sources; `None` until `run` starts.
+    sensors: Option<Sensors>,
+    /// The text panel's lines from the latest reading.
+    lines: Vec<String>,
 }
 
 thread_local! {
@@ -153,8 +163,22 @@ pub fn run(options: Options) -> Result<(), AppError> {
     // Without a console (release builds) this fails harmlessly.
     let _ = unsafe { SetConsoleCtrlHandler(Some(on_console_ctrl), true) };
 
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.sensors = Some(Sensors::new());
+        }
+    });
+    on_sensor_tick();
+
     rebuild();
     // SAFETY: our own window; no callback, so WM_TIMER is posted.
+    if unsafe {
+        SetTimer(Some(controller), SENSOR_TIMER, SENSOR_INTERVAL_MS, None)
+    } == 0
+    {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    // SAFETY: as above.
     if unsafe {
         SetTimer(Some(controller), HEALTH_TIMER, HEALTH_INTERVAL_MS, None)
     } == 0
@@ -177,15 +201,18 @@ pub fn diagnose() -> String {
     desktop::describe()
 }
 
-/// Runs `action` on the surface whose window is `hwnd`. Returns whether
-/// it was found (it isn't while being created or during a rebuild).
-pub(super) fn with_surface(hwnd: HWND, action: fn(&mut Surface)) -> bool {
+/// Paints the surface whose window is `hwnd`. Returns whether it was
+/// found (it isn't while being created or during a rebuild).
+pub(super) fn paint_surface(hwnd: HWND) -> bool {
     STATE.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
             return false;
         };
-        let found = state.surfaces.iter_mut().find(|s| s.hwnd() == hwnd);
-        found.map(action).is_some()
+        let State {
+            surfaces, lines, ..
+        } = &mut *state;
+        let found = surfaces.iter_mut().find(|s| s.hwnd() == hwnd);
+        found.map(|surface| surface.paint(lines)).is_some()
     })
 }
 
@@ -311,6 +338,7 @@ fn on_timer(hwnd: HWND, timer: usize) {
             rebuild();
         }
         HEALTH_TIMER => on_health_tick(hwnd),
+        SENSOR_TIMER => on_sensor_tick(),
         _ => {}
     }
 }
@@ -373,6 +401,28 @@ fn on_health_tick(hwnd: HWND) {
         Some(Health::WrongOrder) => restore_order(),
         Some(Health::Good) | None => {}
     }
+}
+
+/// Takes a sensor reading and repaints the text panels.
+fn on_sensor_tick() {
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let State {
+            sensors,
+            lines,
+            surfaces,
+            ..
+        } = &mut *state;
+        let Some(sensors) = sensors.as_mut() else {
+            return;
+        };
+        *lines = text::lines(&sensors.sample());
+        for surface in surfaces {
+            surface.invalidate_panel();
+        }
+    });
 }
 
 /// Judges whether the surfaces are still where they should be.
