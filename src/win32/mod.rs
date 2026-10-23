@@ -7,7 +7,7 @@ pub mod app;
 pub mod console;
 mod desktop;
 mod monitors;
-mod paint;
+pub mod paint;
 pub mod sensors;
 mod surface;
 

@@ -1,70 +1,62 @@
-//! GDI painting: the background colour and the sensor text panel in the
-//! top-right corner. GDI keeps no buffer the size of the monitor, which
-//! is what made Direct2D cost ~100 MB in milestone 1.
+//! GDI painting: the background colour plus the widgets in the
+//! bottom-right corner. Shapes are drawn by the software [`Canvas`]
+//! straight into a DIB section sized to the widgets only; GDI draws the
+//! text on top and copies it to the window. No buffer is ever the size
+//! of the monitor, which is what made Direct2D cost ~100 MB in
+//! milestone 1.
 
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-    CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
-    DEFAULT_CHARSET, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DeleteDC,
-    DeleteObject, DrawTextW, EndPaint, ExcludeClipRect, FillRect, GetDC,
-    GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor,
-    TEXTMETRICW, TRANSPARENT,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC,
+    CreateDIBSection, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, ExcludeClipRect,
+    FillRect, GdiFlush, GetDC, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject,
+    SetBkMode, SetTextAlign, SetTextColor, TA_BASELINE, TA_CENTER, TA_LEFT,
+    TA_RIGHT, TEXT_ALIGN_OPTIONS, TRANSPARENT, TextOutW,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::core::w;
 
-use super::to_rect;
+use super::{struct_size, to_rect};
+use crate::canvas::Canvas;
 use crate::color::Rgb;
+use crate::widgets::{Align, Dashboard, Label, UNITS_PER_HEIGHT};
 
-/// Pixels per inch at 100% scaling.
-const BASE_DPI: u32 = 96;
-/// Points per inch, for font sizes.
-const POINTS_PER_INCH: u32 = 72;
-/// Panel text size, in points.
-const FONT_POINTS: u32 = 11;
+/// Gap between the widgets and the monitor's edges, in design units.
+const MARGIN: f64 = 64.0;
 /// Normal font weight.
 const FONT_WEIGHT_NORMAL: i32 = 400;
-/// Panel width, in characters.
-const PANEL_COLUMNS: i32 = 76;
-/// Panel height, in lines; extra lines are cut off.
-const PANEL_ROWS: i32 = 14;
-/// Gap between the panel and the monitor's edges, in pixels at 100%.
-const PANEL_MARGIN: i32 = 48;
-/// Panel text colour.
-const TEXT_COLOR: Rgb = Rgb {
-    r: 0xC8,
-    g: 0xC8,
-    b: 0xC8,
-};
+/// Fonts kept per surface; sizes beyond this are recreated as needed.
+const MAX_FONTS: usize = 8;
+/// Bits per pixel of the widget buffer.
+const BITS_PER_PIXEL: u16 = 32;
 
 /// Paints one surface.
 pub struct Painter {
+    /// The background colour.
+    background_color: Rgb,
     /// Background brush, deleted on drop.
     background: HBRUSH,
-    /// The panel font for the window's current DPI.
-    font: Option<Font>,
+    /// The widgets' pixels, kept between paints and recreated only when
+    /// the size changes.
+    buffer: Option<DibBuffer>,
+    /// Fonts by pixel size.
+    fonts: Vec<(i32, Font)>,
+    /// Where the widgets were last drawn, so a size change repaints
+    /// the old area too.
+    last_block: Option<RECT>,
 }
 
-/// A font and its measurements at one DPI.
-struct Font {
-    /// The font, deleted on drop.
-    handle: HFONT,
-    /// The DPI it was made for.
-    dpi: u32,
-    /// Average character width, in pixels (the font is monospaced).
-    char_width: i32,
-    /// Line height, in pixels.
-    line_height: i32,
-}
+/// A GDI font, deleted on drop.
+struct Font(HFONT);
 
 impl Drop for Font {
     fn drop(&mut self) {
-        // SAFETY: created by `Font::create`, no longer selected into any
-        // DC. Nothing useful can be done on failure.
-        let _ = unsafe { DeleteObject(self.handle.into()) };
+        // SAFETY: created by `font`, no longer selected into any DC.
+        // Nothing useful can be done on failure.
+        let _ = unsafe { DeleteObject(self.0.into()) };
     }
 }
 
@@ -81,52 +73,54 @@ impl Painter {
             return Err(windows::core::Error::from_thread());
         }
         Ok(Self {
+            background_color: background,
             background: brush,
-            font: None,
+            buffer: None,
+            fonts: Vec::new(),
+            last_block: None,
         })
     }
 
-    /// Where the text panel sits in `hwnd`, in client pixels.
-    pub fn panel_rect(&mut self, hwnd: HWND) -> Option<RECT> {
-        let font = self.font_for(hwnd)?;
-        let mut client = RECT::default();
-        // SAFETY: `client` is a valid place for the call to write to.
-        unsafe { GetClientRect(hwnd, &raw mut client) }.ok()?;
-        let width = font.char_width.checked_mul(PANEL_COLUMNS)?;
-        let height = font.line_height.checked_mul(PANEL_ROWS)?;
-        let margin = scale(PANEL_MARGIN, font.dpi);
-        let left = client.right.saturating_sub(margin).saturating_sub(width);
-        Some(RECT {
-            left,
-            top: margin,
-            right: left.saturating_add(width),
-            bottom: margin.saturating_add(height),
-        })
+    /// The areas to repaint after new data: where the widgets are now
+    /// and, if different, where they were last drawn.
+    pub fn dirty_rects(&self, hwnd: HWND, dashboard: &Dashboard) -> Vec<RECT> {
+        let mut rects: Vec<RECT> = block_rect(hwnd, dashboard)
+            .map(|r| r.0)
+            .into_iter()
+            .collect();
+        if let Some(last) = self.last_block
+            && rects.first() != Some(&last)
+        {
+            rects.push(last);
+        }
+        rects
     }
 
-    /// Handles `WM_PAINT`: the panel where it needs repainting, the
+    /// Handles `WM_PAINT`: the widgets where they need repainting, the
     /// background everywhere else.
-    pub fn paint(&mut self, hwnd: HWND, lines: &[String]) {
-        let panel = self.panel_rect(hwnd);
+    pub fn paint(&mut self, hwnd: HWND, dashboard: &Dashboard) {
+        let block = block_rect(hwnd, dashboard);
         let mut ps = PAINTSTRUCT::default();
         // SAFETY: called from `hwnd`'s WM_PAINT handler with a valid
         // PAINTSTRUCT, and always paired with EndPaint below.
         let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };
         if !hdc.is_invalid() {
-            if let (Some(panel), Some(font)) = (panel, &self.font) {
-                if to_rect(panel).intersects(to_rect(ps.rcPaint)) {
-                    draw_panel(hdc, panel, font, self.background, lines);
+            if let Some((rect, scale)) = block {
+                if to_rect(rect).intersects(to_rect(ps.rcPaint)) {
+                    self.draw_block(hdc, rect, scale, dashboard);
                 }
-                // Keep the fill below off the panel so it can't flicker.
+                self.last_block = Some(rect);
+                // Keep the fill below off the widgets so they can't
+                // flicker.
                 // SAFETY: `hdc` is valid; the result is the new clip
                 // region type, not an error worth acting on.
                 let _ = unsafe {
                     ExcludeClipRect(
                         hdc,
-                        panel.left,
-                        panel.top,
-                        panel.right,
-                        panel.bottom,
+                        rect.left,
+                        rect.top,
+                        rect.right,
+                        rect.bottom,
                     )
                 };
             }
@@ -141,32 +135,141 @@ impl Painter {
         let _ = unsafe { EndPaint(hwnd, &raw const ps) };
     }
 
-    /// The font for `hwnd`'s current DPI, recreated when the DPI changes.
-    fn font_for(&mut self, hwnd: HWND) -> Option<&Font> {
-        // SAFETY: only reads the window's DPI.
-        let dpi = unsafe { GetDpiForWindow(hwnd) };
-        if self.font.as_ref().is_none_or(|f| f.dpi != dpi) {
-            self.font = Font::create(hwnd, dpi);
+    /// Renders the widgets as they'd look on a monitor `monitor_height`
+    /// pixels tall, for `--preview`. Returns width, height and pixels
+    /// (`0x00RRGGBB`, rows top to bottom).
+    pub fn preview(
+        &mut self,
+        dashboard: &Dashboard,
+        monitor_height: u32,
+    ) -> Option<(u32, u32, Vec<u32>)> {
+        let scale = f64::from(monitor_height) / UNITS_PER_HEIGHT;
+        let (width, height) = dashboard.size();
+        let width = round_px((width * scale).ceil());
+        let height = round_px((height * scale).ceil());
+        // SAFETY: a DC for the whole screen, released below.
+        let screen = unsafe { GetDC(None) };
+        if screen.is_invalid() {
+            return None;
         }
-        self.font.as_ref()
+        let rendered = self.render(screen, width, height, scale, dashboard);
+        // SAFETY: pairs the GetDC above; the result can't usefully be
+        // handled.
+        let _ = unsafe { ReleaseDC(None, screen) };
+        rendered?;
+        let pixels = self.buffer.as_mut()?.pixels().to_vec();
+        Some((
+            u32::try_from(width).ok()?,
+            u32::try_from(height).ok()?,
+            pixels,
+        ))
     }
-}
 
-impl Drop for Painter {
-    fn drop(&mut self) {
-        // SAFETY: created in `new`, not selected into any DC. Nothing
-        // useful can be done on failure.
-        let _ = unsafe { DeleteObject(self.background.into()) };
+    /// Draws the widgets off-screen, then copies them to `hdc` in one go.
+    fn draw_block(
+        &mut self,
+        hdc: HDC,
+        rect: RECT,
+        scale: f64,
+        dashboard: &Dashboard,
+    ) {
+        let area = to_rect(rect);
+        let (width, height) = (area.width(), area.height());
+        let Some(source) = self.render(hdc, width, height, scale, dashboard)
+        else {
+            return;
+        };
+        // SAFETY: both DCs are valid and the area is inside each. A failed
+        // copy only leaves the widgets stale until the next paint.
+        let _ = unsafe {
+            BitBlt(
+                hdc,
+                rect.left,
+                rect.top,
+                width,
+                height,
+                Some(source),
+                0,
+                0,
+                SRCCOPY,
+            )
+        };
     }
-}
 
-impl Font {
-    /// Creates the panel font for `dpi` and measures it on `hwnd`.
-    fn create(hwnd: HWND, dpi: u32) -> Option<Self> {
-        let pixels =
-            FONT_POINTS.checked_mul(dpi)?.checked_div(POINTS_PER_INCH)?;
-        // Negative height asks for the character height, not the cell.
-        let height = i32::try_from(pixels).ok()?.checked_neg()?;
+    /// Renders the widgets into the buffer (recreated if the size
+    /// changed): shapes from the canvas, then the text on top. Returns
+    /// the buffer's DC.
+    fn render(
+        &mut self,
+        hdc: HDC,
+        width: i32,
+        height: i32,
+        scale: f64,
+        dashboard: &Dashboard,
+    ) -> Option<HDC> {
+        let w = usize::try_from(width).ok()?;
+        let h = usize::try_from(height).ok()?;
+        let fits = self
+            .buffer
+            .as_ref()
+            .is_some_and(|b| b.width == width && b.height == height);
+        if !fits {
+            // Free the old buffer before making the new one.
+            self.buffer = None;
+            self.buffer = DibBuffer::new(hdc, width, height);
+        }
+        let buffer = self.buffer.as_mut()?;
+        let background = self.background_color;
+        let labels = {
+            let mut canvas = Canvas::new(w, h, buffer.pixels())?;
+            canvas.fill(background);
+            dashboard.draw(&mut canvas, scale, background)
+        };
+        let dc = buffer.dc;
+        // SAFETY: `dc` is the buffer's DC, valid while the buffer lives.
+        // The result is the previous mode, not an error.
+        let _ = unsafe { SetBkMode(dc, TRANSPARENT) };
+        for label in &labels {
+            self.draw_label(dc, label);
+        }
+        Some(dc)
+    }
+
+    /// Draws one label.
+    fn draw_label(&mut self, dc: HDC, label: &Label) {
+        let Some(font) = self.font(round_px(label.size)) else {
+            return;
+        };
+        let align = match label.align {
+            Align::Left => TA_LEFT,
+            Align::Right => TA_RIGHT,
+            Align::Center => TA_CENTER,
+        };
+        let wide: Vec<u16> = label.text.encode_utf16().collect();
+        // SAFETY: `dc` is the buffer's DC; the old font is restored
+        // before returning. Results are informational.
+        unsafe {
+            let old = SelectObject(dc, font.into());
+            let _ =
+                SetTextAlign(dc, TEXT_ALIGN_OPTIONS(align.0 | TA_BASELINE.0));
+            let _ = SetTextColor(dc, colorref(label.color));
+            let _ = TextOutW(dc, round_px(label.x), round_px(label.y), &wide);
+            let _ = SelectObject(dc, old);
+        }
+    }
+
+    /// The font at `pixels` (em height), created on first use.
+    fn font(&mut self, pixels: i32) -> Option<HFONT> {
+        if let Some((_, font)) =
+            self.fonts.iter().find(|(size, _)| *size == pixels)
+        {
+            return Some(font.0);
+        }
+        if self.fonts.len() >= MAX_FONTS {
+            self.fonts.clear();
+        }
+        // Negative height asks for the character (em) height, like CSS.
+        let height = pixels.checked_neg()?;
         // SAFETY: plain values and a constant face name.
         let handle = unsafe {
             CreateFontW(
@@ -183,70 +286,103 @@ impl Font {
                 CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY,
                 0,
-                w!("Consolas"),
+                w!("Bahnschrift"),
             )
         };
         if handle.is_invalid() {
             return None;
         }
-        let mut font = Self {
-            handle,
-            dpi,
-            char_width: 0,
-            line_height: 0,
-        };
-        let metrics = measure(hwnd, handle)?;
-        font.char_width = metrics.tmAveCharWidth;
-        font.line_height = metrics.tmHeight;
-        Some(font)
+        self.fonts.push((pixels, Font(handle)));
+        Some(handle)
     }
 }
 
-/// The font's metrics, measured on a DC for `hwnd`.
-fn measure(hwnd: HWND, font: HFONT) -> Option<TEXTMETRICW> {
-    // SAFETY: a DC for our own window, released below.
-    let hdc = unsafe { GetDC(Some(hwnd)) };
-    if hdc.is_invalid() {
-        return None;
+impl Drop for Painter {
+    fn drop(&mut self) {
+        // SAFETY: created in `new`, not selected into any DC. Nothing
+        // useful can be done on failure.
+        let _ = unsafe { DeleteObject(self.background.into()) };
     }
-    let mut metrics = TEXTMETRICW::default();
-    // SAFETY: `hdc` is valid; the old font is restored before release,
-    // and `metrics` is a valid place to write to.
-    let ok = unsafe {
-        let old = SelectObject(hdc, font.into());
-        let ok = GetTextMetricsW(hdc, &raw mut metrics).as_bool();
-        let _ = SelectObject(hdc, old);
-        ok
+}
+
+/// Where the widgets go in `hwnd` (bottom-right, in client pixels) and
+/// the pixels per design unit, from the window's height.
+fn block_rect(hwnd: HWND, dashboard: &Dashboard) -> Option<(RECT, f64)> {
+    let mut client = RECT::default();
+    // SAFETY: `client` is a valid place for the call to write to.
+    unsafe { GetClientRect(hwnd, &raw mut client) }.ok()?;
+    let screen = to_rect(client);
+    let scale = f64::from(screen.height()) / UNITS_PER_HEIGHT;
+    let (width, height) = dashboard.size();
+    let margin = round_px(MARGIN * scale);
+    let right = screen.right.saturating_sub(margin);
+    let bottom = screen.bottom.saturating_sub(margin);
+    let rect = RECT {
+        left: right.saturating_sub(round_px((width * scale).ceil())),
+        top: bottom.saturating_sub(round_px((height * scale).ceil())),
+        right,
+        bottom,
     };
-    // SAFETY: pairs the GetDC above. The result only says whether it was
-    // released, which can't usefully be handled.
-    let _ = unsafe { ReleaseDC(Some(hwnd), hdc) };
-    ok.then_some(metrics)
+    (scale > 0.0).then_some((rect, scale))
 }
 
-/// An off-screen DC with a bitmap selected, cleaned up on drop.
-struct MemoryDc {
-    /// The DC.
+/// A 32-bit DIB section selected into its own memory DC: GDI can draw
+/// text into it and Rust can write its pixels directly, so nothing is
+/// copied between the two. Cleaned up on drop.
+struct DibBuffer {
+    /// Memory DC with the bitmap selected.
     dc: HDC,
-    /// The bitmap drawn into.
+    /// The DIB section.
     bitmap: HBITMAP,
     /// The DC's original bitmap, restored before deleting ours.
     original: HGDIOBJ,
+    /// The bitmap's pixels, owned by GDI.
+    bits: *mut u32,
+    /// Width in pixels.
+    width: i32,
+    /// Height in pixels.
+    height: i32,
 }
 
-impl MemoryDc {
-    /// Creates a `width` x `height` drawing area compatible with `hdc`.
+impl DibBuffer {
+    /// Creates a `width` x `height` buffer whose DC is compatible with
+    /// `hdc`.
     fn new(hdc: HDC, width: i32, height: i32) -> Option<Self> {
-        // SAFETY: `hdc` is a valid DC from BeginPaint.
-        let dc = unsafe { CreateCompatibleDC(Some(hdc)) };
-        if dc.is_invalid() {
-            return None;
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: struct_size::<BITMAPINFOHEADER>(),
+                biWidth: width,
+                // Negative: rows run top to bottom, as the canvas expects.
+                biHeight: height.checked_neg()?,
+                biPlanes: 1,
+                biBitCount: BITS_PER_PIXEL,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        // SAFETY: `info` describes the bitmap and `bits` receives the
+        // address of its pixels.
+        let bitmap = unsafe {
+            CreateDIBSection(
+                Some(hdc),
+                &raw const info,
+                DIB_RGB_COLORS,
+                &raw mut bits,
+                None,
+                0,
+            )
         }
-        // SAFETY: as above; the size is the panel's.
-        let bitmap = unsafe { CreateCompatibleBitmap(hdc, width, height) };
-        if bitmap.is_invalid() {
-            // SAFETY: the DC was created just above.
-            let _ = unsafe { DeleteDC(dc) };
+        .ok()?;
+        // SAFETY: `hdc` is a valid DC.
+        let dc = unsafe { CreateCompatibleDC(Some(hdc)) };
+        if bits.is_null() || dc.is_invalid() {
+            // SAFETY: deletes what was created just above.
+            unsafe {
+                let _ = DeleteObject(bitmap.into());
+                let _ = DeleteDC(dc);
+            }
             return None;
         }
         // SAFETY: both handles were created just above.
@@ -255,11 +391,31 @@ impl MemoryDc {
             dc,
             bitmap,
             original,
+            bits: bits.cast(),
+            width,
+            height,
         })
+    }
+
+    /// The pixels, for the canvas to draw into or to read back.
+    fn pixels(&mut self) -> &mut [u32] {
+        let count = usize::try_from(self.width)
+            .ok()
+            .zip(usize::try_from(self.height).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .unwrap_or(0);
+        // SAFETY: GdiFlush finishes any pending GDI drawing first. `bits`
+        // points to `width` x `height` 32-bit pixels that live as long as
+        // the bitmap (until drop), and `&mut self` means nothing else in
+        // Rust is using them.
+        unsafe {
+            let _ = GdiFlush();
+            std::slice::from_raw_parts_mut(self.bits, count)
+        }
     }
 }
 
-impl Drop for MemoryDc {
+impl Drop for DibBuffer {
     fn drop(&mut self) {
         // SAFETY: restores the original bitmap so ours can be deleted,
         // then deletes what `new` created. Failures can't be handled.
@@ -271,88 +427,19 @@ impl Drop for MemoryDc {
     }
 }
 
-/// Draws the panel off-screen, then copies it to `hdc` in one go.
-fn draw_panel(
-    hdc: HDC,
-    panel: RECT,
-    font: &Font,
-    background: HBRUSH,
-    lines: &[String],
-) {
-    let area = to_rect(panel);
-    let (width, height) = (area.width(), area.height());
-    let Some(memory) = MemoryDc::new(hdc, width, height) else {
-        return;
-    };
-    let whole = RECT {
-        left: 0,
-        top: 0,
-        right: width,
-        bottom: height,
-    };
-    // SAFETY: `memory.dc` is valid until `memory` drops; the font is
-    // restored before then. Results are informational.
-    unsafe {
-        let _ = FillRect(memory.dc, &raw const whole, background);
-        let old_font = SelectObject(memory.dc, font.handle.into());
-        let _ = SetBkMode(memory.dc, TRANSPARENT);
-        let _ = SetTextColor(memory.dc, colorref(TEXT_COLOR));
-        for (row, line) in (0..PANEL_ROWS).zip(lines) {
-            draw_line(memory.dc, line, row, font.line_height, width);
-        }
-        let _ = SelectObject(memory.dc, old_font);
-    }
-    // SAFETY: both DCs are valid and the area is inside each. A failed
-    // copy only leaves the panel stale until the next paint.
-    let _ = unsafe {
-        BitBlt(
-            hdc,
-            panel.left,
-            panel.top,
-            width,
-            height,
-            Some(memory.dc),
-            0,
-            0,
-            SRCCOPY,
-        )
-    };
-}
-
-/// Draws one line of text at `row`.
-fn draw_line(dc: HDC, line: &str, row: i32, line_height: i32, width: i32) {
-    let Some(top) = line_height.checked_mul(row) else {
-        return;
-    };
-    let mut rect = RECT {
-        left: 0,
-        top,
-        right: width,
-        bottom: top.saturating_add(line_height),
-    };
-    let mut wide: Vec<u16> = line.encode_utf16().collect();
-    // SAFETY: `dc` is valid, `wide` and `rect` are live. The result is
-    // the text height, not an error.
-    let _ = unsafe {
-        DrawTextW(
-            dc,
-            &mut wide,
-            &raw mut rect,
-            DT_LEFT | DT_SINGLELINE | DT_NOPREFIX,
-        )
-    };
-}
-
 /// A colour as a GDI `COLORREF`.
 fn colorref(color: Rgb) -> COLORREF {
     COLORREF(color.to_colorref())
 }
 
-/// Scales a size in pixels at 100% to `dpi`.
-fn scale(pixels: i32, dpi: u32) -> i32 {
-    i64::from(pixels)
-        .checked_mul(i64::from(dpi))
-        .and_then(|v| v.checked_div(i64::from(BASE_DPI)))
-        .and_then(|v| i32::try_from(v).ok())
-        .unwrap_or(pixels)
+/// A pixel position or size rounded to a whole pixel.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "clamped to the i32 range first, so the cast is exact"
+)]
+fn round_px(value: f64) -> i32 {
+    value
+        .round()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
 }

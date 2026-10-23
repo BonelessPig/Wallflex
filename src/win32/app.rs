@@ -25,7 +25,8 @@ use super::sensors::Sensors;
 use super::surface::{self, Surface};
 use super::{monitors, struct_size};
 use crate::args::Options;
-use crate::text;
+use crate::color::Rgb;
+use crate::widgets::Dashboard;
 
 /// Window class of the hidden controller window. Also how `--quit` and
 /// the single-instance check find a running copy.
@@ -72,8 +73,8 @@ struct State {
     rebuild_pending: bool,
     /// Sensor sources; `None` until `run` starts.
     sensors: Option<Sensors>,
-    /// The text panel's lines from the latest reading.
-    lines: Vec<String>,
+    /// What the widgets show.
+    dashboard: Dashboard,
 }
 
 thread_local! {
@@ -209,10 +210,12 @@ pub(super) fn paint_surface(hwnd: HWND) -> bool {
             return false;
         };
         let State {
-            surfaces, lines, ..
+            surfaces,
+            dashboard,
+            ..
         } = &mut *state;
         let found = surfaces.iter_mut().find(|s| s.hwnd() == hwnd);
-        found.map(|surface| surface.paint(lines)).is_some()
+        found.map(|surface| surface.paint(dashboard)).is_some()
     })
 }
 
@@ -403,7 +406,7 @@ fn on_health_tick(hwnd: HWND) {
     }
 }
 
-/// Takes a sensor reading and repaints the text panels.
+/// Takes a sensor reading and repaints the widgets.
 fn on_sensor_tick() {
     STATE.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
@@ -411,16 +414,16 @@ fn on_sensor_tick() {
         };
         let State {
             sensors,
-            lines,
+            dashboard,
             surfaces,
             ..
         } = &mut *state;
         let Some(sensors) = sensors.as_mut() else {
             return;
         };
-        *lines = text::lines(&sensors.sample());
-        for surface in surfaces {
-            surface.invalidate_panel();
+        dashboard.update(sensors.sample());
+        for surface in surfaces.iter() {
+            surface.invalidate_widgets(dashboard);
         }
     });
 }
@@ -482,7 +485,7 @@ fn take_surfaces() -> Vec<Surface> {
 /// Destroys the surfaces and creates fresh ones on every monitor.
 fn rebuild() {
     drop(take_surfaces());
-    let options = OPTIONS.get().copied().unwrap_or_default();
+    let background = OPTIONS.get().map_or(Rgb::BLACK, |o| o.background);
 
     let host = match desktop::find() {
         Ok(host) => host,
@@ -502,7 +505,7 @@ fn rebuild() {
 
     let mut surfaces = Vec::new();
     for monitor in monitors::list() {
-        match surface::create(&host, monitor, instance, options) {
+        match surface::create(&host, monitor, instance, background) {
             Ok(surface) => surfaces.push(surface),
             Err(error) => eprintln!(
                 "wallflex: no surface for the {}x{} monitor: {error}",

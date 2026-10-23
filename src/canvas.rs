@@ -1,0 +1,556 @@
+//! A small anti-aliased software canvas: rectangles, ring arcs,
+//! polylines and the area under a line, drawn into a borrowed 32-bit
+//! pixel buffer (in practice a GDI DIB section's memory, so nothing is
+//! copied). It only ever covers the widgets, so it stays small, and it
+//! needs no graphics library.
+//!
+//! Coordinates are in pixels as `f64`; a pixel's centre is at +0.5.
+//! Edges are smoothed by how much of each pixel a shape covers.
+
+use std::f64::consts::TAU;
+
+use crate::color::Rgb;
+
+/// A colour with an opacity, 0.0 (invisible) to 1.0 (solid).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Paint {
+    /// The colour.
+    pub color: Rgb,
+    /// Opacity, 0.0 to 1.0.
+    pub alpha: f64,
+}
+
+/// A rectangle in pixels, as floats so sizes can be fractional.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Area {
+    /// Left edge.
+    pub x0: f64,
+    /// Top edge.
+    pub y0: f64,
+    /// Right edge.
+    pub x1: f64,
+    /// Bottom edge.
+    pub y1: f64,
+}
+
+/// Draws into a pixel buffer. Each `u32` is `0x00RRGGBB`, the layout of
+/// a 32-bit GDI DIB.
+pub struct Canvas<'a> {
+    /// Width in pixels.
+    width: usize,
+    /// Height in pixels.
+    height: usize,
+    /// Rows top to bottom, `width` pixels each.
+    pixels: &'a mut [u32],
+}
+
+/// Half a pixel: the distance from a pixel's edge to its centre.
+const HALF: f64 = 0.5;
+
+impl<'a> Canvas<'a> {
+    /// A canvas over `pixels`, which must hold at least `width` x
+    /// `height` pixels. `None` if it's too small.
+    pub fn new(
+        width: usize,
+        height: usize,
+        pixels: &'a mut [u32],
+    ) -> Option<Self> {
+        let count = width.checked_mul(height)?;
+        let pixels = pixels.get_mut(..count)?;
+        Some(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// Fills the whole canvas with `color`.
+    pub fn fill(&mut self, color: Rgb) {
+        self.pixels.fill(pack(color));
+    }
+
+    /// Fills `area`, smoothing fractional edges.
+    pub fn fill_rect(&mut self, area: Area, paint: Paint) {
+        let (rows, cols) =
+            (self.span_y(area.y0, area.y1), self.span_x(area.x0, area.x1));
+        for y in rows {
+            let cover_y = overlap(index_to_f64(y), area.y0, area.y1);
+            for x in cols.clone() {
+                let cover_x = overlap(index_to_f64(x), area.x0, area.x1);
+                self.blend(x, y, paint, cover_x * cover_y);
+            }
+        }
+    }
+
+    /// Draws `area`'s outline, `weight` pixels wide, inside its edges
+    /// (like a CSS border).
+    pub fn stroke_rect(&mut self, area: Area, weight: f64, paint: Paint) {
+        let Area { x0, y0, x1, y1 } = area;
+        let inner_top = y0 + weight;
+        let inner_bottom = y1 - weight;
+        self.fill_rect(
+            Area {
+                x0,
+                y0,
+                x1,
+                y1: inner_top,
+            },
+            paint,
+        );
+        self.fill_rect(
+            Area {
+                x0,
+                y0: inner_bottom,
+                x1,
+                y1,
+            },
+            paint,
+        );
+        let sides = Area {
+            x0,
+            y0: inner_top,
+            x1: x0 + weight,
+            y1: inner_bottom,
+        };
+        self.fill_rect(sides, paint);
+        self.fill_rect(
+            Area {
+                x0: x1 - weight,
+                x1,
+                ..sides
+            },
+            paint,
+        );
+    }
+
+    /// Draws a ring arc centred on (`cx`, `cy`), starting at the top and
+    /// running clockwise for `fraction` of a full turn (0.0 to 1.0), with
+    /// square ends.
+    pub fn arc(
+        &mut self,
+        (cx, cy): (f64, f64),
+        radius: f64,
+        weight: f64,
+        fraction: f64,
+        paint: Paint,
+    ) {
+        if fraction <= 0.0 {
+            return;
+        }
+        let sweep = fraction.min(1.0) * TAU;
+        let outer = radius + weight / 2.0 + 1.0;
+        let inner = (radius - weight / 2.0 - 1.0).max(0.0);
+        for y in self.span_y(cy - outer, cy + outer) {
+            let dy = index_to_f64(y) + HALF - cy;
+            // Only the band between the inner and outer circles.
+            let half_outer = (outer * outer - dy * dy).max(0.0).sqrt();
+            let half_inner = (inner * inner - dy * dy).max(0.0).sqrt();
+            let left = self.span_x(cx - half_outer, cx - half_inner + 1.0);
+            let right = self.span_x(cx + half_inner - 1.0, cx + half_outer);
+            let right = right.start.max(left.end)..right.end;
+            for x in left.chain(right) {
+                let dx = index_to_f64(x) + HALF - cx;
+                let distance = dx.hypot(dy);
+                let radial =
+                    unit(weight / 2.0 + HALF - (distance - radius).abs());
+                if radial <= 0.0 {
+                    continue;
+                }
+                let along = if sweep >= TAU {
+                    1.0
+                } else {
+                    arc_coverage(dx.atan2(-dy).rem_euclid(TAU), sweep, distance)
+                };
+                self.blend(x, y, paint, radial * along);
+            }
+        }
+    }
+
+    /// Draws a line through `points`, `weight` pixels wide, with round
+    /// joins and ends.
+    pub fn polyline(
+        &mut self,
+        points: &[(f64, f64)],
+        weight: f64,
+        paint: Paint,
+    ) {
+        let reach = weight / 2.0 + 1.0;
+        let Some(bounds) = bounds(points, reach) else {
+            return;
+        };
+        let rows = self.span_y(bounds.y0, bounds.y1);
+        let cols = self.span_x(bounds.x0, bounds.x1);
+        // Coverage per pixel in the line's box. Each segment only visits
+        // the pixels near it and keeps the highest coverage, so joins
+        // aren't drawn twice.
+        let box_w = cols.len();
+        let cells = box_w.checked_mul(rows.len()).unwrap_or(0);
+        let mut coverage = vec![0.0_f64; cells];
+        let cell = |x: usize, y: usize| {
+            let col = x.checked_sub(cols.start)?;
+            y.checked_sub(rows.start)?
+                .checked_mul(box_w)?
+                .checked_add(col)
+        };
+        for pair in points.windows(2) {
+            let [a, b] = pair else {
+                continue;
+            };
+            let near_y =
+                self.span_y(a.1.min(b.1) - reach, a.1.max(b.1) + reach);
+            let near_x =
+                self.span_x(a.0.min(b.0) - reach, a.0.max(b.0) + reach);
+            for y in near_y {
+                let py = index_to_f64(y) + HALF;
+                for x in near_x.clone() {
+                    let px = index_to_f64(x) + HALF;
+                    let distance = segment_distance((px, py), *a, *b);
+                    let cover = unit(weight / 2.0 + HALF - distance);
+                    if let Some(slot) =
+                        cell(x, y).and_then(|i| coverage.get_mut(i))
+                    {
+                        *slot = slot.max(cover);
+                    }
+                }
+            }
+        }
+        for y in rows.clone() {
+            for x in cols.clone() {
+                let cover = cell(x, y).and_then(|i| coverage.get(i)).copied();
+                if let Some(cover) = cover.filter(|c| *c > 0.0) {
+                    self.blend(x, y, paint, cover);
+                }
+            }
+        }
+    }
+
+    /// Fills between a line through `points` (sorted left to right) and
+    /// the horizontal line `base`, smoothing the top edge.
+    pub fn fill_under(
+        &mut self,
+        points: &[(f64, f64)],
+        base: f64,
+        paint: Paint,
+    ) {
+        let (Some(first), Some(last)) = (points.first(), points.last()) else {
+            return;
+        };
+        for x in self.span_x(first.0, last.0) {
+            let Some(top) = height_at(points, index_to_f64(x) + HALF) else {
+                continue;
+            };
+            for y in self.span_y(top, base) {
+                let cover = overlap(index_to_f64(y), top, base);
+                self.blend(x, y, paint, cover);
+            }
+        }
+    }
+
+    /// Draws a dashed horizontal line centred on `y`.
+    pub fn dashed_hline(
+        &mut self,
+        (x0, x1): (f64, f64),
+        y: f64,
+        weight: f64,
+        (dash, gap): (f64, f64),
+        paint: Paint,
+    ) {
+        if dash <= 0.0 {
+            return;
+        }
+        let mut start = x0;
+        while start < x1 {
+            let area = Area {
+                x0: start,
+                y0: y - weight / 2.0,
+                x1: (start + dash).min(x1),
+                y1: y + weight / 2.0,
+            };
+            self.fill_rect(area, paint);
+            start += dash + gap;
+        }
+    }
+
+    /// Pixel columns that `x0..x1` touches, clipped to the canvas.
+    fn span_x(&self, x0: f64, x1: f64) -> std::ops::Range<usize> {
+        clip_span(x0, x1, self.width)
+    }
+
+    /// Pixel rows that `y0..y1` touches, clipped to the canvas.
+    fn span_y(&self, y0: f64, y1: f64) -> std::ops::Range<usize> {
+        clip_span(y0, y1, self.height)
+    }
+
+    /// Mixes `paint` into pixel (`x`, `y`) at `coverage` (0.0 to 1.0).
+    fn blend(&mut self, x: usize, y: usize, paint: Paint, coverage: f64) {
+        let amount = unit(coverage * paint.alpha);
+        if amount <= 0.0 {
+            return;
+        }
+        let index =
+            y.checked_mul(self.width).and_then(|row| row.checked_add(x));
+        if let Some(pixel) = index.and_then(|i| self.pixels.get_mut(i)) {
+            *pixel = pack(mix(paint.color, unpack(*pixel), amount));
+        }
+    }
+}
+
+/// `top` over `bottom` at `amount` (0.0 = all bottom, 1.0 = all top).
+pub fn mix(top: Rgb, bottom: Rgb, amount: f64) -> Rgb {
+    let channel = |t: u8, b: u8| {
+        let (t, b) = (f64::from(t), f64::from(b));
+        unit_to_u8((b + (t - b) * amount) / 255.0)
+    };
+    Rgb {
+        r: channel(top.r, bottom.r),
+        g: channel(top.g, bottom.g),
+        b: channel(top.b, bottom.b),
+    }
+}
+
+/// A colour as a DIB pixel.
+fn pack(color: Rgb) -> u32 {
+    u32::from_le_bytes([color.b, color.g, color.r, 0])
+}
+
+/// A DIB pixel as a colour.
+fn unpack(pixel: u32) -> Rgb {
+    let [b, g, r, _] = pixel.to_le_bytes();
+    Rgb { r, g, b }
+}
+
+/// Clamps to 0.0..=1.0.
+fn unit(value: f64) -> f64 {
+    value.clamp(0.0, 1.0)
+}
+
+/// How much of the pixel row/column starting at `cell` lies inside
+/// `start..end`.
+fn overlap(cell: f64, start: f64, end: f64) -> f64 {
+    unit(end.min(cell + 1.0) - start.max(cell))
+}
+
+/// How much of a pixel at `angle` (radians clockwise from the top) and
+/// `distance` from the centre lies inside an arc of `sweep` radians,
+/// measured along the arc so the square ends are smooth.
+fn arc_coverage(angle: f64, sweep: f64, distance: f64) -> f64 {
+    if angle <= sweep {
+        unit(angle.min(sweep - angle) * distance + HALF)
+    } else {
+        let outside = (angle - sweep).min(TAU - angle) * distance;
+        unit(HALF - outside)
+    }
+}
+
+/// Distance from `p` to the segment `a`-`b`.
+fn segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let length_sq = dx * dx + dy * dy;
+    let t = if length_sq > 0.0 {
+        unit(((p.0 - a.0) * dx + (p.1 - a.1) * dy) / length_sq)
+    } else {
+        0.0
+    };
+    (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+}
+
+/// The y of a left-to-right line through `points` at `x`, or `None`
+/// outside it.
+fn height_at(points: &[(f64, f64)], x: f64) -> Option<f64> {
+    points.windows(2).find_map(|pair| match pair {
+        [a, b] if a.0 <= x && x <= b.0 => {
+            let span = b.0 - a.0;
+            let t = if span > 0.0 { (x - a.0) / span } else { 0.0 };
+            Some(a.1 + (b.1 - a.1) * t)
+        }
+        _ => None,
+    })
+}
+
+/// The box around `points`, grown by `margin`.
+fn bounds(points: &[(f64, f64)], margin: f64) -> Option<Area> {
+    let first = points.first()?;
+    let start = Area {
+        x0: first.0,
+        y0: first.1,
+        x1: first.0,
+        y1: first.1,
+    };
+    let area = points.iter().fold(start, |a, &(x, y)| Area {
+        x0: a.x0.min(x),
+        y0: a.y0.min(y),
+        x1: a.x1.max(x),
+        y1: a.y1.max(y),
+    });
+    Some(Area {
+        x0: area.x0 - margin,
+        y0: area.y0 - margin,
+        x1: area.x1 + margin,
+        y1: area.y1 + margin,
+    })
+}
+
+/// Whole pixels touched by `start..end`, clipped to `0..limit`.
+fn clip_span(start: f64, end: f64, limit: usize) -> std::ops::Range<usize> {
+    let first = f64_to_index(start.floor()).min(limit);
+    let last = f64_to_index(end.ceil()).min(limit);
+    first..last.max(first)
+}
+
+/// A pixel index as `f64`.
+fn index_to_f64(index: usize) -> f64 {
+    u32::try_from(index).map_or(f64::MAX, f64::from)
+}
+
+/// A non-negative pixel position as an index; negatives become 0.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped to 0..=u32::MAX first, so the cast is exact"
+)]
+fn f64_to_index(value: f64) -> usize {
+    value.clamp(0.0, f64::from(u32::MAX)) as usize
+}
+
+/// 0.0..=1.0 as a colour channel.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped and rounded to 0..=255 first, so the cast is exact"
+)]
+fn unit_to_u8(value: f64) -> u8 {
+    (unit(value) * 255.0).round() as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Area, Canvas, Paint, mix, unpack};
+    use crate::color::Rgb;
+
+    const WHITE: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+    const SOLID: Paint = Paint {
+        color: WHITE,
+        alpha: 1.0,
+    };
+
+    fn pixel(canvas: &Canvas<'_>, x: usize, y: usize) -> u8 {
+        let row = canvas.pixels.chunks_exact(canvas.width).nth(y).unwrap();
+        unpack(row[x]).r
+    }
+
+    #[test]
+    fn mixes_colours() {
+        let grey = mix(WHITE, Rgb::BLACK, 0.5);
+        assert_eq!((grey.r, grey.g, grey.b), (128, 128, 128));
+    }
+
+    #[test]
+    fn fills_with_smooth_edges() {
+        let mut buffer = vec![0; 4];
+        let mut canvas = Canvas::new(4, 1, &mut buffer).unwrap();
+        canvas.fill_rect(
+            Area {
+                x0: 0.5,
+                y0: 0.0,
+                x1: 2.0,
+                y1: 1.0,
+            },
+            SOLID,
+        );
+        assert_eq!(pixel(&canvas, 0, 0), 128); // half covered
+        assert_eq!(pixel(&canvas, 1, 0), 255);
+        assert_eq!(pixel(&canvas, 2, 0), 0);
+    }
+
+    #[test]
+    fn half_alpha_blends() {
+        let mut buffer = vec![0; 1];
+        let mut canvas = Canvas::new(1, 1, &mut buffer).unwrap();
+        let paint = Paint {
+            color: WHITE,
+            alpha: 0.5,
+        };
+        canvas.fill_rect(
+            Area {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            },
+            paint,
+        );
+        assert_eq!(pixel(&canvas, 0, 0), 128);
+    }
+
+    #[test]
+    fn quarter_arc_covers_top_right_only() {
+        let mut buffer = vec![0; 1600];
+        let mut canvas = Canvas::new(40, 40, &mut buffer).unwrap();
+        canvas.arc((20.0, 20.0), 15.0, 2.0, 0.25, SOLID);
+        assert_eq!(pixel(&canvas, 20, 5), 255, "top");
+        assert_eq!(pixel(&canvas, 34, 19), 255, "right");
+        assert_eq!(pixel(&canvas, 20, 34), 0, "bottom");
+        assert_eq!(pixel(&canvas, 5, 19), 0, "left");
+        assert_eq!(pixel(&canvas, 20, 20), 0, "centre");
+    }
+
+    #[test]
+    fn full_arc_is_a_ring() {
+        let mut buffer = vec![0; 1600];
+        let mut canvas = Canvas::new(40, 40, &mut buffer).unwrap();
+        canvas.arc((20.0, 20.0), 15.0, 2.0, 1.0, SOLID);
+        assert_eq!(pixel(&canvas, 5, 19), 255, "left");
+        assert_eq!(pixel(&canvas, 20, 34), 255, "bottom");
+    }
+
+    #[test]
+    fn polyline_and_fill_under() {
+        let mut buffer = vec![0; 100];
+        let mut canvas = Canvas::new(10, 10, &mut buffer).unwrap();
+        let line = [(0.0, 2.5), (10.0, 2.5)];
+        canvas.polyline(&line, 1.0, SOLID);
+        assert_eq!(pixel(&canvas, 5, 2), 255);
+        assert_eq!(pixel(&canvas, 5, 5), 0);
+        canvas.fill_under(&line, 8.0, SOLID);
+        assert_eq!(pixel(&canvas, 5, 5), 255);
+        assert_eq!(pixel(&canvas, 5, 9), 0);
+    }
+
+    #[test]
+    fn stroke_leaves_inside_empty() {
+        let mut buffer = vec![0; 100];
+        let mut canvas = Canvas::new(10, 10, &mut buffer).unwrap();
+        let area = Area {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 10.0,
+            y1: 10.0,
+        };
+        canvas.stroke_rect(area, 1.0, SOLID);
+        assert_eq!(pixel(&canvas, 0, 5), 255);
+        assert_eq!(pixel(&canvas, 9, 5), 255);
+        assert_eq!(pixel(&canvas, 5, 0), 255);
+        assert_eq!(pixel(&canvas, 5, 5), 0);
+    }
+
+    #[test]
+    fn rejects_small_buffers() {
+        let mut buffer = vec![0; 3];
+        assert!(Canvas::new(2, 2, &mut buffer).is_none());
+    }
+
+    #[test]
+    fn drawing_off_canvas_is_clipped() {
+        let mut buffer = vec![0; 16];
+        let mut canvas = Canvas::new(4, 4, &mut buffer).unwrap();
+        canvas.arc((-50.0, -50.0), 10.0, 2.0, 1.0, SOLID);
+        canvas.polyline(&[(-5.0, -5.0), (100.0, 100.0)], 1.0, SOLID);
+        assert_eq!(pixel(&canvas, 0, 0), 255);
+    }
+}

@@ -19,8 +19,9 @@ use super::app;
 use super::desktop::{DesktopHost, Layout};
 use super::paint::Painter;
 use super::struct_size;
-use crate::args::Options;
+use crate::color::Rgb;
 use crate::geometry::{Point, Rect};
+use crate::widgets::Dashboard;
 
 /// Window class for surfaces.
 const SURFACE_CLASS: PCWSTR = w!("WallflexSurface");
@@ -86,27 +87,20 @@ impl Surface {
         let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
     }
 
-    /// Asks Windows to repaint just the text panel.
-    pub fn invalidate_panel(&mut self) {
-        match self.painter.panel_rect(self.hwnd) {
-            Some(panel) => {
-                // SAFETY: plain handle and rectangle; failure only skips
-                // one repaint.
-                let _ = unsafe {
-                    InvalidateRect(
-                        Some(self.hwnd),
-                        Some(&raw const panel),
-                        false,
-                    )
-                };
-            }
-            None => self.invalidate(),
+    /// Asks Windows to repaint just the widgets.
+    pub fn invalidate_widgets(&self, dashboard: &Dashboard) {
+        for rect in self.painter.dirty_rects(self.hwnd, dashboard) {
+            // SAFETY: plain handle and rectangle; failure only skips one
+            // repaint.
+            let _ = unsafe {
+                InvalidateRect(Some(self.hwnd), Some(&raw const rect), false)
+            };
         }
     }
 
-    /// Handles `WM_PAINT`, drawing `lines` in the text panel.
-    pub fn paint(&mut self, lines: &[String]) {
-        self.painter.paint(self.hwnd, lines);
+    /// Handles `WM_PAINT`.
+    pub fn paint(&mut self, dashboard: &Dashboard) {
+        self.painter.paint(self.hwnd, dashboard);
     }
 }
 
@@ -148,9 +142,9 @@ pub fn create(
     host: &DesktopHost,
     monitor: Rect,
     instance: HINSTANCE,
-    options: Options,
+    background: Rgb,
 ) -> windows::core::Result<Surface> {
-    let painter = Painter::new(options.background)?;
+    let painter = Painter::new(background)?;
 
     let mut origin = POINT::default();
     // SAFETY: `origin` is a valid place for the call to write to.

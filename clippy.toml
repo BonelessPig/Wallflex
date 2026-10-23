@@ -1,0 +1,6 @@
+# Tests may panic on purpose: a panic is how a test reports failure.
+# These rules stay strict everywhere else.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

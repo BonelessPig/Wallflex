@@ -8,18 +8,21 @@ use crate::color::Rgb;
 pub const USAGE: &str = "\
 Usage: wallflex [options]
 
-Draws a solid background with a sensor panel behind the desktop icons
-on every monitor.
+Draws a solid background with CPU, network and GPU widgets behind the
+desktop icons on every monitor.
 
 Options:
   --color <RRGGBB>  background colour (default 000000)
   --sensors         print one sensor reading, then exit
+  --preview <HEIGHT> <FILE>
+                    save the widgets as a BMP, as they'd look on a
+                    monitor HEIGHT pixels tall, then exit
   --diagnose        print how the desktop windows are laid out, then exit
   --quit            stop the running copy of Wallflex
   -h, --help        show this help";
 
 /// What the program was asked to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Draw until told to quit.
     Run,
@@ -29,12 +32,19 @@ pub enum Command {
     Diagnose,
     /// Print one sensor reading.
     Sensors,
+    /// Save the widgets as a BMP.
+    Preview {
+        /// Monitor height to render for, in pixels.
+        height: u32,
+        /// Where to save the BMP.
+        path: String,
+    },
     /// Print the help text.
     Help,
 }
 
 /// Everything parsed from the command line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
     /// What to do.
     pub command: Command,
@@ -107,6 +117,20 @@ where
                     })?;
             }
             "--sensors" => options.command = Command::Sensors,
+            "--preview" => {
+                let height =
+                    args.next().ok_or(ArgError::MissingValue("--preview"))?;
+                let path =
+                    args.next().ok_or(ArgError::MissingValue("--preview"))?;
+                let height =
+                    height.parse::<u32>().ok().filter(|h| *h > 0).ok_or(
+                        ArgError::BadValue {
+                            option: "--preview",
+                            value: height,
+                        },
+                    )?;
+                options.command = Command::Preview { height, path };
+            }
             "--diagnose" => options.command = Command::Diagnose,
             "--quit" => options.command = Command::Quit,
             "-h" | "--help" => options.command = Command::Help,
@@ -147,6 +171,15 @@ mod tests {
         assert_eq!(command(&["--quit"]), Ok(Command::Quit));
         assert_eq!(command(&["--diagnose"]), Ok(Command::Diagnose));
         assert_eq!(command(&["--sensors"]), Ok(Command::Sensors));
+        assert_eq!(
+            command(&["--preview", "2160", "a.bmp"]),
+            Ok(Command::Preview {
+                height: 2160,
+                path: "a.bmp".to_owned()
+            })
+        );
+        assert!(command(&["--preview", "0", "a.bmp"]).is_err());
+        assert!(command(&["--preview", "1080"]).is_err());
         assert_eq!(command(&["-h"]), Ok(Command::Help));
     }
 
