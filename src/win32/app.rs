@@ -62,6 +62,8 @@ struct State {
     surfaces: Vec<Surface>,
     /// Health checks to skip before retrying after a failure.
     skip_ticks: u32,
+    /// A rebuild is already scheduled, so nothing else asks for one.
+    rebuild_pending: bool,
 }
 
 thread_local! {
@@ -291,9 +293,7 @@ unsafe extern "system" fn controller_proc(
     }
     let taskbar_created = TASKBAR_CREATED.load(Ordering::Relaxed);
     if taskbar_created != 0 && msg == taskbar_created {
-        // Explorer restarted: our windows died with the old desktop.
-        drop(take_surfaces());
-        schedule_rebuild(hwnd, EXPLORER_SETTLE_MS);
+        on_explorer_restart(hwnd);
         return LRESULT(0);
     }
     // SAFETY: forwards the message unchanged, as Win32 requires.
@@ -307,24 +307,57 @@ fn on_timer(hwnd: HWND, timer: usize) {
             // SAFETY: our own timer; failure only means it was already
             // gone.
             let _ = unsafe { KillTimer(Some(hwnd), REBUILD_TIMER) };
+            set_rebuild_pending(false);
             rebuild();
         }
-        HEALTH_TIMER => on_health_tick(),
+        HEALTH_TIMER => on_health_tick(hwnd),
         _ => {}
     }
 }
 
-/// (Re)starts the one-shot rebuild timer.
+/// (Re)starts the one-shot rebuild timer. Every rebuild goes through it,
+/// so requests that arrive close together cause a single rebuild.
 fn schedule_rebuild(hwnd: HWND, delay_ms: u32) {
-    // SAFETY: our own window; re-arming an existing id resets it. If it
-    // fails, the health check rebuilds within seconds anyway.
-    let _ = unsafe { SetTimer(Some(hwnd), REBUILD_TIMER, delay_ms, None) };
+    set_rebuild_pending(true);
+    // SAFETY: our own window; re-arming an existing id resets it.
+    if unsafe { SetTimer(Some(hwnd), REBUILD_TIMER, delay_ms, None) } == 0 {
+        // Let the next health check try again.
+        set_rebuild_pending(false);
+    }
 }
 
-/// Checks the surfaces and repairs or rebuilds them as needed.
-fn on_health_tick() {
+/// Records whether a rebuild is scheduled.
+fn set_rebuild_pending(pending: bool) {
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.rebuild_pending = pending;
+        }
+    });
+}
+
+/// Explorer restarted. Rebuilds unless a rebuild is already scheduled or
+/// a health check has already put the surfaces back.
+fn on_explorer_restart(hwnd: HWND) {
+    let settled = STATE.with(|state| {
+        state.try_borrow().is_ok_and(|state| {
+            state.rebuild_pending
+                || state.host.is_some_and(|host| {
+                    matches!(check(&host, &state.surfaces), Health::Good)
+                })
+        })
+    });
+    if !settled {
+        schedule_rebuild(hwnd, EXPLORER_SETTLE_MS);
+    }
+}
+
+/// Checks the surfaces, then repairs them or schedules a rebuild.
+fn on_health_tick(hwnd: HWND) {
     let verdict = STATE.with(|state| {
         let mut state = state.try_borrow_mut().ok()?;
+        if state.rebuild_pending {
+            return None;
+        }
         match state.host {
             Some(host) => Some(check(&host, &state.surfaces)),
             None if state.skip_ticks > 0 => {
@@ -335,7 +368,8 @@ fn on_health_tick() {
         }
     });
     match verdict {
-        Some(Health::Broken) => rebuild(),
+        // Waiting lets Explorer finish starting if that's what broke them.
+        Some(Health::Broken) => schedule_rebuild(hwnd, EXPLORER_SETTLE_MS),
         Some(Health::WrongOrder) => restore_order(),
         Some(Health::Good) | None => {}
     }
