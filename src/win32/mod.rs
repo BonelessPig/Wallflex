@@ -29,6 +29,16 @@ fn to_rect(r: RECT) -> Rect {
     }
 }
 
+/// Converts a [`Rect`] into a Win32 `RECT`.
+fn to_win32_rect(r: Rect) -> RECT {
+    RECT {
+        left: r.left,
+        top: r.top,
+        right: r.right,
+        bottom: r.bottom,
+    }
+}
+
 /// Size of a Win32 struct, for its `cbSize` field.
 fn struct_size<T>() -> u32 {
     // Win32 structs are far smaller than 4 GB; the fallback never runs.

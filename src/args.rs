@@ -8,11 +8,12 @@ use crate::color::Rgb;
 pub const USAGE: &str = "\
 Usage: wallflex [options]
 
-Draws a solid background with CPU, network and GPU widgets behind the
-desktop icons on every monitor.
+Draws CPU, network and GPU widgets on a solid background behind the
+desktop icons, laid out by %APPDATA%\\Wallflex\\config.toml.
 
 Options:
-  --color <RRGGBB>  background colour (default 000000)
+  --color <RRGGBB>  background colour, overriding the config file
+  --config <FILE>   use this settings file instead
   --sensors         print one sensor reading, then exit
   --preview <HEIGHT> <FILE>
                     save the widgets as a BMP, as they'd look on a
@@ -48,15 +49,18 @@ pub enum Command {
 pub struct Options {
     /// What to do.
     pub command: Command,
-    /// Background colour.
-    pub background: Rgb,
+    /// Background colour from `--color`, overriding the config file.
+    pub background: Option<Rgb>,
+    /// Settings file from `--config`, instead of the default one.
+    pub config: Option<String>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             command: Command::Run,
-            background: Rgb::BLACK,
+            background: None,
+            config: None,
         }
     }
 }
@@ -110,11 +114,17 @@ where
             "--color" => {
                 let value =
                     args.next().ok_or(ArgError::MissingValue("--color"))?;
-                options.background =
+                let color =
                     Rgb::from_hex(&value).ok_or(ArgError::BadValue {
                         option: "--color",
                         value,
                     })?;
+                options.background = Some(color);
+            }
+            "--config" => {
+                let value =
+                    args.next().ok_or(ArgError::MissingValue("--config"))?;
+                options.config = Some(value);
             }
             "--sensors" => options.command = Command::Sensors,
             "--preview" => {
@@ -160,7 +170,8 @@ mod tests {
             run(&["--color", "#ff0000"]),
             Ok(Options {
                 command: Command::Run,
-                background: Rgb { r: 255, g: 0, b: 0 },
+                background: Some(Rgb { r: 255, g: 0, b: 0 }),
+                config: None,
             })
         );
     }

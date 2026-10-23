@@ -1,8 +1,8 @@
 //! Wallflex: lightweight desktop widgets drawn behind the icons.
 //!
-//! Milestone 3 draws a solid background on every monitor, between the
-//! wallpaper and the desktop icons, with native CPU, network and GPU
-//! widgets.
+//! Milestone 4 draws CPU, network and GPU widgets on a solid background
+//! between the wallpaper and the desktop icons, placed on each monitor
+//! by the layouts in `config.toml`.
 
 // Release builds have no console window; debug builds keep one for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -11,16 +11,19 @@ mod args;
 mod bmp;
 mod canvas;
 mod color;
+mod config;
 mod geometry;
+mod log;
 mod sensors;
 mod text;
 mod widgets;
 mod win32;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use args::Command;
+use args::{Command, Options};
 
 /// Exit code for a bad command line.
 const EXIT_USAGE: u8 = 2;
@@ -71,29 +74,68 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Command::Run => match win32::app::run(options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("wallflex: {error}");
-                ExitCode::FAILURE
-            }
-        },
+        Command::Run => start(options),
     }
+}
+
+/// Runs Wallflex: finds the settings file (writing the commented default
+/// on first run), starts the log next to it, then draws until quit.
+fn start(options: Options) -> ExitCode {
+    let custom = options.config.as_ref().map(PathBuf::from);
+    let config_path = custom.clone().or_else(default_config_path);
+    if let Some(path) = &config_path {
+        if let Some(dir) = path.parent() {
+            // If this fails, the log and default file just aren't written.
+            let _ = std::fs::create_dir_all(dir);
+            log::open(&dir.join("wallflex.log"));
+        }
+        if custom.is_none() && !path.exists() {
+            match std::fs::write(path, config::DEFAULT_CONFIG) {
+                Ok(()) => {
+                    crate::log!("wrote default settings to {}", path.display());
+                }
+                Err(error) => {
+                    crate::log!("can't write {}: {error}", path.display());
+                }
+            }
+        }
+    }
+    match win32::app::run(options, config_path) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            crate::log!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `%APPDATA%\Wallflex\config.toml`.
+fn default_config_path() -> Option<PathBuf> {
+    let app_data = std::env::var_os("APPDATA")?;
+    Some(PathBuf::from(app_data).join("Wallflex").join("config.toml"))
 }
 
 /// Renders the widgets with live readings, as they'd look on a monitor
 /// `height` pixels tall, and saves them as a BMP at `path`.
-fn preview(height: u32, path: &str, background: color::Rgb) -> ExitCode {
+fn preview(
+    height: u32,
+    path: &str,
+    background: Option<color::Rgb>,
+) -> ExitCode {
     let mut sensors = win32::sensors::Sensors::new();
     let mut dashboard = widgets::Dashboard::default();
     for _ in 0..PREVIEW_READINGS {
         dashboard.update(sensors.sample());
         std::thread::sleep(SENSOR_WARMUP);
     }
-    let image = win32::paint::Painter::new(background)
-        .ok()
-        .and_then(|mut painter| painter.preview(&dashboard, height))
-        .and_then(|(w, h, pixels)| bmp::encode(w, h, &pixels));
+    let background = background.unwrap_or(color::Rgb::BLACK);
+    let image = win32::paint::preview(
+        &dashboard,
+        widgets::Widget::Panel,
+        height,
+        background,
+    )
+    .and_then(|(w, h, pixels)| bmp::encode(w, h, &pixels));
     let Some(image) = image else {
         eprintln!("wallflex: couldn't render the preview");
         return ExitCode::FAILURE;

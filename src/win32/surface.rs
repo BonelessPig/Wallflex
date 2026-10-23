@@ -17,10 +17,12 @@ use windows::core::{PCWSTR, w};
 
 use super::app;
 use super::desktop::{DesktopHost, Layout};
+use super::monitors::Monitor;
 use super::paint::Painter;
 use super::struct_size;
 use crate::color::Rgb;
-use crate::geometry::{Point, Rect};
+use crate::config::Layout as ConfigLayout;
+use crate::geometry::Point;
 use crate::widgets::Dashboard;
 
 /// Window class for surfaces.
@@ -89,7 +91,7 @@ impl Surface {
 
     /// Asks Windows to repaint just the widgets.
     pub fn invalidate_widgets(&self, dashboard: &Dashboard) {
-        for rect in self.painter.dirty_rects(self.hwnd, dashboard) {
+        for rect in self.painter.dirty_rects(dashboard) {
             // SAFETY: plain handle and rectangle; failure only skips one
             // repaint.
             let _ = unsafe {
@@ -140,18 +142,27 @@ pub fn register_class(instance: HINSTANCE) -> windows::core::Result<()> {
 /// When the window or its painter can't be created or placed.
 pub fn create(
     host: &DesktopHost,
-    monitor: Rect,
+    monitor: &Monitor,
     instance: HINSTANCE,
     background: Rgb,
+    layout: Option<&ConfigLayout>,
 ) -> windows::core::Result<Surface> {
-    let painter = Painter::new(background)?;
+    // The painter works in the surface's own coordinates: (0, 0) is the
+    // monitor's top-left.
+    let corner = Point {
+        x: monitor.rect.left,
+        y: monitor.rect.top,
+    };
+    let bounds = monitor.rect.relative_to(corner);
+    let work = monitor.work.relative_to(corner);
+    let painter = Painter::new(background, bounds, work, layout)?;
 
     let mut origin = POINT::default();
     // SAFETY: `origin` is a valid place for the call to write to.
     if !unsafe { ClientToScreen(host.parent, &raw mut origin) }.as_bool() {
         return Err(windows::core::Error::from_thread());
     }
-    let area = monitor.relative_to(Point {
+    let area = monitor.rect.relative_to(Point {
         x: origin.x,
         y: origin.y,
     });

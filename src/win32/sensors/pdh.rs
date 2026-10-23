@@ -9,6 +9,8 @@ use windows::Win32::System::Performance::{
 };
 use windows::core::{PCWSTR, w};
 
+use crate::log;
+
 /// PDH's success status.
 const PDH_OK: u32 = 0;
 /// Item status: valid data.
@@ -79,9 +81,7 @@ impl Query {
         let status =
             unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &raw mut handle) };
         if status != PDH_OK {
-            eprintln!(
-                "wallflex: performance counters unavailable ({status:#x})"
-            );
+            log!("performance counters unavailable ({status:#x})");
             return None;
         }
         let mut query = Self {
@@ -104,9 +104,7 @@ impl Query {
             if status == PDH_OK {
                 query.counters.push((counter, added));
             } else {
-                eprintln!(
-                    "wallflex: counter {counter:?} unavailable ({status:#x})"
-                );
+                log!("counter {counter:?} unavailable ({status:#x})");
             }
         }
         Some(query)

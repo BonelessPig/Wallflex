@@ -124,13 +124,18 @@ pub fn describe() -> String {
 
     let _ = writeln!(out, "Monitors:");
     for m in monitors::list() {
+        let short_name = m.name.trim_start_matches(r"\\.\");
+        let primary = if m.primary { ", primary" } else { "" };
         let _ = writeln!(
             out,
-            "  {}x{} at {}, {}",
-            m.width(),
-            m.height(),
-            m.left,
-            m.top
+            "  {short_name}: {}x{} at {}, {}{primary}; free of the \
+             taskbar: {}x{}",
+            m.rect.width(),
+            m.rect.height(),
+            m.rect.left,
+            m.rect.top,
+            m.work.width(),
+            m.work.height()
         );
     }
     out

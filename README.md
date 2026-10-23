@@ -3,9 +3,9 @@
 Lightweight desktop widgets for Windows, drawn behind the desktop icons.
 No Wallpaper Engine, no browser engine, no admin rights.
 
-**Status: milestone 3.** Wallflex paints a solid background on every
-monitor, between the wallpaper and the icons, with three widgets in the
-bottom-right corner, updated once a second:
+**Status: milestone 4.** Wallflex paints a solid background on every
+monitor, between the wallpaper and the icons, with widgets placed by a
+layout per monitor and updated once a second:
 
 - **CPU threads:** a column per thread, paired by core, with the clock.
 - **Network:** the last minute of download and upload.
@@ -13,6 +13,21 @@ bottom-right corner, updated once a second:
 
 plus RAM use and SSD temperatures. Sizes follow the monitor's height, so
 the widgets look the same on any resolution.
+
+## Settings
+
+On first run Wallflex writes `%APPDATA%\Wallflex\config.toml`, with
+comments explaining every option. Changes apply about a second after you
+save. It sets:
+
+- the background colour;
+- a layout per monitor (all monitors, the primary one, a resolution such
+  as `3440x1440`, or a name such as `DISPLAY2`);
+- each widget's corner or edge and its distance from it, measured from
+  the area the taskbar leaves free, plus an overall size per layout.
+
+If the file has a mistake, Wallflex keeps the previous settings and
+explains the problem in `%APPDATA%\Wallflex\wallflex.log`.
 
 ## Build
 
@@ -28,7 +43,8 @@ The exe is `target\release\wallflex.exe`.
 
 ```
 wallflex                      black background and sensor panel
-wallflex --color 203040       any colour, as RRGGBB
+wallflex --color 203040       background colour, overriding the config
+wallflex --config my.toml     use another settings file
 wallflex --sensors            print one sensor reading and exit
 wallflex --preview 2160 a.bmp save the widgets as they'd look on a 2160p monitor
 wallflex --quit               stop the running copy

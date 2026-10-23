@@ -1,11 +1,14 @@
 //! The main loop: a hidden controller window owns one surface per
 //! monitor, checks on them every few seconds, and rebuilds them when
-//! Explorer restarts, the displays change or the PC wakes up.
+//! Explorer restarts, the displays change, the PC wakes up or the config
+//! file is saved.
 
 use std::cell::RefCell;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::time::SystemTime;
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -25,7 +28,8 @@ use super::sensors::Sensors;
 use super::surface::{self, Surface};
 use super::{monitors, struct_size};
 use crate::args::Options;
-use crate::color::Rgb;
+use crate::config::{self, MonitorInfo, Settings};
+use crate::log;
 use crate::widgets::Dashboard;
 
 /// Window class of the hidden controller window. Also how `--quit` and
@@ -44,7 +48,8 @@ const DISPLAY_SETTLE_MS: u32 = 1_000;
 /// Wait after Explorer restarts before rebuilding, in milliseconds,
 /// while it recreates the desktop.
 const EXPLORER_SETTLE_MS: u32 = 2_000;
-/// Timer that takes a sensor reading and refreshes the text panel.
+/// Timer that takes a sensor reading, refreshes the widgets and checks
+/// the config file for changes.
 const SENSOR_TIMER: usize = 3;
 /// How often sensors are read, in milliseconds.
 const SENSOR_INTERVAL_MS: u32 = 1_000;
@@ -75,6 +80,64 @@ struct State {
     sensors: Option<Sensors>,
     /// What the widgets show.
     dashboard: Dashboard,
+    /// The current settings.
+    settings: Settings,
+    /// The config file, if there is one to watch.
+    config: Option<ConfigFile>,
+}
+
+/// The config file and when it was last loaded.
+struct ConfigFile {
+    /// Where it is.
+    path: PathBuf,
+    /// Its modification time when last loaded.
+    modified: Option<SystemTime>,
+}
+
+impl ConfigFile {
+    /// The file's current modification time, if it exists.
+    fn modified_now(&self) -> Option<SystemTime> {
+        std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
+    /// Loads the file if it changed since the last load. Returns the new
+    /// settings, or `None` if it didn't change or has a problem (which
+    /// is logged; the old settings stay).
+    fn reload_if_changed(&mut self) -> Option<Settings> {
+        let now = self.modified_now();
+        if now == self.modified {
+            return None;
+        }
+        self.modified = now;
+        self.load()
+    }
+
+    /// Reads and parses the file, logging any problem.
+    fn load(&self) -> Option<Settings> {
+        let path = self.path.display();
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(error) => {
+                log!("can't read {path}: {error}; keeping the settings");
+                return None;
+            }
+        };
+        match config::parse(&text) {
+            Ok(settings) => {
+                log!("loaded settings from {path}");
+                Some(settings)
+            }
+            Err(error) => {
+                log!(
+                    "{path} has a problem, so the previous settings stay:
+{error}"
+                );
+                None
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -124,7 +187,12 @@ enum Health {
 ///
 /// [`AppError::AlreadyRunning`] if another copy is running, or the Win32
 /// error that stopped startup or the message loop.
-pub fn run(options: Options) -> Result<(), AppError> {
+/// `config_path` is the settings file to load and watch; without one the
+/// built-in defaults are used.
+pub fn run(
+    options: Options,
+    config_path: Option<PathBuf>,
+) -> Result<(), AppError> {
     if find_controller().is_some() {
         return Err(AppError::AlreadyRunning);
     }
@@ -164,12 +232,22 @@ pub fn run(options: Options) -> Result<(), AppError> {
     // Without a console (release builds) this fails harmlessly.
     let _ = unsafe { SetConsoleCtrlHandler(Some(on_console_ctrl), true) };
 
+    let mut config = config_path.map(|path| ConfigFile {
+        path,
+        modified: None,
+    });
+    let settings = config
+        .as_mut()
+        .and_then(ConfigFile::reload_if_changed)
+        .unwrap_or_default();
     STATE.with(|state| {
         if let Ok(mut state) = state.try_borrow_mut() {
             state.sensors = Some(Sensors::new());
+            state.settings = settings;
+            state.config = config;
         }
     });
-    on_sensor_tick();
+    let _ = on_sensor_tick();
 
     rebuild();
     // SAFETY: our own window; no callback, so WM_TIMER is posted.
@@ -341,7 +419,7 @@ fn on_timer(hwnd: HWND, timer: usize) {
             rebuild();
         }
         HEALTH_TIMER => on_health_tick(hwnd),
-        SENSOR_TIMER => on_sensor_tick(),
+        SENSOR_TIMER if on_sensor_tick() => rebuild(),
         _ => {}
     }
 }
@@ -406,26 +484,36 @@ fn on_health_tick(hwnd: HWND) {
     }
 }
 
-/// Takes a sensor reading and repaints the widgets.
-fn on_sensor_tick() {
+/// Takes a sensor reading, repaints the widgets and checks the config
+/// file. Returns whether new settings were loaded (the surfaces need
+/// rebuilding).
+fn on_sensor_tick() -> bool {
     STATE.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
-            return;
+            return false;
         };
         let State {
             sensors,
             dashboard,
             surfaces,
+            settings,
+            config,
             ..
         } = &mut *state;
-        let Some(sensors) = sensors.as_mut() else {
-            return;
-        };
-        dashboard.update(sensors.sample());
-        for surface in surfaces.iter() {
-            surface.invalidate_widgets(dashboard);
+        if let Some(sensors) = sensors.as_mut() {
+            dashboard.update(sensors.sample());
+            for surface in surfaces.iter() {
+                surface.invalidate_widgets(dashboard);
+            }
         }
-    });
+        match config.as_mut().and_then(ConfigFile::reload_if_changed) {
+            Some(new) => {
+                *settings = new;
+                true
+            }
+            None => false,
+        }
+    })
 }
 
 /// Judges whether the surfaces are still where they should be.
@@ -462,7 +550,7 @@ fn restore_order() {
         };
         for surface in &state.surfaces {
             if let Err(error) = surface.place_below_icons(&host) {
-                eprintln!("wallflex: can't restore window order: {error}");
+                log!("can't restore window order: {error}");
             }
         }
     });
@@ -482,15 +570,25 @@ fn take_surfaces() -> Vec<Surface> {
     })
 }
 
-/// Destroys the surfaces and creates fresh ones on every monitor.
+/// Destroys the surfaces and creates fresh ones on every monitor, each
+/// with the layout the settings give it.
 fn rebuild() {
     drop(take_surfaces());
-    let background = OPTIONS.get().map_or(Rgb::BLACK, |o| o.background);
+    let Some(settings) = STATE.with(|state| {
+        state.try_borrow().ok().map(|state| state.settings.clone())
+    }) else {
+        return;
+    };
+    // A --color on the command line beats the config file.
+    let background = OPTIONS
+        .get()
+        .and_then(|o| o.background)
+        .unwrap_or(settings.background);
 
     let host = match desktop::find() {
         Ok(host) => host,
         Err(error) => {
-            eprintln!("wallflex: {error}; will retry");
+            log!("{error}; will retry");
             set_retry_delay();
             return;
         }
@@ -498,24 +596,34 @@ fn rebuild() {
     let instance = match module_instance() {
         Ok(instance) => instance,
         Err(error) => {
-            eprintln!("wallflex: {error}");
+            log!("{error}");
             return;
         }
     };
 
     let mut surfaces = Vec::new();
     for monitor in monitors::list() {
-        match surface::create(&host, monitor, instance, background) {
+        let info = MonitorInfo {
+            name: &monitor.name,
+            width: monitor.rect.width(),
+            height: monitor.rect.height(),
+            primary: monitor.primary,
+        };
+        let layout = settings.layout_for(&info);
+        let short_name = monitor.name.trim_start_matches(r"\\.\");
+        let widgets = layout.map_or(0, |l| l.widgets.len());
+        log!(
+            "{short_name} ({}x{}): {widgets} widget(s)",
+            info.width,
+            info.height
+        );
+        match surface::create(&host, &monitor, instance, background, layout) {
             Ok(surface) => surfaces.push(surface),
-            Err(error) => eprintln!(
-                "wallflex: no surface for the {}x{} monitor: {error}",
-                monitor.width(),
-                monitor.height()
-            ),
+            Err(error) => log!("no surface for {short_name}: {error}"),
         }
     }
-    eprintln!(
-        "wallflex: drawing on {} monitor(s), {:?} layout",
+    log!(
+        "drawing on {} monitor(s), {:?} layout",
         surfaces.len(),
         host.layout
     );

@@ -1,0 +1,66 @@
+# Wallflex settings. Changes apply about a second after you save.
+#
+# Sizes and offsets are in units of 0.1% of the monitor's height, so a
+# layout looks the same on any resolution: 64 units is about 69 pixels
+# on a 1080p monitor and 138 on a 4K one.
+
+# Background colour, as "#RRGGBB".
+background = "#000000"
+
+# One [[layout]] per monitor setup. Each monitor uses the first layout
+# whose "monitor" matches it:
+#   "*"          every monitor
+#   "primary"    the main monitor
+#   "3440x1440"  any monitor with that resolution
+#   "DISPLAY2"   a monitor by its Windows name (wallflex --diagnose
+#                lists them)
+# A monitor that matches no layout just shows the background.
+[[layout]]
+monitor = "*"
+# Scales everything in this layout; 1.5 is half as big again.
+size = 1.0
+
+# Each [[layout.widget]] places one widget. "kind" is one of:
+#   "panel"    everything below in one block, as one widget
+#   "cpu"      CPU thread columns
+#   "network"  the last minute of download and upload
+#   "gpus"     every GPU's rings, two per row
+#   "gpu"      one GPU's rings: add gpu = 1 (or 2, ...)
+#   "info"     RAM use and SSD temperatures
+# "anchor" is the corner or edge it sits against: top-left, top,
+# top-right, left, center, right, bottom-left, bottom or bottom-right.
+# Positions are measured from the edges of the area the taskbar leaves
+# free. x and y move the widget in from its edges (64 if left out);
+# along a centred axis they move it right or down (0 if left out).
+[[layout.widget]]
+kind = "panel"
+anchor = "bottom-right"
+x = 64
+y = 64
+
+# Example: different widgets on two monitors. Put layouts like these
+# above the "*" one (or delete it), since the first match wins.
+#
+# [[layout]]
+# monitor = "3440x1440"
+#
+# [[layout.widget]]
+# kind = "panel"
+# anchor = "bottom-right"
+# x = 64
+# y = 64
+#
+# [[layout]]
+# monitor = "primary"
+#
+# [[layout.widget]]
+# kind = "cpu"
+# anchor = "top-right"
+# x = 64
+# y = 64
+#
+# [[layout.widget]]
+# kind = "network"
+# anchor = "top-right"
+# x = 64
+# y = 190

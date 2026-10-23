@@ -62,20 +62,33 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   ring arcs, polylines, area fill) over a borrowed pixel slice. No
   graphics library: Direct2D and GDI+ cost far more memory.
 - `src/bmp.rs`: BMP writer for `--preview`.
+- `src/config.rs`: parses and validates `config.toml` (serde + toml)
+  into `Settings`: background, and layouts matched to monitors by
+  `*` / `primary` / resolution / `DISPLAYn` (first match wins), each
+  placing widgets by `Anchor` + offset in design units. `Anchor::place`
+  positions within the work area and clamps to the monitor.
+  `config.default.toml` is the commented default, written on first run
+  and checked by a test to equal `Settings::default()`.
+- `src/log.rs`: `log!` writes to stderr and `wallflex.log` next to the
+  config. Use it instead of `eprintln!` in the running app.
 - `src/win32/`: the Win32 layer.
   - `desktop.rs`: finds where to draw. Explorer's split desktop has two
     shapes: **Raised** (Windows 11 24H2+: surfaces are layered children
     of `Progman`, directly below `SHELLDLL_DefView`) and **Classic**
     (surfaces inside the wallpaper `WorkerW`). Undocumented; message
     `0x052C` with wParam `0xD` asks Explorer to split.
-  - `app.rs`: hidden controller window and message loop. Sensors every
-    1 s (repaints only the panel); health check every 5 s; rebuilds on
-    Explorer restart (`TaskbarCreated`), display change and resume.
+  - `app.rs`: hidden controller window and message loop. Sensors and a
+    config-file change check every 1 s; health check every 5 s; rebuilds
+    on config change, Explorer restart (`TaskbarCreated`), display change
+    and resume. A bad config is logged and the old settings kept.
   - `surface.rs`: one window per monitor. `paint.rs`: GDI background
-    plus the widgets: the canvas draws straight into a persistent DIB
-    section sized to the widgets, GDI adds the text (Bahnschrift, built
-    into Windows; the wallpaper's own font isn't ours to ship) and
-    BitBlts it in. Only the widgets' area is repainted each second.
+    plus the layout's widgets, each with its own persistent DIB section:
+    the canvas draws straight into it, GDI adds the text (Bahnschrift,
+    built into Windows; the wallpaper's own font isn't ours to ship) and
+    BitBlts it in. Only the widgets' areas are repainted each second.
+    Scale = monitor height / 1000 (at least 1 px per unit) x layout size.
+  - `monitors.rs`: each monitor's rectangle, work area, name and primary
+    flag.
   - `sensors/`: raw readings, all from built-in Windows sources with no
     admin: `pdh.rs` (CPU per core and clock, GPU engine use, VRAM in
     use), `gpu.rs` (D3DKMT: temperature, fan, power, VRAM size),
@@ -96,6 +109,9 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   `WorkerW`.
 - Stop a running copy with `wallflex --quit`. Only one copy runs at a
   time.
+- Test layouts with `--config <file>` instead of editing the user's
+  real `%APPDATA%\Wallflex\config.toml`; the log goes next to that
+  file.
 - Don't restart Explorer or put the PC to sleep to test without asking
   the user first: restarting Explorer closes their File Explorer windows.
 
@@ -127,3 +143,10 @@ private, 0.07% CPU (0.81% of one core), 3 threads, no GPU driver. The
 widget buffers are ~3 MB (2 MB at 4K); most of the rest is the PDH
 libraries. The first version cost 0.25% CPU until polylines only
 visited pixels near each segment and arcs only their band.
+
+Milestone 4 (23 Oct 2026, release build, 60 s, default config): 16.0 MB
+working set, 8.8 MB private, 0.08% CPU, exe 417 KB (was 240 KB; serde +
+toml). Anchors, live reload and error reporting were tested on the
+upper monitor with a test config; plugging monitors in and out hasn't
+been tested on real hardware yet (it goes through the same
+WM_DISPLAYCHANGE rebuild).

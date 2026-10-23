@@ -206,6 +206,29 @@ pub struct Label {
     pub text: String,
 }
 
+/// A widget that can be placed on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Widget {
+    /// Everything below in one block: CPU and network side by side,
+    /// the GPU rings under them, then RAM and SSD temperatures.
+    Panel,
+    /// CPU thread columns.
+    Cpu,
+    /// Network graph.
+    Network,
+    /// Every GPU's ring chart, two per row.
+    Gpus,
+    /// One GPU's ring chart (0 = the first GPU, in PCI slot order).
+    Gpu(usize),
+    /// RAM use and SSD temperatures on one line.
+    Info,
+}
+
+/// Height of the RAM/SSD line.
+const INFO_H: f64 = HEAD_SIZE * 1.4;
+/// Height of one GPU ring chart, names included.
+const GPU_CHART_H: f64 = RING_NAME_ROOM + RING_SIZE;
+
 /// What the widgets show: the latest reading plus the network history.
 #[derive(Default)]
 pub struct Dashboard {
@@ -227,19 +250,31 @@ impl Dashboard {
         self.snapshot = snapshot;
     }
 
-    /// The widgets' size in design units.
-    pub fn size(&self) -> (f64, f64) {
-        (
-            COLUMN_W * 2.0 + COLUMN_GAP,
-            self.info_baseline() + HEAD_SIZE / 2.0,
-        )
+    /// A widget's size in design units. (0, 0) when it has nothing to
+    /// show, such as a GPU that isn't there.
+    pub fn size(&self, widget: Widget) -> (f64, f64) {
+        match widget {
+            Widget::Panel => (PANEL_W, self.panel_info_top() + INFO_H),
+            Widget::Cpu => (COLUMN_W, BODY_TOP + CPU_COLS_H),
+            Widget::Network => (COLUMN_W, BODY_TOP + NET_GRAPH_H),
+            Widget::Gpus => gpus_size(self.snapshot.gpus.len()),
+            Widget::Gpu(index) => {
+                if index < self.snapshot.gpus.len() {
+                    (COLUMN_W, GPU_CHART_H)
+                } else {
+                    (0.0, 0.0)
+                }
+            }
+            Widget::Info => (PANEL_W, INFO_H),
+        }
     }
 
-    /// Draws everything into `canvas` (already sized and cleared to
+    /// Draws `widget` into `canvas` (already sized to it and cleared to
     /// `background`) at `scale` pixels per unit. Returns the text to draw
     /// on top.
     pub fn draw(
         &self,
+        widget: Widget,
         canvas: &mut Canvas<'_>,
         scale: f64,
         background: Rgb,
@@ -248,26 +283,47 @@ impl Dashboard {
             canvas,
             scale,
             background,
+            origin: (0.0, 0.0),
             labels: Vec::new(),
         };
-        self.draw_cpu(&mut pen);
-        self.draw_net(&mut pen, COLUMN_W + COLUMN_GAP);
-        self.draw_rings(&mut pen);
-        self.draw_info(&mut pen);
+        match widget {
+            Widget::Panel => self.draw_panel(&mut pen),
+            Widget::Cpu => self.draw_cpu(&mut pen),
+            Widget::Network => self.draw_net(&mut pen),
+            Widget::Gpus => Self::draw_gpus(&mut pen, &self.snapshot.gpus),
+            Widget::Gpu(index) => {
+                if let Some(gpu) = self.snapshot.gpus.get(index) {
+                    draw_ring_chart(&mut pen, (0.0, RING_NAME_ROOM), gpu);
+                }
+            }
+            Widget::Info => self.draw_info(&mut pen),
+        }
         pen.labels
     }
 
-    /// Top of the ring charts' area (below the first row and the names).
-    fn rings_top() -> f64 {
-        BODY_TOP + NET_GRAPH_H + ROW_GAP + RING_NAME_ROOM
+    /// The panel: CPU and network side by side, GPUs under them, then
+    /// the RAM/SSD line.
+    fn draw_panel(&self, pen: &mut Pen<'_, '_>) {
+        self.draw_cpu(pen);
+        pen.origin = (COLUMN_W + COLUMN_GAP, 0.0);
+        self.draw_net(pen);
+        pen.origin = (0.0, Self::panel_gpus_top());
+        Self::draw_gpus(pen, &self.snapshot.gpus);
+        pen.origin = (0.0, self.panel_info_top());
+        self.draw_info(pen);
+        pen.origin = (0.0, 0.0);
     }
 
-    /// Baseline of the RAM/SSD line under the rings.
-    fn info_baseline(&self) -> f64 {
-        let rows = self.snapshot.gpus.len().div_ceil(RINGS_PER_ROW);
-        let rings_h =
-            count_to_f64(rows) * (RING_SIZE + ROW_GAP + RING_NAME_ROOM);
-        Self::rings_top() + rings_h + HEAD_BASELINE
+    /// Where the GPU charts start in the panel.
+    fn panel_gpus_top() -> f64 {
+        BODY_TOP + NET_GRAPH_H + ROW_GAP
+    }
+
+    /// Where the RAM/SSD line starts in the panel.
+    fn panel_info_top(&self) -> f64 {
+        let (_, gpus_h) = gpus_size(self.snapshot.gpus.len());
+        let gap = if gpus_h > 0.0 { ROW_GAP } else { 0.0 };
+        Self::panel_gpus_top() + gpus_h + gap
     }
 
     /// The CPU thread columns, at the top left.
@@ -355,8 +411,9 @@ impl Dashboard {
         }
     }
 
-    /// The network graph, in the second column.
-    fn draw_net(&self, pen: &mut Pen<'_, '_>, left: f64) {
+    /// The network graph and its heading.
+    fn draw_net(&self, pen: &mut Pen<'_, '_>) {
+        let left = 0.0;
         pen.text(
             (left, HEAD_BASELINE),
             HEAD_SIZE,
@@ -391,12 +448,13 @@ impl Dashboard {
                 &format!("{name} {value}"),
             );
         }
-        self.draw_net_graph(pen, left);
+        self.draw_net_graph(pen);
     }
 
     /// The network graph's plot: the last minute of download (white,
     /// faint fill) and upload (blue).
-    fn draw_net_graph(&self, pen: &mut Pen<'_, '_>, left: f64) {
+    fn draw_net_graph(&self, pen: &mut Pen<'_, '_>) {
+        let left = 0.0;
         let top = BODY_TOP + NET_TOP;
         let base = top + NET_H;
         let right = left + COLUMN_W;
@@ -470,12 +528,9 @@ impl Dashboard {
     }
 
     /// One ring chart per GPU, two per row.
-    fn draw_rings(&self, pen: &mut Pen<'_, '_>) {
-        for (row, pair) in
-            (0_u32..).zip(self.snapshot.gpus.chunks(RINGS_PER_ROW))
-        {
-            let top = Self::rings_top()
-                + f64::from(row) * (RING_SIZE + ROW_GAP + RING_NAME_ROOM);
+    fn draw_gpus(pen: &mut Pen<'_, '_>, gpus: &[Gpu]) {
+        for (row, pair) in (0_u32..).zip(gpus.chunks(RINGS_PER_ROW)) {
+            let top = f64::from(row) * (GPU_CHART_H + ROW_GAP) + RING_NAME_ROOM;
             for (column, gpu) in (0_u32..).zip(pair) {
                 let left = f64::from(column) * (COLUMN_W + COLUMN_GAP);
                 draw_ring_chart(pen, (left, top), gpu);
@@ -483,7 +538,7 @@ impl Dashboard {
         }
     }
 
-    /// RAM use and SSD temperatures, on one line under the rings.
+    /// RAM use and SSD temperatures, on one line.
     fn draw_info(&self, pen: &mut Pen<'_, '_>) {
         let mut parts = Vec::new();
         if let Some(memory) = self.snapshot.memory.filter(|m| m.total_bytes > 0)
@@ -501,13 +556,7 @@ impl Dashboard {
             parts.push(format!("SSD{} {} °C", disk.disk, disk.temp_c));
         }
         let text = parts.join("     ");
-        pen.text(
-            (0.0, self.info_baseline()),
-            HEAD_SIZE,
-            QUIET,
-            Align::Left,
-            &text,
-        );
+        pen.text((0.0, HEAD_BASELINE), HEAD_SIZE, QUIET, Align::Left, &text);
     }
 }
 
@@ -672,6 +721,22 @@ pub fn format_rate(kbps: f64) -> String {
     }
 }
 
+/// Width of the panel: two widget columns and the gap.
+const PANEL_W: f64 = COLUMN_W * 2.0 + COLUMN_GAP;
+
+/// Size of `count` GPU charts laid out two per row.
+fn gpus_size(count: usize) -> (f64, f64) {
+    if count == 0 {
+        return (0.0, 0.0);
+    }
+    let columns = count_to_f64(count.min(RINGS_PER_ROW));
+    let rows = count_to_f64(count.div_ceil(RINGS_PER_ROW));
+    (
+        columns * COLUMN_W + (columns - 1.0) * COLUMN_GAP,
+        rows * GPU_CHART_H + (rows - 1.0) * ROW_GAP,
+    )
+}
+
 /// A small count as `f64`.
 fn count_to_f64(count: usize) -> f64 {
     u32::try_from(count).map_or(f64::MAX, f64::from)
@@ -685,6 +750,9 @@ struct Pen<'a, 'b> {
     scale: f64,
     /// The background, for mixing text opacity.
     background: Rgb,
+    /// Where (0, 0) is, in units: lets each widget draw in its own
+    /// coordinates inside the panel.
+    origin: (f64, f64),
     /// Text collected for GDI.
     labels: Vec<Label>,
 }
@@ -692,20 +760,24 @@ struct Pen<'a, 'b> {
 impl Pen<'_, '_> {
     /// An area from units to pixels.
     fn px(&self, area: Area) -> Area {
+        let (ox, oy) = self.origin;
         Area {
-            x0: area.x0 * self.scale,
-            y0: area.y0 * self.scale,
-            x1: area.x1 * self.scale,
-            y1: area.y1 * self.scale,
+            x0: (area.x0 + ox) * self.scale,
+            y0: (area.y0 + oy) * self.scale,
+            x1: (area.x1 + ox) * self.scale,
+            y1: (area.y1 + oy) * self.scale,
         }
+    }
+
+    /// A point from units to pixels.
+    fn point(&self, (x, y): (f64, f64)) -> (f64, f64) {
+        let (ox, oy) = self.origin;
+        ((x + ox) * self.scale, (y + oy) * self.scale)
     }
 
     /// Points from units to pixels.
     fn points(&self, points: &[(f64, f64)]) -> Vec<(f64, f64)> {
-        points
-            .iter()
-            .map(|&(x, y)| (x * self.scale, y * self.scale))
-            .collect()
+        points.iter().map(|&p| self.point(p)).collect()
     }
 
     /// The line weight in pixels, never thinner than one pixel.
@@ -730,9 +802,11 @@ impl Pen<'_, '_> {
     fn dashed(&mut self, (x0, x1): (f64, f64), y: f64, alpha: f64) {
         let s = self.scale;
         let weight = self.weight();
+        let (start, y) = self.point((x0, y));
+        let (end, _) = self.point((x1, 0.0));
         self.canvas.dashed_hline(
-            (x0 * s, x1 * s),
-            y * s,
+            (start, end),
+            y,
             weight,
             (NET_DASH.0 * s, NET_DASH.1 * s),
             Paint { color: INK, alpha },
@@ -748,7 +822,8 @@ impl Pen<'_, '_> {
     /// The area under a line, down to `base`.
     fn area_under(&mut self, points: &[(f64, f64)], base: f64, paint: Paint) {
         let points = self.points(points);
-        self.canvas.fill_under(&points, base * self.scale, paint);
+        let (_, base) = self.point((0.0, base));
+        self.canvas.fill_under(&points, base, paint);
     }
 
     /// A ring arc.
@@ -759,10 +834,10 @@ impl Pen<'_, '_> {
         fraction: f64,
         paint: Paint,
     ) {
-        let s = self.scale;
         let weight = self.weight();
+        let centre = self.point((cx, cy));
         self.canvas
-            .arc((cx * s, cy * s), radius * s, weight, fraction, paint);
+            .arc(centre, radius * self.scale, weight, fraction, paint);
     }
 
     /// Text in ink at `alpha`.
@@ -777,9 +852,10 @@ impl Pen<'_, '_> {
         if text.is_empty() {
             return;
         }
+        let (x, y) = self.point((x, y));
         self.labels.push(Label {
-            x: x * self.scale,
-            y: y * self.scale,
+            x,
+            y,
             size: size * self.scale,
             color: mix(INK, self.background, alpha),
             align,
@@ -791,7 +867,8 @@ impl Pen<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Dashboard, NET_SPAN, Ring, format_rate, ring_reading, split_gpu_name,
+        Dashboard, NET_SPAN, Ring, Widget, format_rate, ring_reading,
+        split_gpu_name,
     };
     use crate::canvas::Canvas;
     use crate::color::Rgb;
@@ -881,19 +958,36 @@ mod tests {
     }
 
     #[test]
-    fn grows_a_row_per_two_gpus() {
+    fn sizes_each_widget() {
         let mut dashboard = Dashboard::default();
-        let (_, empty) = dashboard.size();
-        dashboard.update(Snapshot {
-            gpus: vec![Gpu::default(), Gpu::default()],
-            ..Snapshot::default()
-        });
-        let (_, two) = dashboard.size();
         dashboard.update(Snapshot {
             gpus: vec![Gpu::default(); 3],
             ..Snapshot::default()
         });
-        let (_, three) = dashboard.size();
+        assert_eq!(dashboard.size(Widget::Cpu), (195.0, 98.0));
+        assert_eq!(dashboard.size(Widget::Network), (195.0, 109.0));
+        assert_eq!(dashboard.size(Widget::Gpu(2)), (195.0, 90.0));
+        assert_eq!(dashboard.size(Widget::Gpu(3)), (0.0, 0.0), "no 4th GPU");
+        // Three GPUs: two columns, two rows.
+        assert_eq!(dashboard.size(Widget::Gpus), (432.5, 90.0 * 2.0 + 16.0));
+        let (panel_w, _) = dashboard.size(Widget::Panel);
+        assert!((panel_w - 432.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn grows_a_row_per_two_gpus() {
+        let mut dashboard = Dashboard::default();
+        let (_, empty) = dashboard.size(Widget::Panel);
+        dashboard.update(Snapshot {
+            gpus: vec![Gpu::default(), Gpu::default()],
+            ..Snapshot::default()
+        });
+        let (_, two) = dashboard.size(Widget::Panel);
+        dashboard.update(Snapshot {
+            gpus: vec![Gpu::default(); 3],
+            ..Snapshot::default()
+        });
+        let (_, three) = dashboard.size(Widget::Panel);
         assert!(two > empty);
         assert!(three > two);
     }
@@ -915,12 +1009,12 @@ mod tests {
         });
         // 1440p scale; the widgets are about 623 x 380 pixels there.
         let scale = 1.44;
-        let (w, h) = dashboard.size();
+        let (w, h) = dashboard.size(Widget::Panel);
         assert!(w * scale < 700.0 && h * scale < 450.0);
         let mut buffer = vec![0_u32; 700 * 450];
         let labels = {
             let mut canvas = Canvas::new(700, 450, &mut buffer).unwrap();
-            dashboard.draw(&mut canvas, scale, Rgb::BLACK)
+            dashboard.draw(Widget::Panel, &mut canvas, scale, Rgb::BLACK)
         };
         let texts: Vec<&str> = labels.iter().map(|l| l.text.as_str()).collect();
         assert!(texts.contains(&"CPU THREADS"));
