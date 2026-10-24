@@ -43,6 +43,7 @@ CloseApplications=yes
 RestartApplications=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+SetupIconFile=..\wallflex.ico
 OutputDir=..\dist
 OutputBaseFilename=wallflex-{#AppVersion}-setup
 

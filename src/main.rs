@@ -15,6 +15,8 @@ mod color;
 mod config;
 mod discord;
 mod geometry;
+#[cfg(test)]
+mod icon;
 mod image;
 mod log;
 mod media;

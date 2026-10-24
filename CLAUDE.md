@@ -166,8 +166,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     visualizer's green-to-red scale) reach red.
   - `http.rs`: WinHTTP requests and websockets (no TLS library).
     `images.rs`: download + WIC decode on a thread, with retries.
-  - `tray.rs`: the notification-area icon (drawn with the canvas at the
-    small-icon size) and its menu; `app.rs` handles the choices and
+  - `tray.rs`: the notification-area icon (the exe's icon resource at
+    the small-icon size) and its menu; `app.rs` handles the choices and
     re-adds the icon when Explorer restarts. `startup.rs`: "Start with
     Windows" as an HKCU `Run` value.
   - `mouse.rs`: the WH_MOUSE_LL hook runs on its own thread that only
@@ -193,6 +193,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     user's own `windows_sensors.py`.
 - `wallflex.manifest`: per-monitor DPI v2 and Windows 8+ support (needed
   for layered child windows); embedded by `build.rs`.
+- `wallflex.ico`: the app icon (exe, tray, installer), drawn by
+  `src/icon.rs` (test-only) at 16 to 128 px. A test fails if it no
+  longer matches the drawing; `WALLFLEX_WRITE_ICON=1 cargo test icon`
+  rewrites it. `build.rs` packs it into a `.res` file (resource id 1)
+  for the linker, so no resource compiler is needed.
 
 ## Running and checking
 

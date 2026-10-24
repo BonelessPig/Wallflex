@@ -15,6 +15,8 @@ patch number (0.x.**y**) for fixes only.
   starts Wallflex at sign-in. Upgrades close the running copy and keep
   your settings; it uninstalls from Installed apps and asks before
   deleting your settings. The zip is still there for a portable copy.
+- An app icon (the tray icon's three bars on blue) for the exe, the
+  Start menu, Installed apps and the installer.
 
 ## [0.1.0] - 2026-10-24
 
