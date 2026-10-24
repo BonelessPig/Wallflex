@@ -8,6 +8,20 @@ use std::time::Duration;
 /// How long a glide takes unless told otherwise.
 pub const GLIDE: Duration = Duration::from_millis(300);
 
+/// How a glide moves over its time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ease {
+    /// Fast at first, slowing into place.
+    #[default]
+    Out,
+    /// An even speed. With a glide as long as the time between readings
+    /// the bars never stop, so movement reads as continuous.
+    Linear,
+}
+
+/// How a group of bars glides: for how long and how, or `None` to jump.
+pub type Glide = Option<(Duration, Ease)>;
+
 /// The animated values: how full each bar and ring is.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Levels {
@@ -47,6 +61,8 @@ pub struct Motion {
     progress: f64,
     /// How long a glide takes; `None` means bars jump.
     glide: Option<Duration>,
+    /// How it moves over that time.
+    ease: Ease,
 }
 
 impl Default for Motion {
@@ -55,6 +71,7 @@ impl Default for Motion {
             from: Levels::default(),
             progress: 1.0,
             glide: Some(GLIDE),
+            ease: Ease::Out,
         }
     }
 }
@@ -68,8 +85,9 @@ impl Motion {
 
     /// Sets how long glides take; `None` makes bars jump (and ends any
     /// glide under way).
-    pub fn set_glide(&mut self, glide: Option<Duration>) {
-        self.glide = glide;
+    pub fn set_glide(&mut self, glide: Option<(Duration, Ease)>) {
+        self.glide = glide.map(|(time, _)| time);
+        self.ease = glide.map_or(Ease::Out, |(_, ease)| ease);
         if glide.is_none() {
             self.settle();
         }
@@ -99,7 +117,11 @@ impl Motion {
     /// What to draw now, on the way to `target`.
     pub fn shown(&self, target: &Levels) -> Levels {
         if self.is_moving() {
-            Levels::between(&self.from, target, ease_out(self.progress))
+            let amount = match self.ease {
+                Ease::Out => ease_out(self.progress),
+                Ease::Linear => self.progress.clamp(0.0, 1.0),
+            };
+            Levels::between(&self.from, target, amount)
         } else {
             target.clone()
         }
@@ -121,7 +143,17 @@ fn lerp(a: f64, b: f64, amount: f64) -> f64 {
 mod tests {
     use std::time::Duration;
 
-    use super::{GLIDE, Levels, Motion};
+    use super::{Ease, GLIDE, Levels, Motion};
+
+    #[test]
+    fn linear_moves_evenly() {
+        let mut motion = Motion::default();
+        motion.set_glide(Some((GLIDE, Ease::Linear)));
+        motion.restart(levels(0.0, 0.0));
+        let _ = motion.advance(GLIDE / 4);
+        let quarter = motion.shown(&levels(100.0, 1.0));
+        assert!((quarter.cores[0] - 25.0).abs() < 1e-6);
+    }
 
     fn levels(core: f64, ram: f64) -> Levels {
         Levels {

@@ -12,13 +12,15 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
     WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
-    WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
+    WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand, WICRect,
 };
+use windows::Win32::System::Com::IStream;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance,
     CoInitializeEx,
 };
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::core::Interface;
 
 use super::http;
 use crate::discord::rpc::deadline;
@@ -190,44 +192,76 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
 
 /// Decodes an image file (PNG, JPEG, WebP...) at [`DECODE_SIZE`].
 fn decode(factory: &IWICImagingFactory, bytes: &[u8]) -> Result<Image, String> {
-    let size = usize::try_from(DECODE_SIZE).map_err(|e| e.to_string())?;
-    let stride = DECODE_SIZE.checked_mul(4).ok_or("size overflow")?;
-    let mut pixels = vec![
-        0_u8;
-        size.checked_mul(size)
-            .and_then(|n| n.checked_mul(4))
-            .ok_or("size overflow")?
-    ];
-    // SAFETY: every object below is created from the factory and used on
-    // this thread; `bytes` outlives the stream, and `pixels` holds
-    // exactly `stride` x height bytes for CopyPixels.
-    unsafe {
+    // SAFETY: the stream reads `bytes`, which outlives it.
+    let stream = unsafe {
         let stream = factory.CreateStream().map_err(|e| e.to_string())?;
         stream
             .InitializeFromMemory(bytes)
             .map_err(|e| e.to_string())?;
+        stream
+    };
+    let stream: IStream = stream.cast().map_err(|e| e.to_string())?;
+    decode_stream(factory, &stream, DECODE_SIZE)
+}
+
+/// Decodes the image in `stream` as a `size` x `size` square: scaled so
+/// its shorter side fits, then cropped to the middle (so a wide video
+/// thumbnail isn't squashed).
+pub fn decode_stream(
+    factory: &IWICImagingFactory,
+    stream: &IStream,
+    size: u32,
+) -> Result<Image, String> {
+    let edge = usize::try_from(size).map_err(|e| e.to_string())?;
+    let stride = size.checked_mul(4).ok_or("size overflow")?;
+    let mut pixels = vec![
+        0_u8;
+        edge.checked_mul(edge)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("size overflow")?
+    ];
+    // SAFETY: every object below is created from the factory and used on
+    // this thread, and `pixels` holds exactly `stride` x `size` bytes
+    // for CopyPixels.
+    unsafe {
         let decoder = factory
             .CreateDecoderFromStream(
-                &stream,
+                stream,
                 std::ptr::null(),
                 WICDecodeMetadataCacheOnDemand,
             )
             .map_err(|e| e.to_string())?;
         let frame = decoder.GetFrame(0).map_err(|e| e.to_string())?;
+        let (mut width, mut height) = (0_u32, 0_u32);
+        frame
+            .GetSize(&raw mut width, &raw mut height)
+            .map_err(|e| e.to_string())?;
+        let (scaled_w, scaled_h) = cover(width, height, size);
         let scaler = factory.CreateBitmapScaler().map_err(|e| e.to_string())?;
         scaler
             .Initialize(
                 &frame,
-                DECODE_SIZE,
-                DECODE_SIZE,
+                scaled_w,
+                scaled_h,
                 WICBitmapInterpolationModeFant,
             )
+            .map_err(|e| e.to_string())?;
+        let middle = WICRect {
+            X: i32::try_from(scaled_w.saturating_sub(size) / 2).unwrap_or(0),
+            Y: i32::try_from(scaled_h.saturating_sub(size) / 2).unwrap_or(0),
+            Width: i32::try_from(size).map_err(|e| e.to_string())?,
+            Height: i32::try_from(size).map_err(|e| e.to_string())?,
+        };
+        let clipper =
+            factory.CreateBitmapClipper().map_err(|e| e.to_string())?;
+        clipper
+            .Initialize(&scaler, &raw const middle)
             .map_err(|e| e.to_string())?;
         let converter =
             factory.CreateFormatConverter().map_err(|e| e.to_string())?;
         converter
             .Initialize(
-                &scaler,
+                &clipper,
                 &GUID_WICPixelFormat32bppPBGRA,
                 WICBitmapDitherTypeNone,
                 None,
@@ -239,6 +273,28 @@ fn decode(factory: &IWICImagingFactory, bytes: &[u8]) -> Result<Image, String> {
             .CopyPixels(std::ptr::null(), stride, &mut pixels)
             .map_err(|e| e.to_string())?;
     }
-    Image::from_pbgra(size, size, &pixels)
+    Image::from_pbgra(edge, edge, &pixels)
         .ok_or_else(|| "bad pixel data".to_owned())
+}
+
+/// The size to scale a `width` x `height` image to so it covers a
+/// `size` square (its shorter side becomes `size`).
+fn cover(width: u32, height: u32, size: u32) -> (u32, u32) {
+    let (w, h) = (u64::from(width.max(1)), u64::from(height.max(1)));
+    let target = u64::from(size);
+    let (w, h) = if w < h {
+        (
+            target,
+            h.saturating_mul(target).checked_div(w).unwrap_or(target),
+        )
+    } else {
+        (
+            w.saturating_mul(target).checked_div(h).unwrap_or(target),
+            target,
+        )
+    };
+    (
+        u32::try_from(w.max(target)).unwrap_or(size),
+        u32::try_from(h.max(target)).unwrap_or(size),
+    )
 }

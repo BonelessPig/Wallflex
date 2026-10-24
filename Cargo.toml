@@ -17,6 +17,9 @@ toml = { version = "1.1.8", default-features = false, features = ["parse", "serd
 version = "0.62.2"
 features = [
     "Wdk_Graphics_Direct3D",
+    "Foundation",
+    "Media_Control",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
@@ -40,6 +43,7 @@ features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
+    "Win32_System_WinRT",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

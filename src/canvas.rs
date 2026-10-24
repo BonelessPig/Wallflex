@@ -279,23 +279,121 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Draws a graph's line through `points` (sorted left to right),
+    /// `weight` pixels wide, with round joins. Unlike
+    /// [`Canvas::polyline`] it never visits the whole box around the
+    /// line: each pixel column only looks at the segments passing
+    /// through it, so a long, spiky graph stays cheap to redraw.
+    pub fn graph_line(
+        &mut self,
+        points: &[(f64, f64)],
+        weight: f64,
+        paint: Paint,
+    ) {
+        self.graph_line_rows(points, weight, |_| paint);
+    }
+
+    /// [`Canvas::graph_line`] with a colour that depends on height:
+    /// `paint_at` gets each pixel row's centre (y, in pixels) and is
+    /// asked once per row.
+    pub fn graph_line_rows(
+        &mut self,
+        points: &[(f64, f64)],
+        weight: f64,
+        paint_at: impl Fn(f64) -> Paint,
+    ) {
+        let reach = weight / 2.0 + 1.0;
+        let (Some(first), Some(last)) = (points.first(), points.last()) else {
+            return;
+        };
+        let rows = self.row_paints(points, reach, &paint_at);
+        let mut start = 0_usize;
+        for x in self.span_x(first.0 - reach, last.0 + reach) {
+            let px = index_to_f64(x) + HALF;
+            let (left, right) = (px - reach, px + reach);
+            // Skip segments that end before this column.
+            while let Some([_, b]) = pair_at(points, start) {
+                if b.0 >= left {
+                    break;
+                }
+                start = start.saturating_add(1);
+            }
+            // The segments touching this column, and their height range
+            // within it.
+            let mut end = start;
+            let (mut top, mut bottom) = (f64::MAX, f64::MIN);
+            while let Some([a, b]) = pair_at(points, end) {
+                if a.0 > right {
+                    break;
+                }
+                for edge in [a.0.max(left), b.0.min(right)] {
+                    let y = height_on(a, b, edge);
+                    top = top.min(y);
+                    bottom = bottom.max(y);
+                }
+                end = end.saturating_add(1);
+            }
+            if top > bottom {
+                continue;
+            }
+            for y in self.span_y(top - reach, bottom + reach) {
+                let py = index_to_f64(y) + HALF;
+                let distance = (start..end)
+                    .filter_map(|i| pair_at(points, i))
+                    .map(|[a, b]| segment_distance((px, py), a, b))
+                    .fold(f64::MAX, f64::min);
+                let cover = unit(weight / 2.0 + HALF - distance);
+                if cover > 0.0 {
+                    let paint = rows.paint(y);
+                    self.blend(x, y, paint, cover);
+                }
+            }
+        }
+    }
+
+    /// Each pixel row's paint over the rows `points` (± `reach`) cover.
+    fn row_paints(
+        &self,
+        points: &[(f64, f64)],
+        reach: f64,
+        paint_at: &impl Fn(f64) -> Paint,
+    ) -> RowPaints {
+        let top = points.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+        let bottom = points.iter().map(|p| p.1).fold(f64::MIN, f64::max);
+        let span = self.span_y(top - reach, bottom + reach);
+        let table = span
+            .clone()
+            .map(|y| paint_at(index_to_f64(y) + HALF))
+            .collect();
+        RowPaints {
+            first: span.start,
+            paints: table,
+        }
+    }
+
     /// Fills between a line through `points` (sorted left to right) and
     /// the horizontal line `base`, smoothing the top edge.
-    pub fn fill_under(
+    /// `paint_at` gets each pixel row's centre (y, in pixels) and is
+    /// asked once per row, so the colour can depend on height.
+    pub fn fill_under_rows(
         &mut self,
         points: &[(f64, f64)],
         base: f64,
-        paint: Paint,
+        paint_at: impl Fn(f64) -> Paint,
     ) {
         let (Some(first), Some(last)) = (points.first(), points.last()) else {
             return;
         };
+        let mut edges: Vec<(f64, f64)> = points.to_vec();
+        edges.push((last.0, base));
+        let rows = self.row_paints(&edges, 0.0, &paint_at);
         for x in self.span_x(first.0, last.0) {
             let Some(top) = height_at(points, index_to_f64(x) + HALF) else {
                 continue;
             };
             for y in self.span_y(top, base) {
                 let cover = overlap(index_to_f64(y), top, base);
+                let paint = rows.paint(y);
                 self.blend(x, y, paint, cover);
             }
         }
@@ -525,6 +623,49 @@ fn bilinear(image: &Image, x: f64, y: f64) -> [f64; 4] {
     out
 }
 
+/// Paints worked out once per pixel row.
+struct RowPaints {
+    /// The row of the first paint.
+    first: usize,
+    /// One paint per row from `first`.
+    paints: Vec<Paint>,
+}
+
+impl RowPaints {
+    /// Row `y`'s paint (the nearest known one outside the range).
+    fn paint(&self, y: usize) -> Paint {
+        let index = y.saturating_sub(self.first);
+        self.paints
+            .get(index)
+            .or_else(|| self.paints.last())
+            .copied()
+            .unwrap_or(Paint {
+                color: Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                },
+                alpha: 0.0,
+            })
+    }
+}
+
+/// The segment from `points[index]` to the next point, if both exist.
+fn pair_at(points: &[(f64, f64)], index: usize) -> Option<[(f64, f64); 2]> {
+    let pair = points.get(index..index.checked_add(2)?)?;
+    <[(f64, f64); 2]>::try_from(pair).ok()
+}
+
+/// The height of the segment `a`-`b` at `x` (clamped to its ends).
+fn height_on(a: (f64, f64), b: (f64, f64), x: f64) -> f64 {
+    let span = b.0 - a.0;
+    if span.abs() <= f64::EPSILON {
+        return a.1;
+    }
+    let t = ((x - a.0) / span).clamp(0.0, 1.0);
+    a.1 + (b.1 - a.1) * t
+}
+
 /// Distance from `p` to the segment `a`-`b`.
 fn segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -620,6 +761,24 @@ fn unit_to_u8(value: f64) -> u8 {
 mod tests {
     use super::{Area, Canvas, Paint, mix, unpack};
     use crate::color::Rgb;
+
+    #[test]
+    fn graph_line_matches_polyline() {
+        let points = [(1.0, 18.0), (6.0, 3.0), (9.0, 15.0), (18.0, 10.0)];
+        let paint = Paint {
+            color: WHITE,
+            alpha: 1.0,
+        };
+        let mut a = vec![0_u32; 400];
+        let mut b = vec![0_u32; 400];
+        Canvas::new(20, 20, &mut a)
+            .unwrap()
+            .polyline(&points, 1.5, paint);
+        Canvas::new(20, 20, &mut b)
+            .unwrap()
+            .graph_line(&points, 1.5, paint);
+        assert_eq!(a, b);
+    }
 
     #[test]
     fn clip_limits_drawing() {
@@ -732,7 +891,7 @@ mod tests {
         canvas.polyline(&line, 1.0, SOLID);
         assert_eq!(pixel(&canvas, 5, 2), 255);
         assert_eq!(pixel(&canvas, 5, 5), 0);
-        canvas.fill_under(&line, 8.0, SOLID);
+        canvas.fill_under_rows(&line, 8.0, |_| SOLID);
         assert_eq!(pixel(&canvas, 5, 5), 255);
         assert_eq!(pixel(&canvas, 5, 9), 0);
     }

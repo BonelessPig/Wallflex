@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::color::Rgb;
 use crate::geometry::Rect;
 use crate::pace::Mode;
-use crate::widgets::Widget;
+use crate::widgets::{Parts, Widget};
 
 /// The commented default config, written on first run.
 pub const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
@@ -30,6 +30,12 @@ pub struct Settings {
     pub discord: Option<DiscordSettings>,
     /// How smoothly to animate.
     pub performance: Mode,
+    /// Your internet plan's download speed (Mbit/s), if set: the network
+    /// graph's colours reach red there (or at the adapter's speed, if
+    /// that's lower).
+    pub net_max_mbps: Option<f64>,
+    /// Which parts the panel shows.
+    pub parts: Parts,
 }
 
 /// The `[discord]` section: your Discord application's details.
@@ -245,6 +251,8 @@ impl Default for Settings {
             }],
             discord: None,
             performance: Mode::Smooth,
+            net_max_mbps: None,
+            parts: Parts::default(),
         }
     }
 }
@@ -274,6 +282,34 @@ struct RawConfig {
     discord: Option<RawDiscord>,
     /// `"smooth"` or `"light"`.
     performance: Option<String>,
+    /// `[network]` table.
+    network: Option<RawNetwork>,
+    /// `[panel]` table.
+    panel: Option<RawPanel>,
+}
+
+/// `[panel]` as written: which parts show (all if left out).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPanel {
+    /// CPU columns.
+    cpu: Option<bool>,
+    /// Network graph.
+    network: Option<bool>,
+    /// RAM line.
+    ram: Option<bool>,
+    /// SSD temperatures.
+    ssd: Option<bool>,
+    /// GPU numbers to show, 1 = the first.
+    gpus: Option<Vec<i64>>,
+}
+
+/// `[network]` as written.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNetwork {
+    /// Internet download speed, Mbit/s.
+    max_mbps: Option<f64>,
 }
 
 /// `[discord]` as written.
@@ -357,11 +393,55 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
             )));
         }
     };
+    let parts = raw
+        .panel
+        .map(parse_panel)
+        .transpose()
+        .map_err(|e| ConfigError(format!("panel: {e}")))?
+        .unwrap_or_default();
+    let net_max_mbps = match raw.network.and_then(|n| n.max_mbps) {
+        Some(mbps) if mbps.is_finite() && mbps > 0.0 => Some(mbps),
+        Some(mbps) => {
+            return Err(ConfigError(format!(
+                "network: max_mbps = {mbps} must be more than 0"
+            )));
+        }
+        None => None,
+    };
     Ok(Settings {
         background,
         layouts,
         discord,
         performance,
+        net_max_mbps,
+        parts,
+    })
+}
+
+/// Validates `[panel]`.
+fn parse_panel(raw: RawPanel) -> Result<Parts, String> {
+    let gpus = raw
+        .gpus
+        .map(|numbers| {
+            numbers
+                .into_iter()
+                .map(|n| {
+                    usize::try_from(n)
+                        .ok()
+                        .and_then(|n| n.checked_sub(1))
+                        .ok_or_else(|| {
+                            format!("gpus: {n} isn't a GPU number (1 or more)")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    Ok(Parts {
+        cpu: raw.cpu.unwrap_or(true),
+        network: raw.network.unwrap_or(true),
+        ram: raw.ram.unwrap_or(true),
+        ssd: raw.ssd.unwrap_or(true),
+        gpus,
     })
 }
 
@@ -625,6 +705,16 @@ x = 5";
         let widgets = &parse(text).unwrap().layouts[0].widgets;
         assert_eq!(widgets[0].offset, (0.0, 64.0));
         assert_eq!(widgets[1].offset, (5.0, 0.0));
+    }
+
+    #[test]
+    fn reads_panel_parts() {
+        let text = "[panel]\ncpu = false\ngpus = [1]\n";
+        let parts = parse(text).unwrap().parts;
+        assert!(!parts.cpu && parts.network && parts.ram);
+        assert_eq!(parts.gpus, Some(vec![0]));
+        assert!(parse("[panel]\ngpus = [0]\n").is_err());
+        assert!(parse("[panel]\nfan = true\n").is_err());
     }
 
     #[test]

@@ -38,9 +38,21 @@ pub struct Surface {
     hwnd: HWND,
     /// Paints the window.
     painter: Painter,
+    /// The monitor it covers, in desktop pixels.
+    monitor: crate::geometry::Rect,
 }
 
 impl Surface {
+    /// Whether a full-screen window covering `window` (desktop pixels)
+    /// hides this monitor's visualizer.
+    pub fn visualizer_hidden_by(&self, window: crate::geometry::Rect) -> bool {
+        self.painter.shows(crate::widgets::Widget::Visualizer)
+            && window.left <= self.monitor.left
+            && window.top <= self.monitor.top
+            && window.right >= self.monitor.right
+            && window.bottom >= self.monitor.bottom
+    }
+
     /// The surface's window.
     pub fn hwnd(&self) -> HWND {
         self.hwnd
@@ -110,8 +122,8 @@ impl Surface {
 
     /// Asks Windows to repaint just what a quick reading changed (the
     /// CPU and network).
-    pub fn invalidate_quick(&self) {
-        self.invalidate_rects(&self.painter.quick_rects());
+    pub fn invalidate_quick(&self, dashboard: &Dashboard) {
+        self.invalidate_rects(&self.painter.quick_rects(dashboard));
     }
 
     /// Asks Windows to repaint the widgets with hover highlights.
@@ -144,8 +156,8 @@ impl Surface {
     }
 
     /// Asks Windows to repaint the visualizer.
-    pub fn invalidate_visualizer(&self) {
-        self.invalidate_rects(&self.painter.visualizer_rects());
+    pub fn invalidate_visualizer(&self, dashboard: &Dashboard) {
+        self.invalidate_rects(&self.painter.visualizer_rects(dashboard));
     }
 
     /// Asks Windows to repaint `rects` (client pixels).
@@ -265,7 +277,11 @@ pub fn create(
         )
     }?;
     // From here on, dropping `surface` destroys the window.
-    let surface = Surface { hwnd, painter };
+    let surface = Surface {
+        hwnd,
+        painter,
+        monitor: monitor.rect,
+    };
 
     if layered {
         // SAFETY: our own layered window; plain values.

@@ -150,12 +150,31 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     and the bars are down, and rests it while
     `SHQueryUserNotificationState` reports a full-screen app. Capture
     only runs while a layout has a visualizer.
+  - `media.rs` (+ safe `src/media.rs`): now playing. A thread polls
+    Windows' media sessions (WinRT `GlobalSystemMediaTransportControls`)
+    every 2 s, picks one (playing > paused; music apps > browsers >
+    others), and on a new song decodes its thumbnail (WIC via
+    `CreateStreamOverRandomAccessStream`, cropped square). It posts
+    `WM_MEDIA`; the visualizer shows art left of the bars and the title
+    (scrolling in a clipped box when long) and artist underneath.
+  - The visualizer rests only while the foreground window covers a
+    monitor showing it (`Surface::visualizer_hidden_by`), so full-screen
+    video on another monitor doesn't stop it.
+  - `[panel]` (`Parts`): which parts the panel, `gpus` and `info` widgets
+    show; `Dashboard::panel_layout` reflows them. `[network] max_mbps`
+    plus the adapter's link speed set where the graph's colours (the
+    visualizer's green-to-red scale) reach red.
   - `http.rs`: WinHTTP requests and websockets (no TLS library).
     `images.rs`: download + WIC decode on a thread, with retries.
   - `tray.rs`: the notification-area icon (drawn with the canvas at the
     small-icon size) and its menu; `app.rs` handles the choices and
     re-adds the icon when Explorer restarts. `startup.rs`: "Start with
     Windows" as an HKCU `Run` value.
+  - `mouse.rs`: the WH_MOUSE_LL hook runs on its own thread that only
+    pumps messages. Windows waits for low-level hooks before moving the
+    cursor, so a hook on the painting thread lagged the mouse badly
+    whenever frames were busy (seen with full-screen YouTube and the
+    visualizer at ~60 fps). Never move it back to the UI thread.
   - Clicks: a WH_MOUSE_LL hook (only while Discord is set up) notes a
     press and release at the same spot, and only acts when the desktop
     itself is under the pointer. It never swallows clicks. Pointer
@@ -276,3 +295,14 @@ silence 0.40% (no frames, audio thread asleep); panel + a test build
 feeding fake music every frame 0.34-0.58%, so the bars cost about 0.1%
 or less. Memory +3.5 MB working set, +1 MB private (Windows audio DLLs,
 3 more threads). Not yet watched live with real music.
+
+Smoother smooth mode (24 Oct 2026): CPU and network four times a
+second, CPU glides lasting until the next reading, ring/RAM glides a
+full second, and the network graph sliding between readings with its
+scale easing. First try cost 3.4-3.9% CPU once the graph filled (the
+governor kept stepping down): `Canvas::polyline` visits the line's
+whole bounding box, so the graph now uses `graph_line` (per column);
+and each group repaints at its own rate (`Pace`: columns ~64 fps,
+graph ~32, rings/RAM ~16) and only while it moves. Result: 1.02% CPU
+over 75 s with a full graph, no step-downs. Profile repaints by timing
+`render` per part when this needs revisiting.

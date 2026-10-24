@@ -123,11 +123,18 @@ fn memory_device_installed(table: &[u8], at: usize) -> bool {
 
 /// Network throughput, summed over the physical network adapters.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the suffix names the unit of every reading"
+)]
 pub struct Network {
     /// Download, in kilobits per second.
     pub down_kbps: f64,
     /// Upload, in kilobits per second.
     pub up_kbps: f64,
+    /// The fastest connected adapter's link speed, in kilobits per
+    /// second (its negotiated speed, not the internet plan's).
+    pub link_kbps: Option<f64>,
 }
 
 /// One GPU's readings.

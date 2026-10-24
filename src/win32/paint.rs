@@ -139,14 +139,21 @@ impl Painter {
     }
 
     /// Where the visualizer is, in client pixels.
-    pub fn visualizer_rects(&self) -> Vec<RECT> {
-        self.rects_of(Dashboard::visualizer_areas)
+    pub fn visualizer_rects(&self, dashboard: &Dashboard) -> Vec<RECT> {
+        self.rects_of(|widget| dashboard.visualizer_areas(widget))
     }
 
     /// The areas a quick reading (CPU and network) changes, in client
     /// pixels.
-    pub fn quick_rects(&self) -> Vec<RECT> {
-        self.rects_of(Dashboard::quick_areas)
+    pub fn quick_rects(&self, dashboard: &Dashboard) -> Vec<RECT> {
+        self.rects_of(|widget| dashboard.quick_areas(widget))
+    }
+
+    /// Whether this monitor shows `widget`.
+    pub fn shows(&self, widget: Widget) -> bool {
+        self.slots
+            .iter()
+            .any(|slot| slot.placement.widget == widget)
     }
 
     /// Where widgets with hover highlights (Discord) were last drawn, in
@@ -508,8 +515,28 @@ fn draw_labels(dc: HDC, fonts: &mut Fonts, labels: &[Label], part: Rect) {
     for label in labels {
         let above = label.y - label.size * LABEL_REACH.0;
         let below = label.y + label.size * LABEL_REACH.1;
-        if below >= top && above <= bottom {
-            fonts.draw_label(dc, label);
+        if below < top || above > bottom {
+            continue;
+        }
+        match label.clip {
+            Some(clip) => {
+                // SAFETY: as above; this label's own clip is undone
+                // right after drawing it.
+                unsafe {
+                    let _ = SaveDC(dc);
+                    let _ = IntersectClipRect(
+                        dc,
+                        round_px(clip.x0),
+                        round_px(clip.y0),
+                        round_px(clip.x1),
+                        round_px(clip.y1),
+                    );
+                }
+                fonts.draw_label(dc, label);
+                // SAFETY: undoes the SaveDC just above.
+                let _ = unsafe { RestoreDC(dc, LAST_SAVED_DC) };
+            }
+            None => fonts.draw_label(dc, label),
         }
     }
     if saved != 0 {

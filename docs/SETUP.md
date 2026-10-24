@@ -52,8 +52,15 @@ If you make a mistake, Wallflex keeps the last good settings and says
 what's wrong in the log.
 
 For a music visualizer, add a widget with `kind = "visualizer"`. It
-shows whatever your default speakers play, uses no CPU while it's
-quiet, and rests while a full-screen game or video is in front.
+shows whatever your default speakers play, with the song or video's
+title, artist and album art (from Windows' media controls, preferring
+music apps, then browsers). It uses no CPU while it's quiet, and rests
+while a full-screen window covers its monitor.
+
+`[panel]` hides parts you don't want (`cpu`, `network`, `ram`, `ssd`,
+or `gpus = [1]` for only the first GPU); by default everything this PC
+has is shown. `[network] max_mbps` sets your internet speed so the
+network graph turns red when it's maxed out.
 
 ## 4. Discord (optional)
 

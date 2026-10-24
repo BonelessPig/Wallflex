@@ -6,6 +6,8 @@
 
 use std::time::Duration;
 
+use crate::widgets::{Ease, Pace};
+
 /// The config's `performance` setting.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
@@ -25,7 +27,8 @@ pub enum Level {
     /// 0.3 s glides at ~30 fps; CPU and network twice a second;
     /// visualizer ~30 fps.
     Normal,
-    /// 0.4 s glides at ~60 fps; CPU and network twice a second;
+    /// Continuous glides at ~60 fps (each lasts until the next reading,
+    /// at an even speed); CPU and network four times a second;
     /// visualizer ~60 fps.
     Smooth,
 }
@@ -41,6 +44,8 @@ const MS_60_FPS: u32 = 15;
 const MS_30_FPS: u32 = 31;
 /// Frame interval for ~16 fps, in milliseconds.
 const MS_16_FPS: u32 = 62;
+/// Sensor tick for four times a second, in milliseconds.
+const MS_QUARTER_SECOND: u32 = 250;
 /// Sensor tick for twice a second, in milliseconds.
 const MS_HALF_SECOND: u32 = 500;
 /// Sensor tick for once a second, in milliseconds.
@@ -71,13 +76,40 @@ impl Level {
         }
     }
 
-    /// How long bars and rings glide to a new reading; `None` means they
-    /// jump.
-    pub fn glide(self) -> Option<Duration> {
+    /// How long, and how, the CPU columns glide to a new reading; `None`
+    /// means they jump. Smooth glides last until the next reading, so
+    /// the columns keep moving instead of stepping.
+    pub fn glide(self) -> Option<(Duration, Ease)> {
         match self {
-            Self::Smooth => Some(Duration::from_millis(400)),
-            Self::Normal => Some(Duration::from_millis(300)),
+            Self::Smooth => Some((
+                Duration::from_millis(u64::from(MS_QUARTER_SECOND)),
+                Ease::Linear,
+            )),
+            Self::Normal => Some((Duration::from_millis(300), Ease::Out)),
             Self::Light => None,
+        }
+    }
+
+    /// How long the network graph takes to slide one reading along;
+    /// `None` means it steps.
+    pub fn net_scroll(self) -> Option<Duration> {
+        match self {
+            Self::Smooth => {
+                Some(Duration::from_millis(u64::from(MS_QUARTER_SECOND)))
+            }
+            Self::Normal | Self::Light => None,
+        }
+    }
+
+    /// The same for the GPU rings and RAM bar, which get a new reading
+    /// once a second: smooth glides last that whole second.
+    pub fn slow_glide(self) -> Option<(Duration, Ease)> {
+        match self {
+            Self::Smooth => Some((
+                Duration::from_millis(u64::from(MS_SECOND)),
+                Ease::Linear,
+            )),
+            Self::Normal | Self::Light => self.glide(),
         }
     }
 
@@ -102,8 +134,31 @@ impl Level {
     /// CPU and network; a full reading happens once a second.
     pub fn sensor_ms(self) -> u32 {
         match self {
-            Self::Smooth | Self::Normal => MS_HALF_SECOND,
+            Self::Smooth => MS_QUARTER_SECOND,
+            Self::Normal => MS_HALF_SECOND,
             Self::Light => MS_SECOND,
+        }
+    }
+
+    /// How the bars, rings and graph move at this level. In Smooth the
+    /// CPU columns move every frame (~64 fps), the graph every second
+    /// frame and the slow rings every fourth: they move less than a
+    /// pixel a frame, so more frames would be wasted work.
+    pub fn pace(self) -> Pace {
+        let (net_every, slow_every) = match self {
+            Self::Smooth => (2, 4),
+            Self::Normal | Self::Light => (1, 1),
+        };
+        Pace {
+            glide: self.glide(),
+            slow_glide: self.slow_glide(),
+            net_scroll: self.net_scroll(),
+            readings_per_second: MS_SECOND
+                .checked_div(self.sensor_ms())
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(1),
+            net_every,
+            slow_every,
         }
     }
 
@@ -131,6 +186,10 @@ const OVER_BUDGET_SECONDS: u32 = 3;
 const HEADROOM: f64 = 1.0;
 /// Calm seconds before stepping back up a level.
 const CALM_SECONDS: u32 = 10;
+/// Seconds after starting (or a mode change) when Wallflex's own CPU
+/// isn't held against the budget: signing in, downloading pictures and
+/// building the surfaces cost a burst that isn't the steady state.
+const WARMUP_SECONDS: u32 = 10;
 
 /// Picks the level from moment to moment. Call [`Governor::tick`] once
 /// a second.
@@ -146,6 +205,8 @@ pub struct Governor {
     over: u32,
     /// Seconds in a row a higher level would have been allowed.
     calm: u32,
+    /// Warm-up seconds left.
+    warmup: u32,
 }
 
 impl Governor {
@@ -158,6 +219,7 @@ impl Governor {
             budget_cap: Level::Smooth,
             over: 0,
             calm: 0,
+            warmup: WARMUP_SECONDS,
         }
     }
 
@@ -180,7 +242,9 @@ impl Governor {
     /// known) and `own` Wallflex's share of the whole CPU (%). Returns
     /// the new level if it changed.
     pub fn tick(&mut self, system: Option<f64>, own: f64) -> Option<Level> {
-        self.over = if own > CPU_BUDGET {
+        let warming_up = self.warmup > 0;
+        self.warmup = self.warmup.saturating_sub(1);
+        self.over = if own > CPU_BUDGET && !warming_up {
             self.over.saturating_add(1)
         } else {
             0
@@ -251,8 +315,21 @@ mod tests {
     }
 
     #[test]
+    fn startup_bursts_dont_count() {
+        let mut governor = Governor::new(Mode::Smooth);
+        for _ in 0..super::WARMUP_SECONDS {
+            assert_eq!(governor.tick(Some(5.0), 5.0), None);
+        }
+        for _ in 1..OVER_BUDGET_SECONDS {
+            assert_eq!(governor.tick(Some(5.0), 5.0), None);
+        }
+        assert_eq!(governor.tick(Some(5.0), 5.0), Some(Level::Normal));
+    }
+
+    #[test]
     fn going_over_budget_steps_down() {
         let mut governor = Governor::new(Mode::Smooth);
+        governor.warmup = 0;
         for _ in 1..OVER_BUDGET_SECONDS {
             assert_eq!(governor.tick(Some(5.0), 2.5), None);
         }

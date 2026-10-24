@@ -3,7 +3,7 @@
 //! Explorer restarts, the displays change, the PC wakes up or the config
 //! file is saved.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -15,20 +15,15 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Shell::{
-    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
-    SHQueryUserNotificationState, ShellExecuteW,
-};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, FindWindowW, GA_ROOT, GW_HWNDNEXT, GetAncestor,
-    GetMessageW, GetWindow, HHOOK, IsWindow, KillTimer, MSG, MSLLHOOKSTRUCT,
-    PBT_APMRESUMEAUTOMATIC, PostMessageW, PostQuitMessage, RegisterClassExW,
-    RegisterWindowMessageW, SW_SHOWNORMAL, SetTimer, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CLOSE,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_POPUP, WindowFromPoint,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    FindWindowW, GA_ROOT, GW_HWNDNEXT, GetAncestor, GetMessageW, GetWindow,
+    IsWindow, KillTimer, MSG, PBT_APMRESUMEAUTOMATIC, PostMessageW,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_SHOWNORMAL,
+    SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -36,6 +31,8 @@ use super::audio::AudioTap;
 use super::desktop::{self, DesktopHost, Layout};
 use super::discord::{BotSettings, DiscordLink};
 use super::images::ImageFetcher;
+use super::media::MediaWatcher;
+use super::mouse::{self, MouseHook};
 use super::sensors::Sensors;
 use super::startup;
 use super::surface::{self, Surface};
@@ -101,12 +98,12 @@ const WM_TRAY: u32 = WM_APP + 4;
 const WM_DESKTOP_HOVER: u32 = WM_APP + 5;
 /// Posted by the audio thread when sound starts after silence.
 const WM_AUDIO: u32 = WM_APP + 6;
+/// Posted by the media thread when what's playing changes.
+const WM_MEDIA: u32 = WM_APP + 7;
 /// The log's file name, next to the config.
 const LOG_FILE: &str = "wallflex.log";
 /// `ShellExecuteW` results above this mean success.
 const SHELL_EXECUTE_OK: usize = 32;
-/// A press and release this close together (pixels) count as a click.
-const CLICK_SLOP: i32 = 4;
 /// Top-level desktop windows: a click on one of these reached the
 /// desktop rather than an app.
 const DESKTOP_CLASSES: [&str; 2] = ["Progman", "WorkerW"];
@@ -147,7 +144,7 @@ struct State {
     /// Where the Discord token is kept.
     token_path: Option<PathBuf>,
     /// The mouse hook, while a clickable widget may be showing.
-    mouse_hook: Option<HHOOK>,
+    mouse_hook: Option<MouseHook>,
     /// Downloads pictures, started with the Discord session.
     images: Option<ImageFetcher>,
     /// The tray icon.
@@ -158,6 +155,10 @@ struct State {
     sensor_ticks: u32,
     /// The audio capture, while a layout has a visualizer.
     audio: Option<AudioTap>,
+    /// What's playing, watched while a layout has a visualizer.
+    media: Option<MediaWatcher>,
+    /// When the last visualizer frame was (for a scrolling title).
+    visualizer_frame: Option<Instant>,
     /// Reused buffer for the latest samples.
     samples: Vec<f32>,
     /// The visualizer timer is running.
@@ -228,19 +229,6 @@ impl ConfigFile {
 thread_local! {
     /// The controller's state.
     static STATE: RefCell<State> = RefCell::new(State::default());
-    /// Where the left button went down, for telling clicks from drags.
-    static PRESSED_AT: Cell<Option<POINT>> = const { Cell::new(None) };
-    /// The click waiting for `WM_DESKTOP_CLICK`.
-    static CLICKED_AT: Cell<Option<POINT>> = const { Cell::new(None) };
-    /// Where widgets with hover highlights are (desktop pixels), so the
-    /// mouse hook only reacts near them.
-    static HOVER_ZONES: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
-    /// The latest pointer position waiting for `WM_DESKTOP_HOVER`.
-    static HOVER_AT: Cell<Option<POINT>> = const { Cell::new(None) };
-    /// A `WM_DESKTOP_HOVER` is already on its way, so moves are batched.
-    static HOVER_PENDING: Cell<bool> = const { Cell::new(false) };
-    /// Something is highlighted, so leaving a zone must clear it.
-    static HOVERING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Why Wallflex couldn't run.
@@ -404,7 +392,7 @@ pub(super) fn paint_surface(hwnd: HWND) -> bool {
         if painted {
             let zones =
                 surfaces.iter().flat_map(Surface::hover_zones).collect();
-            HOVER_ZONES.set(zones);
+            mouse::set_zones(zones);
         }
         painted
     })
@@ -517,7 +505,7 @@ unsafe extern "system" fn controller_proc(
             return LRESULT(0);
         }
         WM_DESKTOP_CLICK => {
-            if let Some(point) = CLICKED_AT.take() {
+            if let Some(point) = mouse::take_click() {
                 on_desktop_click(point);
             }
             return LRESULT(0);
@@ -526,9 +514,12 @@ unsafe extern "system" fn controller_proc(
             start_visualizer(hwnd);
             return LRESULT(0);
         }
+        WM_MEDIA => {
+            on_media_change();
+            return LRESULT(0);
+        }
         WM_DESKTOP_HOVER => {
-            HOVER_PENDING.set(false);
-            if let Some(point) = HOVER_AT.take() {
+            if let Some(point) = mouse::take_hover() {
                 on_desktop_hover(point);
             }
             return LRESULT(0);
@@ -536,10 +527,10 @@ unsafe extern "system" fn controller_proc(
         WM_DESTROY => {
             drop(take_surfaces());
             stop_discord();
-            remove_mouse_hook();
             STATE.with(|state| {
                 if let Ok(mut state) = state.try_borrow_mut() {
                     state.tray = None;
+                    state.mouse_hook = None;
                 }
             });
             // SAFETY: plain value; ends the message loop.
@@ -674,8 +665,27 @@ fn apply_audio_settings() {
             let notify =
                 HWND(std::ptr::with_exposed_provenance_mut(controller));
             state.audio = Some(AudioTap::start(notify, WM_AUDIO));
+            state.media = Some(MediaWatcher::start(notify, WM_MEDIA));
         } else if !wanted {
             state.audio = None;
+            state.media = None;
+        }
+    });
+}
+
+/// What's playing changed: shows it under the visualizer.
+fn on_media_change() {
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let Some(change) = state.media.as_ref().and_then(MediaWatcher::take)
+        else {
+            return;
+        };
+        state.dashboard.set_now_playing(change);
+        for surface in &state.surfaces {
+            surface.invalidate_widgets(&state.dashboard);
         }
     });
 }
@@ -717,6 +727,7 @@ fn on_visualizer_frame(hwnd: HWND) {
             dashboard,
             surfaces,
             visualizer_running,
+            visualizer_frame,
             ..
         } = &mut *state;
         let Some(tap) = audio.as_ref() else {
@@ -729,9 +740,13 @@ fn on_visualizer_frame(hwnd: HWND) {
             // The last sound stays in the buffer; let the bars fall.
             samples.clear();
         }
-        dashboard.feed_audio(samples, rate);
+        let now = Instant::now();
+        let elapsed = visualizer_frame
+            .map_or_else(Default::default, |last| now.duration_since(last));
+        *visualizer_frame = Some(now);
+        dashboard.feed_audio(samples, rate, elapsed);
         for surface in surfaces.iter() {
-            surface.invalidate_visualizer();
+            surface.invalidate_visualizer(dashboard);
         }
         let keep = loud || !dashboard.visualizer_resting();
         *visualizer_running = keep;
@@ -746,17 +761,19 @@ fn on_visualizer_frame(hwnd: HWND) {
 /// Once a second: notes whether a full-screen app is in front. The
 /// visualizer rests while one is, and picks up again afterwards.
 fn check_fullscreen(hwnd: HWND) {
-    // SAFETY: a plain query.
-    let state_now = unsafe { SHQueryUserNotificationState() };
-    let fullscreen = state_now.is_ok_and(|s| {
-        s == QUNS_RUNNING_D3D_FULL_SCREEN
-            || s == QUNS_BUSY
-            || s == QUNS_PRESENTATION_MODE
-    });
+    let front = foreground_rect();
     let (stop, resume) = STATE.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
             return (false, false);
         };
+        // Only a window covering a monitor that shows the visualizer
+        // hides it; a full-screen video on another monitor doesn't.
+        let fullscreen = front.is_some_and(|window| {
+            state
+                .surfaces
+                .iter()
+                .any(|s| s.visualizer_hidden_by(window))
+        });
         let was = state.fullscreen;
         state.fullscreen = fullscreen;
         let stop = fullscreen && state.visualizer_running;
@@ -764,7 +781,7 @@ fn check_fullscreen(hwnd: HWND) {
             state.visualizer_running = false;
             state.dashboard.rest_visualizer();
             for surface in &state.surfaces {
-                surface.invalidate_visualizer();
+                surface.invalidate_visualizer(&state.dashboard);
             }
         }
         let resume = was
@@ -818,10 +835,15 @@ fn check_pace(hwnd: HWND) {
         let mut state = state.try_borrow_mut().ok()?;
         let own = state.cpu_meter.sample();
         let system = state.dashboard.cpu_total();
-        state.governor.as_mut()?.tick(system, own)
+        let level = state.governor.as_mut()?.tick(system, own)?;
+        Some((level, system, own))
     });
-    if let Some(level) = changed {
-        log!("performance: now {}", level.name());
+    if let Some((level, system, own)) = changed {
+        log!(
+            "performance: now {} (PC {:.0}% busy, Wallflex {own:.2}%)",
+            level.name(),
+            system.unwrap_or(0.0)
+        );
         apply_level(hwnd, level);
     }
 }
@@ -833,11 +855,7 @@ fn apply_level(hwnd: HWND, level: Level) {
         let Ok(mut state) = state.try_borrow_mut() else {
             return (false, false);
         };
-        let per_second = FULL_READING_MS
-            .checked_div(level.sensor_ms())
-            .and_then(|n| usize::try_from(n).ok())
-            .unwrap_or(1);
-        state.dashboard.set_pace(level.glide(), per_second);
+        state.dashboard.set_pace(level.pace());
         (state.dashboard.is_moving(), state.visualizer_running)
     });
     // SAFETY: our own window and timers; resetting a timer replaces its
@@ -877,6 +895,29 @@ fn check_memory() {
         }
     });
     usage::trim_working_set();
+}
+
+/// The window in front, in desktop pixels, unless it's the desktop
+/// itself (or there isn't one).
+fn foreground_rect() -> Option<Rect> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowRect,
+    };
+    // SAFETY: plain queries about the window in front.
+    let window = unsafe { GetForegroundWindow() };
+    if window.is_invalid() {
+        return None;
+    }
+    // SAFETY: as above.
+    let root = unsafe { GetAncestor(window, GA_ROOT) };
+    if DESKTOP_CLASSES.contains(&class_name(root).as_str()) {
+        return None;
+    }
+    let mut rect = RECT::default();
+    // SAFETY: a valid window and a place to write.
+    unsafe { GetWindowRect(root, &raw mut rect) }.ok()?;
+    Some(super::to_rect(rect))
 }
 
 /// Starts the glide frames if the last reading set the bars and rings
@@ -959,7 +1000,7 @@ fn on_sensor_tick() -> (bool, bool) {
             } else {
                 dashboard.update(sensors.sample_quick());
                 for surface in surfaces.iter() {
-                    surface.invalidate_quick();
+                    surface.invalidate_quick(dashboard);
                 }
             }
         }
@@ -1037,6 +1078,14 @@ fn rebuild() {
     apply_discord_settings();
     apply_audio_settings();
     apply_performance_settings();
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            let kbps = state.settings.net_max_mbps.map(|mbps| mbps * 1_000.0);
+            state.dashboard.set_net_limit(kbps);
+            let parts = state.settings.parts.clone();
+            state.dashboard.set_parts(parts);
+        }
+    });
     let Some(settings) = STATE.with(|state| {
         state.try_borrow().ok().map(|state| state.settings.clone())
     }) else {
@@ -1123,8 +1172,17 @@ fn apply_discord_settings() {
             wanted.is_some(),
             wanted.as_ref().is_some_and(|d| d.bot_token.is_some()),
         );
-        state.mouse_hook =
-            install_mouse_hook(state.mouse_hook, wanted.is_some());
+        if wanted.is_some() && state.mouse_hook.is_none() {
+            let notify =
+                HWND(std::ptr::with_exposed_provenance_mut(controller));
+            state.mouse_hook = Some(MouseHook::start(
+                notify,
+                WM_DESKTOP_CLICK,
+                WM_DESKTOP_HOVER,
+            ));
+        } else if wanted.is_none() {
+            state.mouse_hook = None;
+        }
         if wanted == state.discord_settings {
             return;
         }
@@ -1160,113 +1218,6 @@ fn apply_discord_settings() {
     });
 }
 
-/// Installs or removes the mouse hook. The hook only watches for clicks
-/// on the desktop; it never blocks or changes them. Returns the hook now
-/// in place.
-fn install_mouse_hook(current: Option<HHOOK>, wanted: bool) -> Option<HHOOK> {
-    match (current, wanted) {
-        (None, true) => {
-            let instance = module_instance().ok()?;
-            // SAFETY: a low-level hook with a plain function, called on
-            // this thread's message loop.
-            let hook = unsafe {
-                SetWindowsHookExW(
-                    WH_MOUSE_LL,
-                    Some(mouse_hook),
-                    Some(instance),
-                    0,
-                )
-            };
-            match hook {
-                Ok(hook) => Some(hook),
-                Err(error) => {
-                    log!("can't watch for clicks: {error}");
-                    None
-                }
-            }
-        }
-        (Some(hook), false) => {
-            // SAFETY: the hook was installed by this program. If it's
-            // already gone, there's nothing to undo.
-            let _ = unsafe { UnhookWindowsHookEx(hook) };
-            None
-        }
-        (current, _) => current,
-    }
-}
-
-/// Removes the mouse hook (on shutdown).
-fn remove_mouse_hook() {
-    STATE.with(|state| {
-        if let Ok(mut state) = state.try_borrow_mut() {
-            state.mouse_hook = install_mouse_hook(state.mouse_hook, false);
-        }
-    });
-}
-
-/// The low-level mouse hook: notes left-button presses and, when the
-/// release is at the same spot, posts the click to the controller.
-/// Kept tiny: it runs for every mouse event on the system.
-unsafe extern "system" fn mouse_hook(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    let message = u32::try_from(wparam.0).unwrap_or(0);
-    let watched =
-        matches!(message, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE);
-    if code >= 0 && watched {
-        let info = std::ptr::with_exposed_provenance::<MSLLHOOKSTRUCT>(
-            lparam.0.cast_unsigned(),
-        );
-        // SAFETY: for WH_MOUSE_LL, lParam points to an MSLLHOOKSTRUCT
-        // that's valid for the duration of the call.
-        if let Some(info) = unsafe { info.as_ref() } {
-            if message == WM_MOUSEMOVE {
-                note_move(info.pt);
-            } else {
-                note_button(message, info.pt);
-            }
-        }
-    }
-    // SAFETY: passes the event on unchanged, as hooks must.
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
-}
-
-/// Remembers a press; on a release at the same spot, posts a click.
-fn note_button(message: u32, point: POINT) {
-    if message == WM_LBUTTONDOWN {
-        PRESSED_AT.set(Some(point));
-    } else if let Some(down) = PRESSED_AT.take() {
-        let near = down.x.saturating_sub(point.x).abs() <= CLICK_SLOP
-            && down.y.saturating_sub(point.y).abs() <= CLICK_SLOP;
-        if near {
-            CLICKED_AT.set(Some(point));
-            post_to_controller(WM_DESKTOP_CLICK);
-        }
-    }
-}
-
-/// A pointer move: over a widget with hover highlights (or just off
-/// one), hands the position to the controller, one message at a time.
-/// Anywhere else it does nothing, so moving the mouse costs nothing.
-fn note_move(point: POINT) {
-    let inside = HOVER_ZONES.with_borrow(|zones| {
-        zones.iter().any(|z| {
-            z.left <= point.x
-                && point.x < z.right
-                && z.top <= point.y
-                && point.y < z.bottom
-        })
-    });
-    if inside || HOVERING.get() {
-        HOVER_AT.set(Some(point));
-        if !HOVER_PENDING.replace(true) {
-            post_to_controller(WM_DESKTOP_HOVER);
-        }
-    }
-}
-
 /// The pointer moved over (or off) a widget: highlights the control
 /// under it, repainting only when that changes.
 fn on_desktop_hover(point: POINT) {
@@ -1282,7 +1233,7 @@ fn on_desktop_hover(point: POINT) {
         let over = surfaces.iter().find_map(|s| s.hit_test(point));
         // Only the desktop itself counts, not a window above it.
         let hover = over.filter(|_| desktop_under(point));
-        HOVERING.set(hover.is_some());
+        mouse::set_hovering(hover.is_some());
         if dashboard.set_hover(hover) {
             for surface in surfaces.iter() {
                 surface.invalidate_hoverable();

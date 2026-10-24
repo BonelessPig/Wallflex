@@ -17,6 +17,7 @@ mod discord;
 mod geometry;
 mod image;
 mod log;
+mod media;
 mod pace;
 mod sensors;
 mod text;

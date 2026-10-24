@@ -11,6 +11,7 @@ mod motion;
 mod visualizer;
 
 pub use discord::{Action, Demo};
+pub use motion::{Ease, Glide};
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -71,10 +72,12 @@ const CPU_FILL_INSET: f64 = 2.0;
 /// Windows numbers a core's two threads next to each other.
 const THREADS_PER_CORE: usize = 2;
 
+/// How quickly the graph's scale follows a new peak (time constant).
+const NET_PEAK_EASE: Duration = Duration::from_millis(400);
 /// Network readings a second at most (the graph's resolution).
-const NET_READINGS_PER_SECOND: usize = 2;
-/// Network: samples kept (a minute at two a second).
-pub const NET_SPAN: usize = 120;
+const NET_READINGS_PER_SECOND: usize = 4;
+/// Network: samples kept (a minute at four a second).
+pub const NET_SPAN: usize = 240;
 /// Network: plot top, inside the graph.
 const NET_TOP: f64 = 2.0;
 /// Network: plot height.
@@ -213,6 +216,9 @@ pub struct Label {
     pub align: Align,
     /// The text.
     pub text: String,
+    /// Only draw inside this area (pixels), if set: for text that
+    /// scrolls through a box.
+    pub clip: Option<Area>,
 }
 
 /// A widget that can be placed on its own.
@@ -237,6 +243,8 @@ pub enum Widget {
     Visualizer,
 }
 
+/// The graph's scale counts as settled within this share of the peak.
+const NET_PEAK_SETTLED: f64 = 0.002;
 /// Room around a moving part, so its smoothed edges repaint too.
 const MOVING_MARGIN: f64 = 1.0;
 /// Top of the RAM bar, under the RAM text.
@@ -300,13 +308,106 @@ pub struct Dashboard {
     net: VecDeque<Network>,
     /// The Discord widget's state.
     discord: discord::DiscordUi,
-    /// The bars' and rings' glide to the latest reading.
+    /// The CPU columns' glide to the latest reading.
     motion: motion::Motion,
+    /// The GPU rings' and RAM bar's glide (their readings come less
+    /// often, so their glides can be longer).
+    slow_motion: motion::Motion,
     /// The music visualizer's bars.
     visualizer: visualizer::Visualizer,
     /// Network readings per sample kept: 2 when readings come once a
     /// second, so the graph still spans a minute.
     net_copies: usize,
+    /// How long the graph takes to slide one reading along; `None` when
+    /// it steps.
+    net_scroll: Option<Duration>,
+    /// How far the newest reading has slid in, 0 to 1 (1 = in place).
+    net_phase: f64,
+    /// The graph's scale as drawn, easing toward the real peak.
+    net_peak: f64,
+    /// Internet download speed from the config (kbit/s), if set.
+    net_limit_kbps: Option<f64>,
+    /// Which parts show.
+    parts: Parts,
+    /// Glide frames so far.
+    frame: u32,
+    /// The graph moves every this many frames.
+    net_every: u32,
+    /// The rings and RAM bar move every this many frames.
+    slow_every: u32,
+    /// Time the graph has waited for its frame.
+    net_wait: Duration,
+    /// Time the rings and RAM bar have waited for theirs.
+    slow_wait: Duration,
+    /// Which groups moved on the last frame: CPU columns, graph, rings
+    /// and RAM bar. Only they need repainting.
+    stepped: (bool, bool, bool),
+}
+
+/// Which parts the panel shows (the config's `[panel]`). By default
+/// everything detected on this PC.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one independent switch per part, as the config has them"
+)]
+pub struct Parts {
+    /// CPU thread columns.
+    pub cpu: bool,
+    /// Network graph.
+    pub network: bool,
+    /// RAM line and bar.
+    pub ram: bool,
+    /// SSD temperatures.
+    pub ssd: bool,
+    /// Which GPUs (0 = the first); `None` shows every one detected.
+    pub gpus: Option<Vec<usize>>,
+}
+
+impl Default for Parts {
+    fn default() -> Self {
+        Self {
+            cpu: true,
+            network: true,
+            ram: true,
+            ssd: true,
+            gpus: None,
+        }
+    }
+}
+
+/// Where the panel's parts go, from [`Parts`] and the hardware found.
+struct PanelLayout {
+    /// The CPU block's left edge, if shown.
+    cpu: Option<f64>,
+    /// The network block's left edge, if shown.
+    network: Option<f64>,
+    /// Top of the GPU charts.
+    gpus_top: f64,
+    /// The GPUs shown, by index into the reading.
+    gpus: Vec<usize>,
+    /// Top of the RAM/SSD row, if shown.
+    info_top: Option<f64>,
+    /// The panel's height.
+    height: f64,
+}
+
+/// How the bars, rings and graph move, from the performance level.
+#[derive(Clone, Copy, Debug)]
+pub struct Pace {
+    /// The CPU columns' glide.
+    pub glide: Glide,
+    /// The GPU rings' and RAM bar's glide.
+    pub slow_glide: Glide,
+    /// How long the graph takes to slide one reading along; `None`
+    /// steps.
+    pub net_scroll: Option<Duration>,
+    /// Quick readings a second (for the graph's span).
+    pub readings_per_second: usize,
+    /// The graph moves every this many glide frames.
+    pub net_every: u32,
+    /// The rings and RAM bar move every this many glide frames.
+    pub slow_every: u32,
 }
 
 impl Dashboard {
@@ -314,15 +415,24 @@ impl Dashboard {
     pub fn update(&mut self, snapshot: Snapshot) {
         let before = self.shown();
         if let Some(network) = snapshot.network {
+            self.net_phase = if self.net_scroll.is_some() { 0.0 } else { 1.0 };
             for _ in 0..self.net_copies.max(1) {
-                if self.net.len() >= NET_SPAN {
+                // One extra sample, to slide in from the left edge.
+                if self.net.len() > NET_SPAN {
                     let _oldest = self.net.pop_front();
                 }
                 self.net.push_back(network);
             }
         }
         self.snapshot = snapshot;
-        if before == self.target() {
+        let target = self.target();
+        // Each group restarts only when its own values changed, so a
+        // quick (CPU-only) reading doesn't cut the rings' glide short.
+        let ram_moved = (before.ram - target.ram).abs() > f64::EPSILON;
+        if before.rings != target.rings || ram_moved {
+            self.slow_motion.restart(before.clone());
+        }
+        if before.cores == target.cores {
             self.motion.settle();
         } else {
             self.motion.restart(before);
@@ -332,25 +442,157 @@ impl Dashboard {
     /// Moves the bars and rings on by `elapsed`. Returns whether they're
     /// still moving (repaint the [`Dashboard::moving_areas`] until not).
     pub fn advance(&mut self, elapsed: Duration) -> bool {
-        self.motion.advance(elapsed)
+        self.frame = self.frame.wrapping_add(1);
+        // Each group moves (and repaints) on its own frames: the CPU
+        // columns every frame, the slower graph and rings less often,
+        // catching up on the time in between.
+        self.stepped.0 = self.motion.is_moving();
+        let _ = self.motion.advance(elapsed);
+        self.net_wait = self.net_wait.saturating_add(elapsed);
+        self.stepped.1 = false;
+        if self.frame.is_multiple_of(self.net_every.max(1)) {
+            self.stepped.1 = self.net_moving();
+            let waited = std::mem::take(&mut self.net_wait);
+            self.advance_net(waited);
+        }
+        self.slow_wait = self.slow_wait.saturating_add(elapsed);
+        self.stepped.2 = false;
+        if self.frame.is_multiple_of(self.slow_every.max(1)) {
+            self.stepped.2 = self.slow_motion.is_moving();
+            let waited = std::mem::take(&mut self.slow_wait);
+            let _ = self.slow_motion.advance(waited);
+        }
+        self.is_moving()
+    }
+
+    /// Slides the network graph and eases its scale on by `elapsed`.
+    fn advance_net(&mut self, elapsed: Duration) {
+        if let Some(scroll) = self.net_scroll.filter(|s| !s.is_zero()) {
+            let step = elapsed.as_secs_f64() / scroll.as_secs_f64();
+            self.net_phase = (self.net_phase + step).min(1.0);
+            // Ease the scale toward the peak, the same at any frame rate.
+            let ease = 1.0
+                - (-elapsed.as_secs_f64() / NET_PEAK_EASE.as_secs_f64()).exp();
+            self.net_peak += (self.net_peak_target() - self.net_peak) * ease;
+        }
     }
 
     /// Whether the bars and rings are gliding to a new reading.
     pub fn is_moving(&self) -> bool {
         self.motion.is_moving()
+            || self.slow_motion.is_moving()
+            || self.net_moving()
     }
 
-    /// Sets how long bars and rings glide (`None`: they jump) and how
-    /// many readings a second arrive (for the network graph's span).
-    pub fn set_pace(
-        &mut self,
-        glide: Option<Duration>,
-        readings_per_second: usize,
-    ) {
-        self.motion.set_glide(glide);
-        let per_second = readings_per_second.clamp(1, NET_READINGS_PER_SECOND);
+    /// Whether the network graph is still sliding or rescaling.
+    fn net_moving(&self) -> bool {
+        self.net_scroll.is_some()
+            && (self.net_phase < 1.0
+                || (self.net_peak - self.net_peak_target()).abs()
+                    > self.net_peak_target() * NET_PEAK_SETTLED)
+    }
+
+    /// The highest reading in the graph: the scale it's heading for.
+    fn net_peak_target(&self) -> f64 {
+        self.net
+            .iter()
+            .flat_map(|n| [n.down_kbps, n.up_kbps])
+            .fold(NET_MIN_PEAK_KBPS, f64::max)
+    }
+
+    /// The scale to draw the graph at.
+    fn net_peak_shown(&self) -> f64 {
+        if self.net_scroll.is_some() && self.net_peak > 0.0 {
+            self.net_peak
+        } else {
+            self.net_peak_target()
+        }
+    }
+
+    /// Sets how the bars, rings and graph move ([`Pace`]).
+    pub fn set_pace(&mut self, pace: Pace) {
+        self.motion.set_glide(pace.glide);
+        self.slow_motion.set_glide(pace.slow_glide);
+        self.net_scroll = pace.net_scroll;
+        self.net_phase = 1.0;
+        self.net_peak = self.net_peak_target();
+        self.net_every = pace.net_every.max(1);
+        self.slow_every = pace.slow_every.max(1);
+        let per_second =
+            pace.readings_per_second.clamp(1, NET_READINGS_PER_SECOND);
         self.net_copies =
             NET_READINGS_PER_SECOND.checked_div(per_second).unwrap_or(1);
+    }
+
+    /// Sets which parts show.
+    pub fn set_parts(&mut self, parts: Parts) {
+        self.parts = parts;
+    }
+
+    /// The GPUs to show, by index into the reading.
+    fn shown_gpus(&self) -> Vec<usize> {
+        let count = self.snapshot.gpus.len();
+        match &self.parts.gpus {
+            None => (0..count).collect(),
+            Some(wanted) => {
+                wanted.iter().copied().filter(|i| *i < count).collect()
+            }
+        }
+    }
+
+    /// Where the panel's parts go. The top row holds the CPU and network
+    /// blocks that are shown, left to right; then the GPU charts; then
+    /// the RAM/SSD row. Hidden parts leave no gap.
+    fn panel_layout(&self) -> PanelLayout {
+        let parts = &self.parts;
+        let mut x = 0.0;
+        let cpu = parts.cpu.then(|| {
+            let left = x;
+            x += COLUMN_W + COLUMN_GAP;
+            left
+        });
+        let network = parts.network.then_some(x);
+        let mut y = 0.0;
+        if cpu.is_some() || network.is_some() {
+            let row = (BODY_TOP + CPU_COLS_H).max(BODY_TOP + NET_GRAPH_H);
+            y = row + ROW_GAP;
+        }
+        let gpus = self.shown_gpus();
+        let gpus_top = y;
+        let (_, gpus_h) = gpus_size(gpus.len());
+        if gpus_h > 0.0 {
+            y = gpus_top + gpus_h + ROW_GAP;
+        }
+        let info_top = (parts.ram || parts.ssd).then_some(y);
+        let height = match info_top {
+            Some(top) => top + INFO_H,
+            None => (y - ROW_GAP).max(0.0),
+        };
+        PanelLayout {
+            cpu,
+            network,
+            gpus_top,
+            gpus,
+            info_top,
+            height,
+        }
+    }
+
+    /// Sets the internet plan's download speed (kbit/s) for the graph's
+    /// colours; `None` uses the network adapter's speed alone.
+    pub fn set_net_limit(&mut self, kbps: Option<f64>) {
+        self.net_limit_kbps = kbps;
+    }
+
+    /// The download speed the graph's colours reach red at: the
+    /// adapter's speed or the internet plan's, whichever is lower.
+    fn net_max_kbps(&self) -> Option<f64> {
+        let link = self.snapshot.network.and_then(|n| n.link_kbps);
+        match (link, self.net_limit_kbps) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+        .filter(|max| *max > 0.0)
     }
 
     /// The whole PC's CPU use in the latest reading (%).
@@ -367,12 +609,26 @@ impl Dashboard {
     /// Jumps straight to the latest reading (for `--preview`).
     pub fn settle(&mut self) {
         self.motion.settle();
+        self.slow_motion.settle();
+        self.net_phase = 1.0;
+        self.net_peak = self.net_peak_target();
     }
 
     /// One visualizer frame from the latest audio (mono, newest last, at
-    /// `rate` Hz).
-    pub fn feed_audio(&mut self, samples: &[f32], rate: u32) {
+    /// `rate` Hz), `elapsed` after the last (for a scrolling title).
+    pub fn feed_audio(
+        &mut self,
+        samples: &[f32],
+        rate: u32,
+        elapsed: Duration,
+    ) {
         self.visualizer.feed(samples, rate);
+        self.visualizer.scroll(elapsed);
+    }
+
+    /// What's playing changed.
+    pub fn set_now_playing(&mut self, change: crate::media::MediaChange) {
+        self.visualizer.set_now_playing(change);
     }
 
     /// Whether the visualizer's bars have come to rest.
@@ -386,15 +642,11 @@ impl Dashboard {
     }
 
     /// The parts of `widget` the visualizer's frames change, in its
-    /// units: a visualizer's bars (not its labels), nothing elsewhere.
-    pub fn visualizer_areas(widget: Widget) -> Vec<Area> {
+    /// units: a visualizer's bars and a scrolling title, nothing
+    /// elsewhere.
+    pub fn visualizer_areas(&self, widget: Widget) -> Vec<Area> {
         if widget == Widget::Visualizer {
-            vec![Area {
-                x0: 0.0,
-                y0: 0.0,
-                x1: visualizer::width(),
-                y1: visualizer::HEIGHT,
-            }]
+            self.visualizer.moving_areas()
         } else {
             Vec::new()
         }
@@ -433,22 +685,26 @@ impl Dashboard {
 
     /// The bars' and rings' values to draw now.
     fn shown(&self) -> motion::Levels {
-        self.motion.shown(&self.target())
+        let target = self.target();
+        let slow = self.slow_motion.shown(&target);
+        motion::Levels {
+            cores: self.motion.shown(&target).cores,
+            ..slow
+        }
     }
 
     /// The parts of `widget` a quick reading (CPU and network only)
     /// changes, in its own units.
-    pub fn quick_areas(widget: Widget) -> Vec<Area> {
+    pub fn quick_areas(&self, widget: Widget) -> Vec<Area> {
         let (cpu, net) = (cpu_block_area(), net_block_area());
         match widget {
-            Widget::Panel => vec![
-                cpu,
-                Area {
-                    x0: net.x0 + COLUMN_W + COLUMN_GAP,
-                    x1: net.x1 + COLUMN_W + COLUMN_GAP,
-                    ..net
-                },
-            ],
+            Widget::Panel => {
+                let layout = self.panel_layout();
+                let mut areas = Vec::new();
+                areas.extend(layout.cpu.map(|x| shift_x(cpu, x)));
+                areas.extend(layout.network.map(|x| shift_x(net, x)));
+                areas
+            }
             Widget::Cpu => vec![cpu],
             Widget::Network => vec![net],
             Widget::Gpus
@@ -464,27 +720,48 @@ impl Dashboard {
     /// enough while [`Dashboard::is_moving`].
     pub fn moving_areas(&self, widget: Widget) -> Vec<Area> {
         let gpus = self.snapshot.gpus.len();
+        let (fast, net, slow) = self.stepped;
         let mut areas = Vec::new();
         match widget {
             Widget::Panel => {
-                areas.push(cpu_columns_area());
-                let top = Self::panel_gpus_top();
-                areas.extend(
-                    (0..gpus).map(|i| shift(ring_area(gpu_grid_spot(i)), top)),
-                );
-                areas.push(shift(ram_bar_area(), self.panel_info_top()));
-            }
-            Widget::Cpu => areas.push(cpu_columns_area()),
-            Widget::Network | Widget::Discord | Widget::Visualizer => {}
-            Widget::Gpus => {
-                areas.extend((0..gpus).map(|i| ring_area(gpu_grid_spot(i))));
-            }
-            Widget::Gpu(index) => {
-                if index < gpus {
-                    areas.push(ring_area((0.0, RING_NAME_ROOM)));
+                let layout = self.panel_layout();
+                if fast {
+                    areas.extend(
+                        layout.cpu.map(|x| shift_x(cpu_columns_area(), x)),
+                    );
+                }
+                if net {
+                    areas.extend(
+                        layout.network.map(|x| shift_x(net_plot_area(), x)),
+                    );
+                }
+                if slow {
+                    let top = layout.gpus_top;
+                    areas.extend((0..layout.gpus.len()).map(|spot| {
+                        shift(ring_area(gpu_grid_spot(spot)), top)
+                    }));
+                    if self.parts.ram {
+                        areas.extend(
+                            layout
+                                .info_top
+                                .map(|top| shift(ram_bar_area(), top)),
+                        );
+                    }
                 }
             }
-            Widget::Info => areas.push(ram_bar_area()),
+            Widget::Cpu if fast => areas.push(cpu_columns_area()),
+            Widget::Network if net => areas.push(net_plot_area()),
+            Widget::Gpus if slow => {
+                let shown = self.shown_gpus().len();
+                areas.extend((0..shown).map(|i| ring_area(gpu_grid_spot(i))));
+            }
+            Widget::Gpu(index) if slow && index < gpus => {
+                areas.push(ring_area((0.0, RING_NAME_ROOM)));
+            }
+            Widget::Info if slow && self.parts.ram => {
+                areas.push(ram_bar_area());
+            }
+            _ => {}
         }
         areas
     }
@@ -493,10 +770,14 @@ impl Dashboard {
     /// show, such as a GPU that isn't there.
     pub fn size(&self, widget: Widget) -> (f64, f64) {
         match widget {
-            Widget::Panel => (PANEL_W, self.panel_info_top() + INFO_H),
+            Widget::Panel => {
+                let layout = self.panel_layout();
+                let width = if layout.height > 0.0 { PANEL_W } else { 0.0 };
+                (width, layout.height)
+            }
             Widget::Cpu => (COLUMN_W, BODY_TOP + CPU_COLS_H),
             Widget::Network => (COLUMN_W, BODY_TOP + NET_GRAPH_H),
-            Widget::Gpus => gpus_size(self.snapshot.gpus.len()),
+            Widget::Gpus => gpus_size(self.shown_gpus().len()),
             Widget::Gpu(index) => {
                 if index < self.snapshot.gpus.len() {
                     (COLUMN_W, GPU_CHART_H)
@@ -505,9 +786,7 @@ impl Dashboard {
                 }
             }
             Widget::Info => (PANEL_W, INFO_H),
-            Widget::Visualizer => {
-                (visualizer::width(), visualizer::total_height())
-            }
+            Widget::Visualizer => self.visualizer.size(),
             Widget::Discord => self.discord.size(),
         }
     }
@@ -614,26 +893,22 @@ impl Dashboard {
     /// The panel: CPU and network side by side, GPUs under them, then
     /// the RAM/SSD line.
     fn draw_panel(&self, pen: &mut Pen<'_, '_>) {
-        self.draw_cpu(pen);
-        pen.origin = (COLUMN_W + COLUMN_GAP, 0.0);
-        self.draw_net(pen);
-        pen.origin = (0.0, Self::panel_gpus_top());
+        let layout = self.panel_layout();
+        if let Some(x) = layout.cpu {
+            pen.origin = (x, 0.0);
+            self.draw_cpu(pen);
+        }
+        if let Some(x) = layout.network {
+            pen.origin = (x, 0.0);
+            self.draw_net(pen);
+        }
+        pen.origin = (0.0, layout.gpus_top);
         self.draw_gpus(pen);
-        pen.origin = (0.0, self.panel_info_top());
-        self.draw_info(pen);
+        if let Some(top) = layout.info_top {
+            pen.origin = (0.0, top);
+            self.draw_info(pen);
+        }
         pen.origin = (0.0, 0.0);
-    }
-
-    /// Where the GPU charts start in the panel.
-    fn panel_gpus_top() -> f64 {
-        BODY_TOP + NET_GRAPH_H + ROW_GAP
-    }
-
-    /// Where the RAM/SSD line starts in the panel.
-    fn panel_info_top(&self) -> f64 {
-        let (_, gpus_h) = gpus_size(self.snapshot.gpus.len());
-        let gap = if gpus_h > 0.0 { ROW_GAP } else { 0.0 };
-        Self::panel_gpus_top() + gpus_h + gap
     }
 
     /// The CPU thread columns, at the top left.
@@ -732,7 +1007,7 @@ impl Dashboard {
         );
         let latest = self.snapshot.network;
         let slots = [
-            ("DN", INK, latest.map(|n| n.down_kbps)),
+            ("DN", visualizer::shade(0.0), latest.map(|n| n.down_kbps)),
             ("UP", NET_UP_COLOR, latest.map(|n| n.up_kbps)),
         ];
         let first_slot = left + COLUMN_W - NET_SLOT_W * 2.0;
@@ -781,41 +1056,38 @@ impl Dashboard {
             },
         );
 
-        let peak = self
-            .net
-            .iter()
-            .flat_map(|n| [n.down_kbps, n.up_kbps])
-            .fold(NET_MIN_PEAK_KBPS, f64::max);
+        let peak = self.net_peak_shown();
         // Newest sample at the right edge; the line grows in from there.
-        let offset = count_to_f64(NET_SPAN.saturating_sub(self.net.len()));
+        // While sliding, everything sits up to a step to the right and the
+        // line is cut at the graph's edges.
         let step = COLUMN_W / count_to_f64(NET_SPAN.saturating_sub(1));
+        let slide = (1.0 - self.net_phase.clamp(0.0, 1.0)) * step;
+        let newest = count_to_f64(self.net.len().saturating_sub(1));
         let point = |i: u32, kbps: f64| {
-            let x = left + (f64::from(i) + offset) * step;
-            (x, top + NET_H * (1.0 - kbps / peak))
+            let x = right - (newest - f64::from(i)) * step + slide;
+            let height = (kbps / peak).clamp(0.0, 1.0);
+            (x, top + NET_H * (1.0 - height))
         };
-        let down: Vec<(f64, f64)> = (0_u32..)
-            .zip(&self.net)
-            .map(|(i, n)| point(i, n.down_kbps))
-            .collect();
-        let up: Vec<(f64, f64)> = (0_u32..)
-            .zip(&self.net)
-            .map(|(i, n)| point(i, n.up_kbps))
-            .collect();
-        pen.area_under(
-            &down,
-            base,
-            Paint {
-                color: INK,
-                alpha: AREA,
-            },
-        );
-        pen.line(
-            &down,
-            Paint {
-                color: INK,
-                alpha: 1.0,
-            },
-        );
+        let line = |pick: fn(&Network) -> f64| -> Vec<(f64, f64)> {
+            let points: Vec<(f64, f64)> = (0_u32..)
+                .zip(&self.net)
+                .map(|(i, n)| point(i, pick(n)))
+                .collect();
+            clip_x(&points, left, right)
+        };
+        let down = line(|n| n.down_kbps);
+        let up = line(|n| n.up_kbps);
+        // Download is shaded by speed: green when idle, red at the
+        // adapter's (or plan's) maximum; relative to the graph's height
+        // when neither is known.
+        let max = self.net_max_kbps();
+        let color_at = |y: f64| {
+            let height = ((base - y) / NET_H).clamp(0.0, 1.0);
+            let share = max.map_or(height, |max| height * peak / max);
+            visualizer::shade(share)
+        };
+        pen.area_under_shaded(&down, base, AREA, color_at);
+        pen.line_shaded(&down, color_at);
         pen.line(
             &up,
             Paint {
@@ -839,16 +1111,21 @@ impl Dashboard {
     /// One ring chart per GPU, two per row.
     fn draw_gpus(&self, pen: &mut Pen<'_, '_>) {
         let levels = self.shown();
-        for (index, gpu) in self.snapshot.gpus.iter().enumerate() {
-            let rings = gpu_rings(&levels.rings, index);
-            draw_ring_chart(pen, gpu_grid_spot(index), gpu, rings);
+        for (spot, index) in self.shown_gpus().into_iter().enumerate() {
+            if let Some(gpu) = self.snapshot.gpus.get(index) {
+                let rings = gpu_rings(&levels.rings, index);
+                draw_ring_chart(pen, gpu_grid_spot(spot), gpu, rings);
+            }
         }
     }
 
     /// RAM use and SSD temperatures, on one line.
     fn draw_info(&self, pen: &mut Pen<'_, '_>) {
-        if let Some(memory) = self.snapshot.memory.filter(|m| m.total_bytes > 0)
-        {
+        let memory = self
+            .snapshot
+            .memory
+            .filter(|m| self.parts.ram && m.total_bytes > 0);
+        if let Some(memory) = memory {
             let used = u64_to_f64(memory.used_bytes);
             let total = u64_to_f64(memory.total_bytes);
             let text = format!(
@@ -867,9 +1144,16 @@ impl Dashboard {
             .iter()
             .map(|disk| format!("SSD{} {} °C", disk.disk, disk.temp_c))
             .collect();
-        let text = disks.join("     ");
-        let at = (COLUMN_W + COLUMN_GAP, HEAD_BASELINE);
-        pen.text(at, HEAD_SIZE, QUIET, Align::Left, &text);
+        if self.parts.ssd {
+            let text = disks.join("     ");
+            // In the right column beside the RAM, or on the left alone.
+            let x = if self.parts.ram {
+                COLUMN_W + COLUMN_GAP
+            } else {
+                0.0
+            };
+            pen.text((x, HEAD_BASELINE), HEAD_SIZE, QUIET, Align::Left, &text);
+        }
     }
 }
 
@@ -1066,6 +1350,48 @@ fn core_layout(cores: &[Vec<usize>], threads: usize) -> Vec<Vec<usize>> {
         .collect()
 }
 
+/// The part of `points` (sorted left to right) between `x0` and `x1`,
+/// with points added where the line crosses each edge.
+fn clip_x(points: &[(f64, f64)], x0: f64, x1: f64) -> Vec<(f64, f64)> {
+    let at = |a: (f64, f64), b: (f64, f64), x: f64| {
+        let span = b.0 - a.0;
+        let t = if span.abs() > f64::EPSILON {
+            (x - a.0) / span
+        } else {
+            0.0
+        };
+        (x, a.1 + (b.1 - a.1) * t)
+    };
+    let mut out = Vec::with_capacity(points.len());
+    for pair in points.windows(2) {
+        let [a, b] = pair else {
+            continue;
+        };
+        if b.0 < x0 || a.0 > x1 {
+            continue;
+        }
+        if out.is_empty() {
+            out.push(if a.0 < x0 { at(*a, *b, x0) } else { *a });
+        }
+        out.push(if b.0 > x1 { at(*a, *b, x1) } else { *b });
+    }
+    if points.len() == 1 {
+        out.extend(points.iter().filter(|p| p.0 >= x0 && p.0 <= x1));
+    }
+    out
+}
+
+/// The network graph's plot (the line and its scale label), in the
+/// network widget's units.
+fn net_plot_area() -> Area {
+    Area {
+        x0: -MOVING_MARGIN,
+        y0: BODY_TOP,
+        x1: COLUMN_W + MOVING_MARGIN,
+        y1: BODY_TOP + NET_TOP + NET_H + MOVING_MARGIN,
+    }
+}
+
 /// Where GPU `index`'s chart goes (top-left of its rings) when the
 /// charts are laid out two per row.
 fn gpu_grid_spot(index: usize) -> (f64, f64) {
@@ -1133,6 +1459,15 @@ fn ram_bar_area() -> Area {
         y0: RAM_BAR_TOP - MOVING_MARGIN,
         x1: COLUMN_W + MOVING_MARGIN,
         y1: RAM_BAR_TOP + RAM_BAR_H + MOVING_MARGIN,
+    }
+}
+
+/// `area` moved right by `dx`.
+fn shift_x(area: Area, dx: f64) -> Area {
+    Area {
+        x0: area.x0 + dx,
+        x1: area.x1 + dx,
+        ..area
     }
 }
 
@@ -1293,17 +1628,43 @@ impl Pen<'_, '_> {
         );
     }
 
-    /// A line through points.
+    /// A graph's line through points sorted left to right.
     fn line(&mut self, points: &[(f64, f64)], paint: Paint) {
         let (points, weight) = (self.points(points), self.weight());
-        self.canvas.polyline(&points, weight, paint);
+        self.canvas.graph_line(&points, weight, paint);
     }
 
-    /// The area under a line, down to `base`.
-    fn area_under(&mut self, points: &[(f64, f64)], base: f64, paint: Paint) {
+    /// A graph's line whose colour depends on height: `color_at` gets
+    /// each row's height in units.
+    fn line_shaded(
+        &mut self,
+        points: &[(f64, f64)],
+        color_at: impl Fn(f64) -> Rgb,
+    ) {
+        let (points, weight) = (self.points(points), self.weight());
+        let (scale, oy) = (self.scale, self.origin.1);
+        self.canvas.graph_line_rows(&points, weight, |y| Paint {
+            color: color_at(y / scale - oy),
+            alpha: 1.0,
+        });
+    }
+
+    /// The area under a line, shaded by height like
+    /// [`Pen::line_shaded`], at `alpha`.
+    fn area_under_shaded(
+        &mut self,
+        points: &[(f64, f64)],
+        base: f64,
+        alpha: f64,
+        color_at: impl Fn(f64) -> Rgb,
+    ) {
         let points = self.points(points);
         let (_, base) = self.point((0.0, base));
-        self.canvas.fill_under(&points, base, paint);
+        let (scale, oy) = (self.scale, self.origin.1);
+        self.canvas.fill_under_rows(&points, base, |y| Paint {
+            color: color_at(y / scale - oy),
+            alpha,
+        });
     }
 
     /// A ring arc.
@@ -1438,6 +1799,33 @@ impl Pen<'_, '_> {
             color: mix(color, self.background, alpha),
             align,
             text: text.to_owned(),
+            clip: None,
+        });
+    }
+
+    /// Left-aligned text in ink at `alpha`, shown only inside `clip`
+    /// (units): for text scrolling through a box.
+    fn text_clipped(
+        &mut self,
+        (x, y): (f64, f64),
+        size: f64,
+        alpha: f64,
+        clip: Area,
+        text: &str,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let (x, y) = self.point((x, y));
+        let clip = self.px(clip);
+        self.labels.push(Label {
+            x,
+            y,
+            size: size * self.scale,
+            color: mix(INK, self.background, alpha),
+            align: Align::Left,
+            text: text.to_owned(),
+            clip: Some(clip),
         });
     }
 
@@ -1461,6 +1849,7 @@ impl Pen<'_, '_> {
             color: mix(INK, self.background, alpha),
             align,
             text: text.to_owned(),
+            clip: None,
         });
     }
 }
@@ -1468,7 +1857,7 @@ impl Pen<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Dashboard, NET_SPAN, Ring, Widget, format_rate, ring_reading,
+        Dashboard, NET_SPAN, Parts, Ring, Widget, format_rate, ring_reading,
         split_gpu_name,
     };
     use crate::canvas::Canvas;
@@ -1552,13 +1941,23 @@ mod tests {
                 network: Some(Network {
                     down_kbps: f64::from(i),
                     up_kbps: 0.0,
+                    link_kbps: None,
                 }),
                 ..Snapshot::default()
             });
         }
-        assert_eq!(dashboard.net.len(), NET_SPAN);
-        let oldest = Some(f64::from(extra));
+        // A minute, plus one sample to slide in from the left edge.
+        assert_eq!(dashboard.net.len(), NET_SPAN + 1);
+        let oldest = Some(f64::from(extra - 1));
         assert_eq!(dashboard.net.front().map(|n| n.down_kbps), oldest);
+    }
+
+    #[test]
+    fn cuts_lines_at_the_edges() {
+        let points = [(-2.0, 0.0), (2.0, 4.0), (6.0, 0.0), (12.0, 6.0)];
+        let cut = super::clip_x(&points, 0.0, 10.0);
+        assert_eq!(cut, vec![(0.0, 2.0), (2.0, 4.0), (6.0, 0.0), (10.0, 4.0)]);
+        assert_eq!(super::clip_x(&points, 20.0, 30.0), Vec::new());
     }
 
     #[test]
@@ -1630,5 +2029,38 @@ mod tests {
         assert!(texts.contains(&"RTX"));
         assert!(texts.contains(&"NOW"));
         assert!(buffer.iter().any(|&p| p != 0), "something drawn");
+    }
+
+    #[test]
+    fn hidden_parts_leave_no_gap() {
+        let mut dashboard = Dashboard::default();
+        let gpu = |name: &str| Gpu {
+            name: name.into(),
+            ..Gpu::default()
+        };
+        dashboard.update(Snapshot {
+            gpus: vec![gpu("GTX 1070 Ti"), gpu("RTX 2080")],
+            ..Snapshot::default()
+        });
+        let (_, full) = dashboard.size(Widget::Panel);
+        dashboard.set_parts(Parts {
+            cpu: false,
+            network: false,
+            gpus: Some(vec![1]),
+            ..Parts::default()
+        });
+        let (_, trimmed) = dashboard.size(Widget::Panel);
+        assert!(trimmed < full / 2.0, "{trimmed} vs {full}");
+        let mut buffer = vec![0_u32; 700 * 450];
+        let drawing = {
+            let mut canvas = Canvas::new(700, 450, &mut buffer).unwrap();
+            dashboard.draw(Widget::Panel, &mut canvas, 1.44, Rgb::BLACK)
+        };
+        let texts: Vec<&str> =
+            drawing.labels.iter().map(|l| l.text.as_str()).collect();
+        assert!(texts.contains(&"2080"));
+        assert!(!texts.contains(&"1070 Ti"));
+        assert!(!texts.contains(&"CPU THREADS"));
+        assert!(!texts.contains(&"NETWORK"));
     }
 }

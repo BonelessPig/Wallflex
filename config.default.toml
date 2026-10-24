@@ -34,8 +34,9 @@ size = 1.0
 #   "gpu"      one GPU's rings: add gpu = 1 (or 2, ...)
 #   "info"     RAM use and SSD temperatures
 #   "discord"  your call, notifications and more (needs [discord] below)
-#   "visualizer"  bars for the music playing (only draws while sound
-#                 plays, and pauses for full-screen games)
+#   "visualizer"  bars for the music playing, with what's playing (title,
+#                 artist, album art) under them; only draws while sound
+#                 plays, and rests while a full-screen window covers it
 # "anchor" is the corner or edge it sits against: top-left, top,
 # top-right, left, center, right, bottom-left, bottom or bottom-right.
 # Positions are measured from the edges of the area the taskbar leaves
@@ -73,6 +74,24 @@ y = 64
 # anchor = "top-right"
 # x = 64
 # y = 190
+
+# Which parts the panel (and the "gpus" and "info" widgets) show. Left
+# out, everything this PC has is shown. To hide something, uncomment
+# its line; "gpus" lists which GPUs to show (1 = the first).
+#
+# [panel]
+# cpu = false
+# network = false
+# ram = false
+# ssd = false
+# gpus = [1]
+
+# The network graph turns from green to red as download speed nears
+# your network adapter's speed. If your internet plan is slower, give its
+# download speed (in Mbit/s) so red means "maxed out":
+#
+# [network]
+# max_mbps = 500
 
 # Discord: needs your own Discord application (discord.com/developers):
 # its client id and secret from the OAuth2 page, with the redirect

@@ -137,6 +137,7 @@ mod tests {
             network: Some(Network {
                 down_kbps: 5_830.1,
                 up_kbps: 369.9,
+                link_kbps: None,
             }),
             gpus: vec![Gpu {
                 name: "RTX 2080".to_owned(),

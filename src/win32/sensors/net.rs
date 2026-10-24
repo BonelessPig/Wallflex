@@ -25,13 +25,15 @@ pub struct NetReader {
 impl NetReader {
     /// Throughput since the previous call; `None` on the first call.
     pub fn read(&mut self) -> Option<Network> {
-        let (received, sent) = totals()?;
+        let (received, sent, link) = totals()?;
         let now = Instant::now();
         let rates = self.last.and_then(|(prev_in, prev_out, then)| {
             let elapsed = now.saturating_duration_since(then);
             Some(Network {
                 down_kbps: rate_kbps(prev_in, received, elapsed)?,
                 up_kbps: rate_kbps(prev_out, sent, elapsed)?,
+                link_kbps: (link > 0)
+                    .then(|| u64_to_f64(link) / BITS_PER_KILOBIT),
             })
         });
         self.last = Some((received, sent, now));
@@ -49,8 +51,22 @@ impl Drop for IfTable {
     }
 }
 
-/// Total bytes received and sent by physical adapters that are up.
-fn totals() -> Option<(u64, u64)> {
+/// Bits in a kilobit.
+const BITS_PER_KILOBIT: f64 = 1_000.0;
+
+/// A link speed as `f64` (precision beyond 2^53 bit/s isn't needed).
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "link speeds are far below 2^53 bit/s"
+)]
+fn u64_to_f64(value: u64) -> f64 {
+    value as f64
+}
+
+/// Total bytes received and sent by physical adapters that are up, and
+/// the fastest one's receive link speed (bits per second).
+fn totals() -> Option<(u64, u64, u64)> {
     let mut raw: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
     // SAFETY: on success Windows allocates the table and stores its
     // address in `raw`; `IfTable` frees it.
@@ -67,6 +83,7 @@ fn totals() -> Option<(u64, u64)> {
 
     let mut received = 0_u64;
     let mut sent = 0_u64;
+    let mut link = 0_u64;
     for row in rows {
         let flags = row.InterfaceAndOperStatusFlags._bitfield;
         let counted = flags & HARDWARE_INTERFACE != 0
@@ -75,7 +92,8 @@ fn totals() -> Option<(u64, u64)> {
         if counted {
             received = received.saturating_add(row.InOctets);
             sent = sent.saturating_add(row.OutOctets);
+            link = link.max(row.ReceiveLinkSpeed);
         }
     }
-    Some((received, sent))
+    Some((received, sent, link))
 }
