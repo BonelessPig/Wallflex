@@ -1,0 +1,78 @@
+name: Bug report
+description: Something doesn't work or looks wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for reporting. For a security problem, please use the
+        security policy instead of a public issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start Wallflex with ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Wallflex version
+      description: From the release you downloaded, or `git describe`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it's installed
+      options:
+        - Installer (setup.exe)
+        - Zip
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: From Settings > System > About.
+      placeholder: Windows 11 24H2 (26100.2033)
+    validations:
+      required: true
+  - type: input
+    id: monitors
+    attributes:
+      label: Monitors
+      description: Resolution and scale of each.
+      placeholder: 2560x1440 at 100%, 1920x1080 at 125%
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >-
+        The end of `%APPDATA%\Wallflex\wallflex.log` (tray menu > Open
+        log).
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: >-
+        The relevant part of `%APPDATA%\Wallflex\config.toml`. Remove
+        the `[discord]` secrets, bot token and friend ids first.
+      render: toml
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: >-
+        Optional. Crop out anything private, such as Discord names or
+        desktop icons.

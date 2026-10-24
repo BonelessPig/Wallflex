@@ -1,0 +1,29 @@
+name: Feature request
+description: A new widget, setting or improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you'd like
+      description: What you want to see or do, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: >-
+        How it might look or be set up. A sketch or a picture of
+        something similar helps.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you've tried or considered.
+  - type: markdown
+    attributes:
+      value: >-
+        Wallflex stays under 15 MB of RAM and 0.5% CPU, so features that
+        need a browser engine, a GPU or constant polling are unlikely to
+        fit.
