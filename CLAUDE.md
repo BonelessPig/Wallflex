@@ -60,8 +60,9 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   designs (`cpu-cores.js`, `net-graph.js`, `gpu-rings.js` + CSS in
   `PerformanceMonitor\wallpaper`). Sizes are design units: 1 unit = 0.1%
   of the monitor height (the wallpaper's 0.1vh), also the line weight.
-  `Dashboard` holds the latest reading and a minute of network history,
-  draws shapes to a `Canvas` and returns text as `Label`s.
+  `Dashboard` holds the latest reading and the network history
+  (`[network] seconds`, 30 by default; drawn as rounded, filled
+  curves), draws shapes to a `Canvas` and returns text as `Label`s.
 - `src/pace.rs`: performance. The config's `performance` ("smooth"
   default, or "light") caps a `Level` (Smooth: 0.4 s glides and
   visualizer at ~64 fps; Normal: 0.3 s / ~32 fps; Light: no glides,

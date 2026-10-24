@@ -17,6 +17,14 @@ patch number (0.x.**y**) for fixes only.
   deleting your settings. The zip is still there for a portable copy.
 - An app icon (the tray icon's three bars on blue) for the exe, the
   Start menu, Installed apps and the installer.
+- `[network] seconds` sets how much history the network graph shows
+  (10 to 300).
+
+### Changed
+
+- The network graph shows the last 30 seconds by default (was a
+  minute), with rounded lines and filled areas under download and
+  upload.
 
 ## [0.1.0] - 2026-10-24
 

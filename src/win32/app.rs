@@ -1082,6 +1082,8 @@ fn rebuild() {
         if let Ok(mut state) = state.try_borrow_mut() {
             let kbps = state.settings.net_max_mbps.map(|mbps| mbps * 1_000.0);
             state.dashboard.set_net_limit(kbps);
+            let seconds = state.settings.net_seconds;
+            state.dashboard.set_net_seconds(seconds);
             let parts = state.settings.parts.clone();
             state.dashboard.set_parts(parts);
         }

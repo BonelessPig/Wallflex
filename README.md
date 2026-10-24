@@ -19,8 +19,9 @@ wallpaper and the icons, with widgets placed by a layout per monitor:
 
 - **CPU threads:** a column per thread, grouped by real core, with the
   clock.
-- **Network:** the last minute of download and upload, shaded green to
-  red as it nears your connection's speed.
+- **Network:** the last 30 seconds (or as long as you like) of
+  download and upload, shaded green to red as it nears your
+  connection's speed.
 - **GPU rings:** per GPU, load, VRAM, temperature, power and fan.
 - **RAM and SSDs:** RAM use with a bar per memory stick, SSD
   temperatures.

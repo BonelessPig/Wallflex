@@ -86,11 +86,13 @@ y = 64
 # ssd = false
 # gpus = [1]
 
-# The network graph turns from green to red as download speed nears
-# your network adapter's speed. If your internet plan is slower, give its
+# The network graph shows the last 30 seconds; `seconds` changes that
+# (10 to 300). It turns from green to red as download speed nears your
+# network adapter's speed. If your internet plan is slower, give its
 # download speed (in Mbit/s) so red means "maxed out":
 #
 # [network]
+# seconds = 30
 # max_mbps = 500
 
 # Discord: needs your own Discord application (discord.com/developers):

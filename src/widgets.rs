@@ -37,8 +37,6 @@ const QUIET: f64 = 0.55;
 const TRACK: f64 = 0.25;
 /// Opacity of the graph's dashed halfway line.
 const GRID: f64 = 0.12;
-/// Opacity of the fill under the download line.
-const AREA: f64 = 0.08;
 /// The line weight, in units.
 const WEIGHT: f64 = 1.0;
 
@@ -76,8 +74,17 @@ const THREADS_PER_CORE: usize = 2;
 const NET_PEAK_EASE: Duration = Duration::from_millis(400);
 /// Network readings a second at most (the graph's resolution).
 const NET_READINGS_PER_SECOND: usize = 4;
-/// Network: samples kept (a minute at four a second).
-pub const NET_SPAN: usize = 240;
+/// Network: seconds of history shown unless the config says otherwise.
+pub const NET_DEFAULT_SECONDS: u32 = 30;
+/// Network: opacity of the fill under the download line.
+const NET_DOWN_FILL: f64 = 0.3;
+/// Network: opacity of the fill under the upload line.
+const NET_UP_FILL: f64 = 0.25;
+/// Network: the rounded line has a point at least this often (units),
+/// about a pixel at 4K, so its curves look smooth.
+const NET_CURVE_STEP: f64 = 0.5;
+/// Network: most points the rounded line adds between two readings.
+const NET_CURVE_MAX_STEPS: u32 = 8;
 /// Network: plot top, inside the graph.
 const NET_TOP: f64 = 2.0;
 /// Network: plot height.
@@ -304,7 +311,7 @@ pub struct Drawing {
 pub struct Dashboard {
     /// The latest reading.
     snapshot: Snapshot,
-    /// The last [`NET_SPAN`] network readings, oldest first.
+    /// The last [`Dashboard::net_span`] network readings, oldest first.
     net: VecDeque<Network>,
     /// The Discord widget's state.
     discord: discord::DiscordUi,
@@ -315,8 +322,8 @@ pub struct Dashboard {
     slow_motion: motion::Motion,
     /// The music visualizer's bars.
     visualizer: visualizer::Visualizer,
-    /// Network readings per sample kept: 2 when readings come once a
-    /// second, so the graph still spans a minute.
+    /// Network readings per sample kept: 2 when readings come twice a
+    /// second, so the graph still spans its full time.
     net_copies: usize,
     /// How long the graph takes to slide one reading along; `None` when
     /// it steps.
@@ -327,6 +334,9 @@ pub struct Dashboard {
     net_peak: f64,
     /// Internet download speed from the config (kbit/s), if set.
     net_limit_kbps: Option<f64>,
+    /// Seconds of history the graph shows; 0 means
+    /// [`NET_DEFAULT_SECONDS`].
+    net_seconds: u32,
     /// Which parts show.
     parts: Parts,
     /// Glide frames so far.
@@ -417,12 +427,9 @@ impl Dashboard {
         if let Some(network) = snapshot.network {
             self.net_phase = if self.net_scroll.is_some() { 0.0 } else { 1.0 };
             for _ in 0..self.net_copies.max(1) {
-                // One extra sample, to slide in from the left edge.
-                if self.net.len() > NET_SPAN {
-                    let _oldest = self.net.pop_front();
-                }
                 self.net.push_back(network);
             }
+            self.trim_net();
         }
         self.snapshot = snapshot;
         let target = self.target();
@@ -575,6 +582,38 @@ impl Dashboard {
             gpus,
             info_top,
             height,
+        }
+    }
+
+    /// Sets how many seconds of history the network graph shows.
+    pub fn set_net_seconds(&mut self, seconds: u32) {
+        self.net_seconds = seconds;
+        self.trim_net();
+        self.net_peak = self.net_peak_target();
+    }
+
+    /// The graph's time span in seconds.
+    fn net_seconds(&self) -> u32 {
+        if self.net_seconds == 0 {
+            NET_DEFAULT_SECONDS
+        } else {
+            self.net_seconds
+        }
+    }
+
+    /// Samples the graph spans: four a second.
+    fn net_span(&self) -> usize {
+        usize::try_from(self.net_seconds())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(NET_READINGS_PER_SECOND)
+    }
+
+    /// Drops readings older than the graph shows, keeping one extra
+    /// sample to slide in from the left edge.
+    fn trim_net(&mut self) {
+        let keep = self.net_span().saturating_add(1);
+        while self.net.len() > keep {
+            let _oldest = self.net.pop_front();
         }
     }
 
@@ -1035,8 +1074,8 @@ impl Dashboard {
         self.draw_net_graph(pen);
     }
 
-    /// The network graph's plot: the last minute of download (white,
-    /// faint fill) and upload (blue).
+    /// The network graph's plot: download (shaded green to red by speed)
+    /// and upload (blue), as rounded lines over filled areas.
     fn draw_net_graph(&self, pen: &mut Pen<'_, '_>) {
         let left = 0.0;
         let top = BODY_TOP + NET_TOP;
@@ -1060,7 +1099,8 @@ impl Dashboard {
         // Newest sample at the right edge; the line grows in from there.
         // While sliding, everything sits up to a step to the right and the
         // line is cut at the graph's edges.
-        let step = COLUMN_W / count_to_f64(NET_SPAN.saturating_sub(1));
+        let span = count_to_f64(self.net_span().saturating_sub(1));
+        let step = COLUMN_W / span;
         let slide = (1.0 - self.net_phase.clamp(0.0, 1.0)) * step;
         let newest = count_to_f64(self.net.len().saturating_sub(1));
         let point = |i: u32, kbps: f64| {
@@ -1068,12 +1108,13 @@ impl Dashboard {
             let height = (kbps / peak).clamp(0.0, 1.0);
             (x, top + NET_H * (1.0 - height))
         };
+        let steps = curve_steps(step);
         let line = |pick: fn(&Network) -> f64| -> Vec<(f64, f64)> {
             let points: Vec<(f64, f64)> = (0_u32..)
                 .zip(&self.net)
                 .map(|(i, n)| point(i, pick(n)))
                 .collect();
-            clip_x(&points, left, right)
+            clip_x(&round_line(&points, steps), left, right)
         };
         let down = line(|n| n.down_kbps);
         let up = line(|n| n.up_kbps);
@@ -1086,7 +1127,15 @@ impl Dashboard {
             let share = max.map_or(height, |max| height * peak / max);
             visualizer::shade(share)
         };
-        pen.area_under_shaded(&down, base, AREA, color_at);
+        pen.area_under_shaded(&down, base, NET_DOWN_FILL, color_at);
+        pen.area_under(
+            &up,
+            base,
+            Paint {
+                color: NET_UP_COLOR,
+                alpha: NET_UP_FILL,
+            },
+        );
         pen.line_shaded(&down, color_at);
         pen.line(
             &up,
@@ -1104,7 +1153,8 @@ impl Dashboard {
             &format_rate(peak),
         );
         let labels_y = BODY_TOP + NET_GRAPH_H - 3.0;
-        pen.text((left, labels_y), NET_TEXT, QUIET, Align::Left, "-60S");
+        let since = format!("-{}S", self.net_seconds());
+        pen.text((left, labels_y), NET_TEXT, QUIET, Align::Left, &since);
         pen.text((right, labels_y), NET_TEXT, QUIET, Align::Right, "NOW");
     }
 
@@ -1348,6 +1398,64 @@ fn core_layout(cores: &[Vec<usize>], threads: usize) -> Vec<Vec<usize>> {
         .chunks(per_core)
         .map(<[usize]>::to_vec)
         .collect()
+}
+
+/// Points the rounded graph line adds per reading when readings are
+/// `step` units apart: enough for a smooth curve, at most
+/// [`NET_CURVE_MAX_STEPS`].
+fn curve_steps(step: f64) -> u32 {
+    let mut steps = 1;
+    while steps < NET_CURVE_MAX_STEPS
+        && step / f64::from(steps) > NET_CURVE_STEP
+    {
+        steps = steps.saturating_add(1);
+    }
+    steps
+}
+
+/// A rounded line through `points` (sorted left to right), with `steps`
+/// points per segment. The curve is monotone between neighbouring
+/// points (Fritsch-Carlson tangents), so it never overshoots a peak or
+/// dips below the baseline.
+fn round_line(points: &[(f64, f64)], steps: u32) -> Vec<(f64, f64)> {
+    let slopes: Vec<f64> = points
+        .windows(2)
+        .map(|pair| match pair {
+            [a, b] if b.0 - a.0 > f64::EPSILON => (b.1 - a.1) / (b.0 - a.0),
+            _ => 0.0,
+        })
+        .collect();
+    let (Some(&first), Some(&last)) = (slopes.first(), slopes.last()) else {
+        return points.to_vec();
+    };
+    // A tangent per point: the harmonic mean of the slopes either side,
+    // or flat at a peak or valley.
+    let tangents: Vec<f64> = std::iter::once(first)
+        .chain(slopes.windows(2).map(|pair| match pair {
+            [a, b] if a * b > 0.0 => 2.0 * a * b / (a + b),
+            _ => 0.0,
+        }))
+        .chain(std::iter::once(last))
+        .collect();
+    let per_segment = usize::try_from(steps).unwrap_or(1);
+    let mut curve =
+        Vec::with_capacity(points.len().saturating_mul(per_segment));
+    curve.extend(points.first());
+    for (pair, tangent) in points.windows(2).zip(tangents.windows(2)) {
+        if let ([a, b], [ta, tb]) = (pair, tangent) {
+            let h = b.0 - a.0;
+            for i in 1..=steps {
+                let t = f64::from(i) / f64::from(steps);
+                let (t2, t3) = (t * t, t * t * t);
+                let y = (2.0 * t3 - 3.0 * t2 + 1.0) * a.1
+                    + (t3 - 2.0 * t2 + t) * h * ta
+                    + (3.0 * t2 - 2.0 * t3) * b.1
+                    + (t3 - t2) * h * tb;
+                curve.push((a.0 + h * t, y));
+            }
+        }
+    }
+    curve
 }
 
 /// The part of `points` (sorted left to right) between `x0` and `x1`,
@@ -1649,6 +1757,13 @@ impl Pen<'_, '_> {
         });
     }
 
+    /// The area under a line, in one paint.
+    fn area_under(&mut self, points: &[(f64, f64)], base: f64, paint: Paint) {
+        let points = self.points(points);
+        let (_, base) = self.point((0.0, base));
+        self.canvas.fill_under_rows(&points, base, |_| paint);
+    }
+
     /// The area under a line, shaded by height like
     /// [`Pen::line_shaded`], at `alpha`.
     fn area_under_shaded(
@@ -1857,7 +1972,7 @@ impl Pen<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Dashboard, NET_SPAN, Parts, Ring, Widget, format_rate, ring_reading,
+        Dashboard, Parts, Ring, Widget, format_rate, ring_reading,
         split_gpu_name,
     };
     use crate::canvas::Canvas;
@@ -1931,12 +2046,9 @@ mod tests {
         assert_eq!(ring_reading(&unknown, Ring::Load), (None, "--".into()));
     }
 
-    #[test]
-    fn keeps_a_minute_of_network_history() {
-        let mut dashboard = Dashboard::default();
-        let extra = 40_u32;
-        let total = u32::try_from(NET_SPAN).unwrap() + extra;
-        for i in 0..total {
+    /// Feeds `count` network readings, the `i`th downloading `i` kbit/s.
+    fn feed_network(dashboard: &mut Dashboard, count: u32) {
+        for i in 0..count {
             dashboard.update(Snapshot {
                 network: Some(Network {
                     down_kbps: f64::from(i),
@@ -1946,10 +2058,51 @@ mod tests {
                 ..Snapshot::default()
             });
         }
-        // A minute, plus one sample to slide in from the left edge.
-        assert_eq!(dashboard.net.len(), NET_SPAN + 1);
-        let oldest = Some(f64::from(extra - 1));
-        assert_eq!(dashboard.net.front().map(|n| n.down_kbps), oldest);
+    }
+
+    #[test]
+    fn keeps_the_graphs_span_of_network_history() {
+        let mut dashboard = Dashboard::default();
+        // 30 s at four readings a second.
+        assert_eq!(dashboard.net_span(), 120);
+        feed_network(&mut dashboard, 160);
+        // The span, plus one sample to slide in from the left edge.
+        assert_eq!(dashboard.net.len(), 121);
+        assert_eq!(dashboard.net.front().map(|n| n.down_kbps), Some(39.0));
+
+        dashboard.set_net_seconds(60);
+        feed_network(&mut dashboard, 300);
+        assert_eq!(dashboard.net.len(), 241);
+        dashboard.set_net_seconds(10);
+        assert_eq!(dashboard.net.len(), 41);
+        assert_eq!(dashboard.net.back().map(|n| n.down_kbps), Some(299.0));
+    }
+
+    #[test]
+    fn rounded_line_keeps_its_points_without_overshooting() {
+        let points = [(0.0, 10.0), (1.0, 10.0), (2.0, 0.0), (3.0, 5.0)];
+        let curve = super::round_line(&points, 4);
+        assert_eq!(curve.len(), 13);
+        // Every fourth point is one of the originals.
+        for (i, point) in points.iter().enumerate() {
+            let (x, y) = curve[i * 4];
+            assert!((x - point.0).abs() < 1e-9 && (y - point.1).abs() < 1e-9);
+        }
+        // Monotone: nothing above the peak or below the valley, and the
+        // flat start stays flat.
+        assert!(curve.iter().all(|&(_, y)| (0.0..=10.0).contains(&y)));
+        assert!(curve[..5].iter().all(|&(_, y)| (y - 10.0).abs() < 1e-9));
+        // In between it curves rather than running straight.
+        let (_, quarter) = curve[5];
+        assert!((quarter - 7.5).abs() > 0.5);
+        assert_eq!(super::round_line(&points[..1], 4), points[..1]);
+    }
+
+    #[test]
+    fn rounded_line_adds_points_by_spacing() {
+        assert_eq!(super::curve_steps(0.2), 1);
+        assert_eq!(super::curve_steps(1.6), 4);
+        assert_eq!(super::curve_steps(100.0), 8);
     }
 
     #[test]

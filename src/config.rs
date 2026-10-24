@@ -14,6 +14,11 @@ use crate::widgets::{Parts, Widget};
 /// The commented default config, written on first run.
 pub const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
 
+/// Seconds of history the network graph shows by default.
+const DEFAULT_NET_SECONDS: u32 = crate::widgets::NET_DEFAULT_SECONDS;
+/// Seconds of history the network graph can show.
+const NET_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 10..=300;
+
 /// Default gap from the anchored edges, in design units.
 const DEFAULT_OFFSET: f64 = 64.0;
 /// Smallest and largest `size` accepted.
@@ -34,6 +39,8 @@ pub struct Settings {
     /// graph's colours reach red there (or at the adapter's speed, if
     /// that's lower).
     pub net_max_mbps: Option<f64>,
+    /// How many seconds of history the network graph shows.
+    pub net_seconds: u32,
     /// Which parts the panel shows.
     pub parts: Parts,
 }
@@ -252,6 +259,7 @@ impl Default for Settings {
             discord: None,
             performance: Mode::Smooth,
             net_max_mbps: None,
+            net_seconds: DEFAULT_NET_SECONDS,
             parts: Parts::default(),
         }
     }
@@ -310,6 +318,8 @@ struct RawPanel {
 struct RawNetwork {
     /// Internet download speed, Mbit/s.
     max_mbps: Option<f64>,
+    /// Seconds of history the graph shows.
+    seconds: Option<i64>,
 }
 
 /// `[discord]` as written.
@@ -399,6 +409,8 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         .transpose()
         .map_err(|e| ConfigError(format!("panel: {e}")))?
         .unwrap_or_default();
+    let net_seconds =
+        parse_net_seconds(raw.network.as_ref().and_then(|n| n.seconds))?;
     let net_max_mbps = match raw.network.and_then(|n| n.max_mbps) {
         Some(mbps) if mbps.is_finite() && mbps > 0.0 => Some(mbps),
         Some(mbps) => {
@@ -414,8 +426,26 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         discord,
         performance,
         net_max_mbps,
+        net_seconds,
         parts,
     })
+}
+
+/// Checks `[network] seconds`, if given.
+fn parse_net_seconds(seconds: Option<i64>) -> Result<u32, ConfigError> {
+    let Some(seconds) = seconds else {
+        return Ok(DEFAULT_NET_SECONDS);
+    };
+    u32::try_from(seconds)
+        .ok()
+        .filter(|s| NET_SECONDS_RANGE.contains(s))
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "network: seconds = {seconds} must be from {} to {}",
+                NET_SECONDS_RANGE.start(),
+                NET_SECONDS_RANGE.end()
+            ))
+        })
 }
 
 /// Validates `[panel]`.
@@ -715,6 +745,16 @@ x = 5";
         assert_eq!(parts.gpus, Some(vec![0]));
         assert!(parse("[panel]\ngpus = [0]\n").is_err());
         assert!(parse("[panel]\nfan = true\n").is_err());
+    }
+
+    #[test]
+    fn reads_network_graph_seconds() {
+        assert_eq!(parse("").unwrap().net_seconds, 30);
+        let text = "[network]\nseconds = 60\n";
+        assert_eq!(parse(text).unwrap().net_seconds, 60);
+        assert!(parse("[network]\nseconds = 5\n").is_err());
+        assert!(parse("[network]\nseconds = -30\n").is_err());
+        assert!(parse("[network]\nseconds = 301\n").is_err());
     }
 
     #[test]

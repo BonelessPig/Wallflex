@@ -64,8 +64,9 @@ while a full-screen window covers its monitor.
 
 `[panel]` hides parts you don't want (`cpu`, `network`, `ram`, `ssd`,
 or `gpus = [1]` for only the first GPU); by default everything this PC
-has is shown. `[network] max_mbps` sets your internet speed so the
-network graph turns red when it's maxed out.
+has is shown. `[network] seconds` sets how much history the network
+graph shows (30 by default, 10 to 300), and `max_mbps` sets your
+internet speed so the graph turns red when it's maxed out.
 
 ## 4. Discord (optional)
 
