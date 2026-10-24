@@ -112,6 +112,16 @@ default settings and the licences:
 powershell -ExecutionPolicy Bypass -File tools\package.ps1
 ```
 
+## Releases
+
+Versions follow [Semantic Versioning](https://semver.org/), tagged
+`vX.Y.Z`; before 1.0 the minor number goes up for new features or
+changed settings and the patch number for fixes. Changes are listed in
+[CHANGELOG.md](CHANGELOG.md). To release: set the version in
+`Cargo.toml`, move the changelog's Unreleased notes under it, commit and
+push, then run `tools\release.ps1` (it packages, tags and publishes the
+GitHub release with the zip).
+
 ## License
 
 Licensed under either of

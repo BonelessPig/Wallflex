@@ -210,6 +210,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - Discord credentials and the bot token live in `[discord]` in the
   config; the OAuth token is `discord-token.json` next to it. Never
   print or commit them.
+- Versioning: SemVer, tags `vX.Y.Z`; before 1.0, minor = features or
+  config changes, patch = fixes. Note user-visible changes under
+  `## [Unreleased]` in `CHANGELOG.md` as they're made. `tools\release.ps1`
+  publishes the version in `Cargo.toml` (checks, package, tag, GitHub
+  release with the changelog's notes).
 - `tools\package.ps1` builds `dist\wallflex-<version>.zip` (exe,
   `docs/SETUP.md`, the default config, licences). `docs/SETUP.md` is
   the friend-facing guide: keep it in step with the config and menu.
