@@ -9,13 +9,14 @@ mod pdh;
 
 use windows::Win32::System::Performance::{PDH_FMT_DOUBLE, PDH_FMT_LARGE};
 use windows::Win32::System::SystemInformation::{
-    GetSystemFirmwareTable, GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB,
+    GetLogicalProcessorInformationEx, GetSystemFirmwareTable,
+    GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB, RelationProcessorCore,
 };
 
 use super::struct_size;
 use crate::sensors::{
-    Cpu, Gpu, Memory, Snapshot, cpu_clock_ghz, gpu_usage_by_luid,
-    memory_modules, split_processors, vram_by_luid,
+    Cpu, Gpu, Memory, Snapshot, cores_from_topology, cpu_clock_ghz,
+    gpu_usage_by_luid, memory_modules, processor_loads, vram_by_luid,
 };
 use pdh::Counter;
 
@@ -39,6 +40,11 @@ pub struct Sensors {
     disks: disk::DiskReader,
     /// Memory sticks installed (read once; 0 when unknown).
     modules: usize,
+    /// Each physical core's logical processors (read once).
+    cores: Vec<Vec<usize>>,
+    /// The latest use of every logical processor, kept between readings
+    /// so one missing from a reading keeps its place.
+    loads: Vec<f64>,
 }
 
 impl Sensors {
@@ -53,6 +59,8 @@ impl Sensors {
             net: net::NetReader::default(),
             disks: disk::DiskReader::default(),
             modules: installed_modules(),
+            cores: processor_cores(),
+            loads: Vec::new(),
         }
     }
 
@@ -85,25 +93,30 @@ impl Sensors {
         }
     }
 
-    /// Processor use and clock from the CPU counters.
+    /// Processor use and clock from the CPU counters. A failed reading
+    /// keeps the last loads.
     fn cpu(&mut self) -> Cpu {
-        let Some(query) = self
+        let query = self
             .cpu_counters
             .as_mut()
-            .and_then(|query| query.collect().then_some(query))
-        else {
-            return Cpu::default();
+            .and_then(|query| query.collect().then_some(query));
+        let (total, clock_ghz) = match query {
+            Some(query) => {
+                let items = query.array(Counter::CpuCores, PDH_FMT_DOUBLE);
+                let total = processor_loads(items, &mut self.loads);
+                let clock_ghz = query
+                    .value(Counter::CpuFrequency)
+                    .zip(query.value(Counter::CpuPerformance))
+                    .and_then(|(mhz, percent)| cpu_clock_ghz(mhz, percent));
+                (total, clock_ghz)
+            }
+            None => (None, None),
         };
-        let (total, per_core) =
-            split_processors(query.array(Counter::CpuCores, PDH_FMT_DOUBLE));
-        let clock_ghz = query
-            .value(Counter::CpuFrequency)
-            .zip(query.value(Counter::CpuPerformance))
-            .and_then(|(mhz, percent)| cpu_clock_ghz(mhz, percent));
         Cpu {
             total,
-            per_core,
+            per_core: self.loads.clone(),
             clock_ghz,
+            cores: self.cores.clone(),
         }
     }
 
@@ -154,6 +167,46 @@ fn memory(modules: usize) -> Option<Memory> {
         total_bytes: status.ullTotalPhys,
         modules,
     })
+}
+
+/// Each physical core's logical processors, from Windows. Empty if it
+/// can't say.
+fn processor_cores() -> Vec<Vec<usize>> {
+    let mut length = 0_u32;
+    // SAFETY: no buffer, so it only reports the length needed (and
+    // "fails" with ERROR_INSUFFICIENT_BUFFER, which is expected).
+    let _ = unsafe {
+        GetLogicalProcessorInformationEx(
+            RelationProcessorCore,
+            None,
+            &raw mut length,
+        )
+    };
+    let Ok(bytes) = usize::try_from(length) else {
+        return Vec::new();
+    };
+    if bytes == 0 {
+        return Vec::new();
+    }
+    // u64s keep the records aligned.
+    let mut words = vec![0_u64; bytes.div_ceil(8)];
+    // SAFETY: `words` holds at least `length` bytes.
+    let filled = unsafe {
+        GetLogicalProcessorInformationEx(
+            RelationProcessorCore,
+            Some(words.as_mut_ptr().cast()),
+            &raw mut length,
+        )
+    };
+    if filled.is_err() {
+        return Vec::new();
+    }
+    let raw: Vec<u8> = words
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .take(usize::try_from(length).unwrap_or(0))
+        .collect();
+    cores_from_topology(&raw)
 }
 
 /// Memory sticks installed, from the SMBIOS table (no admin needed).

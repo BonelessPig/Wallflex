@@ -143,6 +143,11 @@ impl Surface {
             .collect()
     }
 
+    /// Asks Windows to repaint the visualizer.
+    pub fn invalidate_visualizer(&self) {
+        self.invalidate_rects(&self.painter.visualizer_rects());
+    }
+
     /// Asks Windows to repaint `rects` (client pixels).
     fn invalidate_rects(&self, rects: &[RECT]) {
         for rect in rects {

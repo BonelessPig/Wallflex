@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 
 pub mod app;
+mod audio;
 pub mod console;
 mod desktop;
 mod discord;
@@ -15,6 +16,7 @@ pub mod sensors;
 mod startup;
 mod surface;
 mod tray;
+mod usage;
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;

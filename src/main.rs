@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod args;
+mod audio;
 mod bmp;
 mod canvas;
 mod color;
@@ -16,6 +17,7 @@ mod discord;
 mod geometry;
 mod image;
 mod log;
+mod pace;
 mod sensors;
 mod text;
 mod widgets;
@@ -140,6 +142,10 @@ fn preview(
         PreviewWidget::Network => Widget::Network,
         PreviewWidget::Gpus => Widget::Gpus,
         PreviewWidget::Info => Widget::Info,
+        PreviewWidget::Visualizer => {
+            dashboard.show_visualizer_demo();
+            Widget::Visualizer
+        }
         PreviewWidget::Discord
         | PreviewWidget::DiscordAvatars
         | PreviewWidget::DiscordInbox => {

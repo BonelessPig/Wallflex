@@ -7,6 +7,12 @@
 # Background colour, as "#RRGGBB".
 background = "#000000"
 
+# "smooth": glides and the visualizer at up to 60 frames a second while
+# the PC has room, easing off when it gets busy. "light": no glides,
+# readings once a second, a slower visualizer; as light as it gets.
+# Either way Wallflex keeps itself under 2% CPU and 120 MB of memory.
+performance = "smooth"
+
 # One [[layout]] per monitor setup. Each monitor uses the first layout
 # whose "monitor" matches it:
 #   "*"          every monitor
@@ -28,6 +34,8 @@ size = 1.0
 #   "gpu"      one GPU's rings: add gpu = 1 (or 2, ...)
 #   "info"     RAM use and SSD temperatures
 #   "discord"  your call, notifications and more (needs [discord] below)
+#   "visualizer"  bars for the music playing (only draws while sound
+#                 plays, and pauses for full-screen games)
 # "anchor" is the corner or edge it sits against: top-left, top,
 # top-right, left, center, right, bottom-left, bottom or bottom-right.
 # Positions are measured from the edges of the area the taskbar leaves

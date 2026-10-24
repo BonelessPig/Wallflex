@@ -37,6 +37,9 @@ explained in comments inside it (`config.example.toml` in the zip is
 the same file). Save it and the change shows about a second later.
 
 - `background`: the colour behind the widgets, such as `"#101418"`.
+- `performance`: `"smooth"` (the default) for smooth animations while
+  your PC has room, or `"light"` for no animations and the least work.
+  Either way Wallflex stays under 2% CPU and 120 MB of memory.
 - `[[layout]]`: which widgets go on which monitor. `monitor` can be
   `"*"` (every monitor), `"primary"`, a resolution such as
   `"2560x1440"`, or a name such as `"DISPLAY2"` (the log lists your
@@ -47,6 +50,10 @@ the same file). Save it and the change shows about a second later.
 
 If you make a mistake, Wallflex keeps the last good settings and says
 what's wrong in the log.
+
+For a music visualizer, add a widget with `kind = "visualizer"`. It
+shows whatever your default speakers play, uses no CPU while it's
+quiet, and rests while a full-screen game or video is in front.
 
 ## 4. Discord (optional)
 

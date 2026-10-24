@@ -49,6 +49,10 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - `src/main.rs`: entry point, dispatches on the command.
 - `src/args.rs`, `src/color.rs`, `src/geometry.rs`: safe, unit-tested
   logic.
+- CPU columns follow the real core layout (`GetLogicalProcessorInformationEx`,
+  read once), and per-thread loads are kept by processor number, so a
+  PDH reading that skips an instance can't shift or regroup the
+  columns (it used to show 5 cores or 11 single threads).
 - `src/sensors.rs`: the `Snapshot` types and the pure sensor maths
   (rates, GPU usage by Task Manager's method, storage descriptor
   parsing). `src/text.rs`: snapshot to text lines for `--sensors`.
@@ -58,6 +62,16 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   of the monitor height (the wallpaper's 0.1vh), also the line weight.
   `Dashboard` holds the latest reading and a minute of network history,
   draws shapes to a `Canvas` and returns text as `Label`s.
+- `src/pace.rs`: performance. The config's `performance` ("smooth"
+  default, or "light") caps a `Level` (Smooth: 0.4 s glides and
+  visualizer at ~64 fps; Normal: 0.3 s / ~32 fps; Light: no glides,
+  sensors once a second, visualizer ~16 fps). The `Governor` steps down
+  at once when the PC is busy (60% / 85%) or Wallflex is over 2% CPU
+  for 3 s (`win32/usage.rs` measures it), and back up one level per
+  10 calm seconds. Timer intervals sit just under whole 15.625 ms
+  system ticks (15, 31, 62 ms), since a timer fires on the first tick
+  after it's due. Over 120 MB private, pictures are dropped and the
+  working set trimmed (health tick).
 - `src/widgets/motion.rs`: the glide. After each reading the CPU
   columns, GPU rings and RAM bar ease to the new values over 0.3 s
   (text changes at once); `Dashboard::moving_areas` says which parts
@@ -92,6 +106,13 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   The widget is drawn `BLEED` units in from each side so rings and
   badges at its edges aren't cut off.
 - `src/image.rs`: decoded pictures (premultiplied BGRA).
+- `src/audio.rs`: sound to bars: sample formats to mono, the latest
+  4096 samples, and an iterative FFT into 32 log-spaced bands (20 Hz
+  to 20 kHz, with a 3 dB/octave tilt; 4096 so the bass bands get
+  ~12 Hz bins). Bars are shaded green (quiet, bottom) through yellow
+  and orange to red (loud, top), with frequency labels underneath. `src/widgets/visualizer.rs`
+  draws them like the wallpaper's (0.7vh bars, 1.104vh apart, 7vh
+  tall), rising fast and falling 5% a frame.
 - `src/win32/`: the Win32 layer.
   - `desktop.rs`: finds where to draw. Explorer's split desktop has two
     shapes: **Raised** (Windows 11 24H2+: surfaces are layered children
@@ -122,6 +143,13 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     (overlapped I/O on `\\.\pipe\discord-ipc-N`), the bot thread plus a
     websocket-reader thread (`gateway.rs`), and `focus.rs` (raise
     Discord's window after opening a `discord://` link).
+  - `audio.rs`: WASAPI loopback capture of the default speakers on its
+    own thread (event-driven, so it sleeps in silence), reopened when
+    the default device changes. It posts `WM_AUDIO` when sound starts;
+    `app.rs` then runs a 33 ms visualizer timer until the sound stops
+    and the bars are down, and rests it while
+    `SHQueryUserNotificationState` reports a full-screen app. Capture
+    only runs while a layout has a visualizer.
   - `http.rs`: WinHTTP requests and websockets (no TLS library).
     `images.rs`: download + WIC decode on a thread, with retries.
   - `tray.rs`: the notification-area icon (drawn with the canvas at the
@@ -241,3 +269,10 @@ has a section per stick, counted from SMBIOS type 17 entries.
 CPU and network twice a second (23 Oct 2026, same setup): 0.31% CPU
 against 0.20% for everything once a second, measured back to back.
 Reading everything twice a second cost 0.82%.
+
+Visualizer (24 Oct 2026, release build, 45 s runs, PC locked so the
+numbers are noisy): panel only 0.43-0.49% CPU; panel + visualizer in
+silence 0.40% (no frames, audio thread asleep); panel + a test build
+feeding fake music every frame 0.34-0.58%, so the bars cost about 0.1%
+or less. Memory +3.5 MB working set, +1 MB private (Windows audio DLLs,
+3 more threads). Not yet watched live with real music.

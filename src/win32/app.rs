@@ -15,7 +15,10 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::Shell::{
+    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+    SHQueryUserNotificationState, ShellExecuteW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, FindWindowW, GA_ROOT, GW_HWNDNEXT, GetAncestor,
@@ -29,6 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR, w};
 
+use super::audio::AudioTap;
 use super::desktop::{self, DesktopHost, Layout};
 use super::discord::{BotSettings, DiscordLink};
 use super::images::ImageFetcher;
@@ -36,13 +40,15 @@ use super::sensors::Sensors;
 use super::startup;
 use super::surface::{self, Surface};
 use super::tray::{self, Choice, Tray};
+use super::usage::{self, CpuMeter};
 use super::{class_name, monitors, struct_size};
 use crate::args::Options;
 use crate::config::{self, DiscordSettings, MonitorInfo, Settings};
 use crate::discord::session::Credentials;
 use crate::geometry::Rect;
 use crate::log;
-use crate::widgets::Dashboard;
+use crate::pace::{Governor, Level};
+use crate::widgets::{Dashboard, Widget};
 
 /// Window class of the hidden controller window. Also how `--quit` and
 /// the single-instance check find a running copy.
@@ -63,17 +69,21 @@ const EXPLORER_SETTLE_MS: u32 = 2_000;
 /// Timer that takes a sensor reading, refreshes the widgets and checks
 /// the config file for changes.
 const SENSOR_TIMER: usize = 3;
-/// How often sensors are read, in milliseconds: the CPU and network
-/// every time, everything else every [`FULL_READING_EVERY`] ticks.
-const SENSOR_INTERVAL_MS: u32 = 500;
-/// Sensor ticks per full reading (GPUs, RAM, SSDs, config check): once
-/// a second.
-const FULL_READING_EVERY: u32 = 2;
+/// Milliseconds per full reading (GPUs, RAM, SSDs, config check, pace
+/// check): once a second. Sensor ticks between them read only the CPU
+/// and network; how often they come depends on the performance level.
+const FULL_READING_MS: u32 = 1_000;
+/// Wallflex's memory budget (private bytes). Over it, pictures are
+/// dropped and the working set trimmed.
+const MEMORY_BUDGET: u64 = 120 * 1024 * 1024;
 /// Timer for the frames of a glide to a new reading; runs only while
 /// the bars and rings are moving.
 const FRAME_TIMER: usize = 4;
-/// Time between glide frames, in milliseconds (about 30 a second).
-const FRAME_INTERVAL_MS: u32 = 33;
+
+/// Timer for visualizer frames; runs only while sound plays or the bars
+/// are still falling.
+const VISUALIZER_TIMER: usize = 5;
+
 /// Health checks to skip after a failed attempt, so a desktop that won't
 /// split is asked again every 30 seconds rather than every 5.
 const RETRY_SKIP_TICKS: u32 = 5;
@@ -89,6 +99,8 @@ const WM_TRAY: u32 = WM_APP + 4;
 /// Posted by the mouse hook when the pointer moves over (or off) a
 /// widget with hover highlights.
 const WM_DESKTOP_HOVER: u32 = WM_APP + 5;
+/// Posted by the audio thread when sound starts after silence.
+const WM_AUDIO: u32 = WM_APP + 6;
 /// The log's file name, next to the config.
 const LOG_FILE: &str = "wallflex.log";
 /// `ShellExecuteW` results above this mean success.
@@ -144,6 +156,19 @@ struct State {
     last_frame: Option<Instant>,
     /// Sensor ticks so far, to know which are full readings.
     sensor_ticks: u32,
+    /// The audio capture, while a layout has a visualizer.
+    audio: Option<AudioTap>,
+    /// Reused buffer for the latest samples.
+    samples: Vec<f32>,
+    /// The visualizer timer is running.
+    visualizer_running: bool,
+    /// A full-screen app (a game, a video) is in front, so the
+    /// visualizer rests.
+    fullscreen: bool,
+    /// Picks how smoothly to animate.
+    governor: Option<Governor>,
+    /// Wallflex's own CPU use.
+    cpu_meter: CpuMeter,
 }
 
 /// The config file and when it was last loaded.
@@ -320,6 +345,7 @@ pub fn run(
     STATE.with(|state| {
         if let Ok(mut state) = state.try_borrow_mut() {
             state.sensors = Some(Sensors::new());
+            state.governor = Some(Governor::new(settings.performance));
             state.settings = settings;
             state.config = config;
             state.token_path = token_path;
@@ -329,9 +355,11 @@ pub fn run(
     let _ = on_sensor_tick();
 
     rebuild();
+    let level = current_level();
+    apply_level(controller, level);
     // SAFETY: our own window; no callback, so WM_TIMER is posted.
     if unsafe {
-        SetTimer(Some(controller), SENSOR_TIMER, SENSOR_INTERVAL_MS, None)
+        SetTimer(Some(controller), SENSOR_TIMER, level.sensor_ms(), None)
     } == 0
     {
         return Err(windows::core::Error::from_thread().into());
@@ -494,6 +522,10 @@ unsafe extern "system" fn controller_proc(
             }
             return LRESULT(0);
         }
+        WM_AUDIO => {
+            start_visualizer(hwnd);
+            return LRESULT(0);
+        }
         WM_DESKTOP_HOVER => {
             HOVER_PENDING.set(false);
             if let Some(point) = HOVER_AT.take() {
@@ -535,15 +567,23 @@ fn on_timer(hwnd: HWND, timer: usize) {
             set_rebuild_pending(false);
             rebuild();
         }
-        HEALTH_TIMER => on_health_tick(hwnd),
+        HEALTH_TIMER => {
+            on_health_tick(hwnd);
+            check_memory();
+        }
         SENSOR_TIMER => {
-            let reload = on_sensor_tick();
+            let (reload, full) = on_sensor_tick();
             start_frames(hwnd);
+            if full {
+                check_fullscreen(hwnd);
+                check_pace(hwnd);
+            }
             if reload {
                 rebuild();
             }
         }
         FRAME_TIMER => on_frame(hwnd),
+        VISUALIZER_TIMER => on_visualizer_frame(hwnd),
         _ => {}
     }
 }
@@ -616,6 +656,229 @@ fn on_health_tick(hwnd: HWND) {
     }
 }
 
+/// Starts or stops the audio capture: it runs only while a layout has a
+/// visualizer.
+fn apply_audio_settings() {
+    let controller = CONTROLLER.load(Ordering::Acquire);
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let wanted = state.settings.layouts.iter().any(|layout| {
+            layout
+                .widgets
+                .iter()
+                .any(|p| p.widget == Widget::Visualizer)
+        });
+        if wanted && state.audio.is_none() {
+            let notify =
+                HWND(std::ptr::with_exposed_provenance_mut(controller));
+            state.audio = Some(AudioTap::start(notify, WM_AUDIO));
+        } else if !wanted {
+            state.audio = None;
+        }
+    });
+}
+
+/// Sound started: runs the visualizer frames, unless a full-screen app
+/// is in front.
+fn start_visualizer(hwnd: HWND) {
+    let start = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return false;
+        };
+        let start = state.audio.is_some()
+            && !state.fullscreen
+            && !state.visualizer_running;
+        if start {
+            state.visualizer_running = true;
+        }
+        start
+    });
+    if start {
+        let interval = current_level().visualizer_ms();
+        // SAFETY: our own window; no callback, so WM_TIMER is posted. A
+        // failure only means the bars stay still.
+        let _ =
+            unsafe { SetTimer(Some(hwnd), VISUALIZER_TIMER, interval, None) };
+    }
+}
+
+/// One visualizer frame: the latest sound to bars, repainting only the
+/// visualizer. Stops once the sound has stopped and the bars are down.
+fn on_visualizer_frame(hwnd: HWND) {
+    let keep = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return true;
+        };
+        let State {
+            audio,
+            samples,
+            dashboard,
+            surfaces,
+            visualizer_running,
+            ..
+        } = &mut *state;
+        let Some(tap) = audio.as_ref() else {
+            *visualizer_running = false;
+            return false;
+        };
+        let loud = tap.is_loud();
+        let rate = tap.latest(samples);
+        if !loud {
+            // The last sound stays in the buffer; let the bars fall.
+            samples.clear();
+        }
+        dashboard.feed_audio(samples, rate);
+        for surface in surfaces.iter() {
+            surface.invalidate_visualizer();
+        }
+        let keep = loud || !dashboard.visualizer_resting();
+        *visualizer_running = keep;
+        keep
+    });
+    if !keep {
+        // SAFETY: our own timer; failure only means it was already gone.
+        let _ = unsafe { KillTimer(Some(hwnd), VISUALIZER_TIMER) };
+    }
+}
+
+/// Once a second: notes whether a full-screen app is in front. The
+/// visualizer rests while one is, and picks up again afterwards.
+fn check_fullscreen(hwnd: HWND) {
+    // SAFETY: a plain query.
+    let state_now = unsafe { SHQueryUserNotificationState() };
+    let fullscreen = state_now.is_ok_and(|s| {
+        s == QUNS_RUNNING_D3D_FULL_SCREEN
+            || s == QUNS_BUSY
+            || s == QUNS_PRESENTATION_MODE
+    });
+    let (stop, resume) = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return (false, false);
+        };
+        let was = state.fullscreen;
+        state.fullscreen = fullscreen;
+        let stop = fullscreen && state.visualizer_running;
+        if stop {
+            state.visualizer_running = false;
+            state.dashboard.rest_visualizer();
+            for surface in &state.surfaces {
+                surface.invalidate_visualizer();
+            }
+        }
+        let resume = was
+            && !fullscreen
+            && state.audio.as_ref().is_some_and(AudioTap::is_loud);
+        (stop, resume)
+    });
+    if stop {
+        // SAFETY: our own timer; failure only means it was already gone.
+        let _ = unsafe { KillTimer(Some(hwnd), VISUALIZER_TIMER) };
+    }
+    if resume {
+        start_visualizer(hwnd);
+    }
+}
+
+/// The performance level now.
+fn current_level() -> Level {
+    STATE.with(|state| {
+        state
+            .try_borrow()
+            .ok()
+            .map_or(Level::Normal, |s| current_level_of(s.governor.as_ref()))
+    })
+}
+
+/// `governor`'s level, or Normal before it exists.
+fn current_level_of(governor: Option<&Governor>) -> Level {
+    governor.map_or(Level::Normal, Governor::level)
+}
+
+/// The config's performance mode changed: switches the governor.
+fn apply_performance_settings() {
+    let controller = CONTROLLER.load(Ordering::Acquire);
+    let changed = STATE.with(|state| {
+        let mut state = state.try_borrow_mut().ok()?;
+        let mode = state.settings.performance;
+        state.governor.as_mut()?.set_mode(mode)
+    });
+    if let Some(level) = changed {
+        let hwnd = HWND(std::ptr::with_exposed_provenance_mut(controller));
+        log!("performance: {}", level.name());
+        apply_level(hwnd, level);
+    }
+}
+
+/// Once a second: lets the governor step the level up or down for the
+/// PC's load and Wallflex's own CPU use.
+fn check_pace(hwnd: HWND) {
+    let changed = STATE.with(|state| {
+        let mut state = state.try_borrow_mut().ok()?;
+        let own = state.cpu_meter.sample();
+        let system = state.dashboard.cpu_total();
+        state.governor.as_mut()?.tick(system, own)
+    });
+    if let Some(level) = changed {
+        log!("performance: now {}", level.name());
+        apply_level(hwnd, level);
+    }
+}
+
+/// Puts `level` into effect: glide length, sensor rate, and the rate of
+/// any frames already running.
+fn apply_level(hwnd: HWND, level: Level) {
+    let (frames, visualizer) = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return (false, false);
+        };
+        let per_second = FULL_READING_MS
+            .checked_div(level.sensor_ms())
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(1);
+        state.dashboard.set_pace(level.glide(), per_second);
+        (state.dashboard.is_moving(), state.visualizer_running)
+    });
+    // SAFETY: our own window and timers; resetting a timer replaces its
+    // interval. Failures only leave the old rate in place.
+    unsafe {
+        let _ = SetTimer(Some(hwnd), SENSOR_TIMER, level.sensor_ms(), None);
+        if frames {
+            let _ = SetTimer(Some(hwnd), FRAME_TIMER, level.frame_ms(), None);
+        }
+        if visualizer {
+            let _ = SetTimer(
+                Some(hwnd),
+                VISUALIZER_TIMER,
+                level.visualizer_ms(),
+                None,
+            );
+        }
+    }
+}
+
+/// Every few seconds: if Wallflex is over its memory budget, drops the
+/// downloaded pictures and hands unused memory back to Windows.
+fn check_memory() {
+    let Some(private) = usage::private_bytes() else {
+        return;
+    };
+    if private <= MEMORY_BUDGET {
+        return;
+    }
+    log!(
+        "memory: {} MB is over the budget; freeing pictures",
+        private / (1024 * 1024)
+    );
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.dashboard.clear_images();
+        }
+    });
+    usage::trim_working_set();
+}
+
 /// Starts the glide frames if the last reading set the bars and rings
 /// moving.
 fn start_frames(hwnd: HWND) {
@@ -627,11 +890,10 @@ fn start_frames(hwnd: HWND) {
         state.dashboard.is_moving()
     });
     if moving {
+        let interval = current_level().frame_ms();
         // SAFETY: our own window; no callback, so WM_TIMER is posted. A
         // failure only means the bars jump instead of gliding.
-        let _ = unsafe {
-            SetTimer(Some(hwnd), FRAME_TIMER, FRAME_INTERVAL_MS, None)
-        };
+        let _ = unsafe { SetTimer(Some(hwnd), FRAME_TIMER, interval, None) };
     }
 }
 
@@ -664,13 +926,13 @@ fn on_frame(hwnd: HWND) {
     }
 }
 
-/// Takes a sensor reading, repaints the widgets and checks the config
-/// file. Returns whether new settings were loaded (the surfaces need
-/// rebuilding).
-fn on_sensor_tick() -> bool {
+/// Takes a sensor reading, repaints the widgets and, on a full reading,
+/// checks the config file. Returns whether new settings were loaded (the
+/// surfaces need rebuilding) and whether this was a full reading.
+fn on_sensor_tick() -> (bool, bool) {
     STATE.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
-            return false;
+            return (false, false);
         };
         let State {
             sensors,
@@ -679,9 +941,14 @@ fn on_sensor_tick() -> bool {
             settings,
             config,
             sensor_ticks,
+            governor,
             ..
         } = &mut *state;
-        let full = sensor_ticks.is_multiple_of(FULL_READING_EVERY);
+        let per_full = FULL_READING_MS
+            .checked_div(current_level_of(governor.as_ref()).sensor_ms())
+            .unwrap_or(1)
+            .max(1);
+        let full = sensor_ticks.is_multiple_of(per_full);
         *sensor_ticks = sensor_ticks.wrapping_add(1);
         if let Some(sensors) = sensors.as_mut() {
             if full {
@@ -697,14 +964,14 @@ fn on_sensor_tick() -> bool {
             }
         }
         if !full {
-            return false;
+            return (false, false);
         }
         match config.as_mut().and_then(ConfigFile::reload_if_changed) {
             Some(new) => {
                 *settings = new;
-                true
+                (true, true)
             }
-            None => false,
+            None => (false, true),
         }
     })
 }
@@ -768,6 +1035,8 @@ fn take_surfaces() -> Vec<Surface> {
 fn rebuild() {
     drop(take_surfaces());
     apply_discord_settings();
+    apply_audio_settings();
+    apply_performance_settings();
     let Some(settings) = STATE.with(|state| {
         state.try_borrow().ok().map(|state| state.settings.clone())
     }) else {

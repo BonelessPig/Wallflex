@@ -42,6 +42,9 @@ pub struct Cpu {
     pub total: Option<f64>,
     /// Use per logical processor, 0 to 100%, in processor order.
     pub per_core: Vec<f64>,
+    /// Which logical processors make up each physical core, in core
+    /// order (from Windows; empty if unknown).
+    pub cores: Vec<Vec<usize>>,
     /// Average current clock, in GHz.
     pub clock_ghz: Option<f64>,
 }
@@ -183,25 +186,116 @@ pub fn cpu_clock_ghz(
         .then(|| nominal_mhz * performance_percent / PERCENT_MAX / MHZ_PER_GHZ)
 }
 
-/// Splits `\Processor(*)` counter values into the total and the
-/// per-processor values in processor order. Values are capped to
-/// 0..=100%.
-pub fn split_processors<I>(items: I) -> (Option<f64>, Vec<f64>)
+/// Puts `\Processor(*)` counter values into `loads` by processor
+/// number, capped to 0..=100%, and returns the whole-CPU value.
+/// Processors missing from this reading keep their last value, so a
+/// skipped instance never shifts the others; `loads` only grows.
+pub fn processor_loads<I>(items: I, loads: &mut Vec<f64>) -> Option<f64>
 where
     I: IntoIterator<Item = (String, f64)>,
 {
     let mut total = None;
-    let mut cores: Vec<(u32, f64)> = Vec::new();
     for (name, value) in items {
         let value = value.clamp(0.0, PERCENT_MAX);
         if name == TOTAL_INSTANCE {
             total = Some(value);
-        } else if let Ok(index) = name.parse::<u32>() {
-            cores.push((index, value));
+        } else if let Ok(index) = name.parse::<usize>() {
+            if index >= loads.len() && index < MAX_PROCESSORS {
+                loads.resize(index.saturating_add(1), 0.0);
+            }
+            if let Some(slot) = loads.get_mut(index) {
+                *slot = value;
+            }
         }
     }
-    cores.sort_by_key(|&(index, _)| index);
-    (total, cores.into_iter().map(|(_, value)| value).collect())
+    total
+}
+
+/// More logical processors than any PC this runs on has; guards
+/// against a nonsense instance name.
+const MAX_PROCESSORS: usize = 1_024;
+/// `RelationProcessorCore` in `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX`.
+const RELATION_PROCESSOR_CORE: u32 = 0;
+/// Offsets in a `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` core record:
+/// its size, its group count, and its first `GROUP_AFFINITY`.
+const RECORD_SIZE_AT: usize = 4;
+/// See [`RECORD_SIZE_AT`].
+const GROUP_COUNT_AT: usize = 30;
+/// See [`RECORD_SIZE_AT`].
+const GROUP_MASKS_AT: usize = 32;
+/// Size of a `GROUP_AFFINITY`: mask (8 bytes), group (2), padding (6).
+const GROUP_AFFINITY_SIZE: usize = 16;
+/// Where the group number sits in a `GROUP_AFFINITY`.
+const GROUP_NUMBER_AT: usize = 8;
+/// Logical processors per processor group.
+const PROCESSORS_PER_GROUP: usize = 64;
+
+/// The logical processors of each physical core, from the raw output of
+/// `GetLogicalProcessorInformationEx(RelationProcessorCore)`. Cores come
+/// in order of their first processor; a core with two threads lists
+/// two, a single-threaded (efficiency) core one.
+pub fn cores_from_topology(raw: &[u8]) -> Vec<Vec<usize>> {
+    let mut cores = Vec::new();
+    let mut at = 0_usize;
+    while let Some(size) = read_u32(raw, at.saturating_add(RECORD_SIZE_AT)) {
+        let Ok(size) = usize::try_from(size) else {
+            break;
+        };
+        if size == 0 {
+            break;
+        }
+        if read_u32(raw, at) == Some(RELATION_PROCESSOR_CORE) {
+            let threads = core_threads(raw, at);
+            if !threads.is_empty() {
+                cores.push(threads);
+            }
+        }
+        at = at.saturating_add(size);
+    }
+    cores.sort_by_key(|threads: &Vec<usize>| threads.first().copied());
+    cores
+}
+
+/// The logical processors in the core record at `at`.
+fn core_threads(raw: &[u8], at: usize) -> Vec<usize> {
+    let groups = read_u16(raw, at.saturating_add(GROUP_COUNT_AT)).unwrap_or(0);
+    let mut threads = Vec::new();
+    for group in 0..usize::from(groups) {
+        let base = at
+            .saturating_add(GROUP_MASKS_AT)
+            .saturating_add(group.saturating_mul(GROUP_AFFINITY_SIZE));
+        let mask = read_u64(raw, base).unwrap_or(0);
+        let number = read_u16(raw, base.saturating_add(GROUP_NUMBER_AT))
+            .map_or(0, usize::from);
+        let first = number.saturating_mul(PROCESSORS_PER_GROUP);
+        for bit in 0..PROCESSORS_PER_GROUP {
+            if mask
+                .checked_shr(u32::try_from(bit).unwrap_or(u32::MAX))
+                .is_some_and(|m| m & 1 == 1)
+            {
+                threads.push(first.saturating_add(bit));
+            }
+        }
+    }
+    threads
+}
+
+/// A little-endian `u16` at `at`, if there.
+fn read_u16(raw: &[u8], at: usize) -> Option<u16> {
+    let bytes = raw.get(at..at.checked_add(2)?)?;
+    Some(u16::from_le_bytes(bytes.try_into().ok()?))
+}
+
+/// A little-endian `u32` at `at`, if there.
+fn read_u32(raw: &[u8], at: usize) -> Option<u32> {
+    let bytes = raw.get(at..at.checked_add(4)?)?;
+    Some(u32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+/// A little-endian `u64` at `at`, if there.
+fn read_u64(raw: &[u8], at: usize) -> Option<u64> {
+    let bytes = raw.get(at..at.checked_add(8)?)?;
+    Some(u64::from_le_bytes(bytes.try_into().ok()?))
 }
 
 /// Throughput in kilobits per second between two readings of a byte
@@ -323,9 +417,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        composite_temperature, cpu_clock_ghz, gpu_usage_by_luid,
-        has_seek_penalty, luid_from_instance, luid_key, memory_modules,
-        product_name, rate_kbps, split_processors, vram_by_luid,
+        composite_temperature, cores_from_topology, cpu_clock_ghz,
+        gpu_usage_by_luid, has_seek_penalty, luid_from_instance, luid_key,
+        memory_modules, processor_loads, product_name, rate_kbps, vram_by_luid,
     };
 
     /// A memory device structure (type 17) with `size`, and one string.
@@ -385,9 +479,53 @@ mod tests {
     fn processors_sorted_numerically_and_capped() {
         let items = [("10", 5.0), ("_Total", 40.0), ("2", 150.0), ("1", -1.0)]
             .map(|(n, v)| (n.to_owned(), v));
-        let (total, cores) = split_processors(items);
+        let mut loads = Vec::new();
+        let total = processor_loads(items, &mut loads);
         assert_eq!(total, Some(40.0));
-        assert_eq!(cores, vec![0.0, 100.0, 5.0]);
+        assert_eq!(loads[..3], [0.0, 0.0, 100.0]);
+        assert_eq!(loads.len(), 11);
+        assert!(close(loads[10], 5.0));
+        // A reading missing processor 10 leaves it where it was.
+        let next = [("2", 30.0)].map(|(n, v)| (n.to_owned(), v));
+        let _ = processor_loads(next, &mut loads);
+        assert!(close(loads[10], 5.0) && close(loads[2], 30.0));
+        assert_eq!(loads.len(), 11);
+    }
+
+    /// A core record with `masks` (group, mask) as Windows lays it out:
+    /// relationship and size, flags and padding to byte 30, the group
+    /// count, then 16 bytes per group (mask, group number, padding).
+    fn core_record(masks: &[(u16, u64)]) -> Vec<u8> {
+        let mut groups = Vec::new();
+        for (group, mask) in masks {
+            groups.extend_from_slice(&mask.to_le_bytes());
+            groups.extend_from_slice(&group.to_le_bytes());
+            groups.extend_from_slice(&[0; 6]);
+        }
+        let size =
+            u32::try_from(groups.len().checked_add(32).unwrap()).unwrap();
+        let mut r = vec![0_u8; 4];
+        r.extend_from_slice(&size.to_le_bytes());
+        r.extend_from_slice(&[0; 22]);
+        r.extend_from_slice(&u16::try_from(masks.len()).unwrap().to_le_bytes());
+        r.extend(groups);
+        r
+    }
+
+    #[test]
+    fn reads_the_core_layout() {
+        // Two two-thread cores (given out of order) and one efficiency
+        // core with a single thread.
+        let mut raw = core_record(&[(0, 0b1100)]);
+        raw.extend(core_record(&[(0, 0b0011)]));
+        raw.extend(core_record(&[(0, 0b1_0000)]));
+        assert_eq!(
+            cores_from_topology(&raw),
+            vec![vec![0, 1], vec![2, 3], vec![4]]
+        );
+        let none: Vec<Vec<usize>> = Vec::new();
+        assert_eq!(cores_from_topology(&[]), none);
+        assert_eq!(cores_from_topology(&raw[..20]), none);
     }
 
     #[test]

@@ -138,6 +138,11 @@ impl Painter {
         self.rects_of(|widget| dashboard.moving_areas(widget))
     }
 
+    /// Where the visualizer is, in client pixels.
+    pub fn visualizer_rects(&self) -> Vec<RECT> {
+        self.rects_of(Dashboard::visualizer_areas)
+    }
+
     /// The areas a quick reading (CPU and network) changes, in client
     /// pixels.
     pub fn quick_rects(&self) -> Vec<RECT> {

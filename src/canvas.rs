@@ -104,6 +104,26 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Fills `area` with a colour that changes down it: `paint_at`
+    /// gets each pixel row's centre (y, in pixels).
+    pub fn fill_rect_rows(
+        &mut self,
+        area: Area,
+        paint_at: impl Fn(f64) -> Paint,
+    ) {
+        let (rows, cols) =
+            (self.span_y(area.y0, area.y1), self.span_x(area.x0, area.x1));
+        for y in rows {
+            let centre = index_to_f64(y) + HALF;
+            let paint = paint_at(centre);
+            let cover_y = overlap(index_to_f64(y), area.y0, area.y1);
+            for x in cols.clone() {
+                let cover_x = overlap(index_to_f64(x), area.x0, area.x1);
+                self.blend(x, y, paint, cover_x * cover_y);
+            }
+        }
+    }
+
     /// Fills `area`, smoothing fractional edges.
     pub fn fill_rect(&mut self, area: Area, paint: Paint) {
         let (rows, cols) =

@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::color::Rgb;
 use crate::geometry::Rect;
+use crate::pace::Mode;
 use crate::widgets::Widget;
 
 /// The commented default config, written on first run.
@@ -27,6 +28,8 @@ pub struct Settings {
     pub layouts: Vec<Layout>,
     /// Discord, if set up.
     pub discord: Option<DiscordSettings>,
+    /// How smoothly to animate.
+    pub performance: Mode,
 }
 
 /// The `[discord]` section: your Discord application's details.
@@ -241,6 +244,7 @@ impl Default for Settings {
                 }],
             }],
             discord: None,
+            performance: Mode::Smooth,
         }
     }
 }
@@ -268,6 +272,8 @@ struct RawConfig {
     layout: Vec<RawLayout>,
     /// `[discord]` table.
     discord: Option<RawDiscord>,
+    /// `"smooth"` or `"light"`.
+    performance: Option<String>,
 }
 
 /// `[discord]` as written.
@@ -342,10 +348,20 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         .map(parse_discord)
         .transpose()
         .map_err(|e| ConfigError(format!("discord: {e}")))?;
+    let performance = match raw.performance.as_deref() {
+        None | Some("smooth") => Mode::Smooth,
+        Some("light") => Mode::Light,
+        Some(other) => {
+            return Err(ConfigError(format!(
+                "performance: '{other}' isn't \"smooth\" or \"light\""
+            )));
+        }
+    };
     Ok(Settings {
         background,
         layouts,
         discord,
+        performance,
     })
 }
 
@@ -408,6 +424,7 @@ fn parse_widget(raw: &RawWidget) -> Result<Placement, String> {
         ("gpus", None) => Widget::Gpus,
         ("info", None) => Widget::Info,
         ("discord", None) => Widget::Discord,
+        ("visualizer", None) => Widget::Visualizer,
         ("gpu", Some(number)) if number >= 1 => {
             let index = number.saturating_sub(1);
             Widget::Gpu(usize::try_from(index).map_err(|e| e.to_string())?)

@@ -127,6 +127,7 @@ mod tests {
                 total: Some(17.1),
                 per_core: vec![23.9, 5.0],
                 clock_ghz: Some(4.351),
+                cores: vec![vec![0, 1]],
             },
             memory: Some(Memory {
                 used_bytes: 1 << 30,

@@ -19,9 +19,9 @@ Options:
                     save the widgets as a BMP, as they'd look on a
                     monitor HEIGHT pixels tall, then exit
   --widget <KIND>   the widget --preview draws: panel (default), cpu,
-                    network, gpus, info, discord, discord-avatars
-                    or discord-inbox (the Discord ones with sample
-                    data)
+                    network, gpus, info, discord, discord-avatars,
+                    discord-inbox or visualizer (the last four with
+                    sample data)
   --diagnose        print how the desktop windows are laid out, then exit
   --quit            stop the running copy of Wallflex
   -h, --help        show this help";
@@ -81,6 +81,8 @@ pub enum PreviewWidget {
     DiscordAvatars,
     /// Discord's INBOX page with sample notifications.
     DiscordInbox,
+    /// The music visualizer with sample bars.
+    Visualizer,
 }
 
 impl Default for Options {
@@ -182,6 +184,7 @@ where
                     "discord" => PreviewWidget::Discord,
                     "discord-avatars" => PreviewWidget::DiscordAvatars,
                     "discord-inbox" => PreviewWidget::DiscordInbox,
+                    "visualizer" => PreviewWidget::Visualizer,
                     _ => {
                         return Err(ArgError::BadValue {
                             option: "--widget",

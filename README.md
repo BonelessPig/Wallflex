@@ -14,7 +14,9 @@ layout per monitor and updated once a second:
 plus RAM use and SSD temperatures, and an optional **Discord** widget:
 your call (who's talking, muted, deafened, on camera, sharing), recent
 notifications (click one to open it in Discord), a server's voice
-channels, and which friends are online and what they're playing. Sizes
+channels, and which friends are online and what they're playing, plus
+an optional music **visualizer** (`kind = "visualizer"`): 32 bars for
+whatever your speakers are playing, drawn only while sound plays. Sizes
 follow the monitor's height, so the widgets look the same on any
 resolution.
 
@@ -55,6 +57,11 @@ save. It sets:
   as `3440x1440`, or a name such as `DISPLAY2`);
 - each widget's corner or edge and its distance from it, measured from
   the area the taskbar leaves free, plus an overall size per layout.
+
+`performance = "smooth"` (the default) animates at up to 60 frames a
+second while the PC has room and eases off when it's busy;
+`performance = "light"` turns the glides off and reads sensors once a
+second. Either way Wallflex holds itself under 2% CPU and 120 MB.
 
 If the file has a mistake, Wallflex keeps the previous settings and
 explains the problem in `%APPDATA%\Wallflex\wallflex.log`.

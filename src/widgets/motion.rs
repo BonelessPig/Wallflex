@@ -1,10 +1,11 @@
 //! Smooth movement for the bars and rings: after each reading they glide
-//! from where they were drawn to the new values over [`GLIDE`], easing
+//! from where they were drawn to the new values over the glide time (set
+//! by the performance level; none means they jump), easing
 //! out, then stop. Text isn't animated; it shows the reading at once.
 
 use std::time::Duration;
 
-/// How long a glide to a new reading takes.
+/// How long a glide takes unless told otherwise.
 pub const GLIDE: Duration = Duration::from_millis(300);
 
 /// The animated values: how full each bar and ring is.
@@ -44,6 +45,8 @@ pub struct Motion {
     from: Levels,
     /// How far along it is, 0 to 1 (1 = settled).
     progress: f64,
+    /// How long a glide takes; `None` means bars jump.
+    glide: Option<Duration>,
 }
 
 impl Default for Motion {
@@ -51,6 +54,7 @@ impl Default for Motion {
         Self {
             from: Levels::default(),
             progress: 1.0,
+            glide: Some(GLIDE),
         }
     }
 }
@@ -59,7 +63,16 @@ impl Motion {
     /// Starts a new glide from `shown`, what's on screen now.
     pub fn restart(&mut self, shown: Levels) {
         self.from = shown;
-        self.progress = 0.0;
+        self.progress = if self.glide.is_some() { 0.0 } else { 1.0 };
+    }
+
+    /// Sets how long glides take; `None` makes bars jump (and ends any
+    /// glide under way).
+    pub fn set_glide(&mut self, glide: Option<Duration>) {
+        self.glide = glide;
+        if glide.is_none() {
+            self.settle();
+        }
     }
 
     /// Ends any glide: the next draw shows the target.
@@ -70,7 +83,10 @@ impl Motion {
     /// Moves the glide on by `elapsed`. Returns whether it's still
     /// moving.
     pub fn advance(&mut self, elapsed: Duration) -> bool {
-        let step = elapsed.as_secs_f64() / GLIDE.as_secs_f64();
+        let step = self
+            .glide
+            .filter(|g| !g.is_zero())
+            .map_or(1.0, |g| elapsed.as_secs_f64() / g.as_secs_f64());
         self.progress = (self.progress + step).min(1.0);
         self.is_moving()
     }
@@ -135,6 +151,15 @@ mod tests {
         assert!(half.ram > 0.5 && half.ram < 1.0);
         assert!(!motion.advance(GLIDE));
         assert_eq!(motion.shown(&target), target);
+    }
+
+    #[test]
+    fn no_glide_jumps() {
+        let mut motion = Motion::default();
+        motion.set_glide(None);
+        motion.restart(levels(0.0, 0.0));
+        assert!(!motion.is_moving());
+        assert_eq!(motion.shown(&levels(90.0, 1.0)), levels(90.0, 1.0));
     }
 
     #[test]

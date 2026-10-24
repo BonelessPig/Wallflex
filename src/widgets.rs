@@ -8,6 +8,7 @@
 
 mod discord;
 mod motion;
+mod visualizer;
 
 pub use discord::{Action, Demo};
 
@@ -70,6 +71,8 @@ const CPU_FILL_INSET: f64 = 2.0;
 /// Windows numbers a core's two threads next to each other.
 const THREADS_PER_CORE: usize = 2;
 
+/// Network readings a second at most (the graph's resolution).
+const NET_READINGS_PER_SECOND: usize = 2;
 /// Network: samples kept (a minute at two a second).
 pub const NET_SPAN: usize = 120;
 /// Network: plot top, inside the graph.
@@ -230,6 +233,8 @@ pub enum Widget {
     Info,
     /// Discord: your call, notifications and more.
     Discord,
+    /// Music visualizer: bars for what's playing.
+    Visualizer,
 }
 
 /// Room around a moving part, so its smoothed edges repaint too.
@@ -297,6 +302,11 @@ pub struct Dashboard {
     discord: discord::DiscordUi,
     /// The bars' and rings' glide to the latest reading.
     motion: motion::Motion,
+    /// The music visualizer's bars.
+    visualizer: visualizer::Visualizer,
+    /// Network readings per sample kept: 2 when readings come once a
+    /// second, so the graph still spans a minute.
+    net_copies: usize,
 }
 
 impl Dashboard {
@@ -304,10 +314,12 @@ impl Dashboard {
     pub fn update(&mut self, snapshot: Snapshot) {
         let before = self.shown();
         if let Some(network) = snapshot.network {
-            if self.net.len() >= NET_SPAN {
-                let _oldest = self.net.pop_front();
+            for _ in 0..self.net_copies.max(1) {
+                if self.net.len() >= NET_SPAN {
+                    let _oldest = self.net.pop_front();
+                }
+                self.net.push_back(network);
             }
-            self.net.push_back(network);
         }
         self.snapshot = snapshot;
         if before == self.target() {
@@ -328,9 +340,69 @@ impl Dashboard {
         self.motion.is_moving()
     }
 
+    /// Sets how long bars and rings glide (`None`: they jump) and how
+    /// many readings a second arrive (for the network graph's span).
+    pub fn set_pace(
+        &mut self,
+        glide: Option<Duration>,
+        readings_per_second: usize,
+    ) {
+        self.motion.set_glide(glide);
+        let per_second = readings_per_second.clamp(1, NET_READINGS_PER_SECOND);
+        self.net_copies =
+            NET_READINGS_PER_SECOND.checked_div(per_second).unwrap_or(1);
+    }
+
+    /// The whole PC's CPU use in the latest reading (%).
+    pub fn cpu_total(&self) -> Option<f64> {
+        self.snapshot.cpu.total
+    }
+
+    /// Drops downloaded pictures (to free memory); they're fetched again
+    /// when needed.
+    pub fn clear_images(&mut self) {
+        self.discord.clear_images();
+    }
+
     /// Jumps straight to the latest reading (for `--preview`).
     pub fn settle(&mut self) {
         self.motion.settle();
+    }
+
+    /// One visualizer frame from the latest audio (mono, newest last, at
+    /// `rate` Hz).
+    pub fn feed_audio(&mut self, samples: &[f32], rate: u32) {
+        self.visualizer.feed(samples, rate);
+    }
+
+    /// Whether the visualizer's bars have come to rest.
+    pub fn visualizer_resting(&self) -> bool {
+        self.visualizer.is_resting()
+    }
+
+    /// Drops the visualizer's bars at once.
+    pub fn rest_visualizer(&mut self) {
+        self.visualizer.rest();
+    }
+
+    /// The parts of `widget` the visualizer's frames change, in its
+    /// units: a visualizer's bars (not its labels), nothing elsewhere.
+    pub fn visualizer_areas(widget: Widget) -> Vec<Area> {
+        if widget == Widget::Visualizer {
+            vec![Area {
+                x0: 0.0,
+                y0: 0.0,
+                x1: visualizer::width(),
+                y1: visualizer::HEIGHT,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Sample visualizer bars, for `--preview`.
+    pub fn show_visualizer_demo(&mut self) {
+        self.visualizer.show_demo();
     }
 
     /// The bars' and rings' values in the latest reading.
@@ -379,9 +451,11 @@ impl Dashboard {
             ],
             Widget::Cpu => vec![cpu],
             Widget::Network => vec![net],
-            Widget::Gpus | Widget::Gpu(_) | Widget::Info | Widget::Discord => {
-                Vec::new()
-            }
+            Widget::Gpus
+            | Widget::Gpu(_)
+            | Widget::Info
+            | Widget::Discord
+            | Widget::Visualizer => Vec::new(),
         }
     }
 
@@ -401,7 +475,7 @@ impl Dashboard {
                 areas.push(shift(ram_bar_area(), self.panel_info_top()));
             }
             Widget::Cpu => areas.push(cpu_columns_area()),
-            Widget::Network | Widget::Discord => {}
+            Widget::Network | Widget::Discord | Widget::Visualizer => {}
             Widget::Gpus => {
                 areas.extend((0..gpus).map(|i| ring_area(gpu_grid_spot(i))));
             }
@@ -431,6 +505,9 @@ impl Dashboard {
                 }
             }
             Widget::Info => (PANEL_W, INFO_H),
+            Widget::Visualizer => {
+                (visualizer::width(), visualizer::total_height())
+            }
             Widget::Discord => self.discord.size(),
         }
     }
@@ -471,6 +548,7 @@ impl Dashboard {
                 }
             }
             Widget::Info => self.draw_info(&mut pen),
+            Widget::Visualizer => self.visualizer.draw(&mut pen),
             Widget::Discord => self.discord.draw(&mut pen),
         }
         Drawing {
@@ -579,12 +657,8 @@ impl Dashboard {
             );
             return;
         }
-        let per_core = if threads.is_multiple_of(THREADS_PER_CORE) {
-            THREADS_PER_CORE
-        } else {
-            1
-        };
-        let cores = cpu.per_core.chunks(per_core).count();
+        let layout = core_layout(&cpu.cores, threads);
+        let cores = layout.len();
         let clock = cpu
             .clock_ghz
             .map_or_else(String::new, |ghz| format!("{ghz:.2} GHZ · "));
@@ -600,13 +674,15 @@ impl Dashboard {
         let levels = self.shown();
         let core_n = count_to_f64(cores);
         let core_w = (COLUMN_W - CPU_CORE_GAP * (core_n - 1.0)) / core_n;
-        let per_core_n = count_to_f64(per_core);
-        let col_w = (core_w - CPU_PAIR_GAP * (per_core_n - 1.0)) / per_core_n;
         let col_h = cpu_column_height();
 
-        for (core, loads) in (1_u32..).zip(levels.cores.chunks(per_core)) {
+        for (core, group) in (1_u32..).zip(&layout) {
             let core_x = (f64::from(core) - 1.0) * (core_w + CPU_CORE_GAP);
-            for (thread, load) in (0_u32..).zip(loads) {
+            let per_core_n = count_to_f64(group.len());
+            let col_w =
+                (core_w - CPU_PAIR_GAP * (per_core_n - 1.0)) / per_core_n;
+            for (thread, &index) in (0_u32..).zip(group) {
+                let load = levels.cores.get(index).copied().unwrap_or(0.0);
                 let x = core_x + f64::from(thread) * (col_w + CPU_PAIR_GAP);
                 let column = Area {
                     x0: x,
@@ -970,6 +1046,26 @@ pub fn format_rate(kbps: f64) -> String {
 /// Width of the panel: two widget columns and the gap.
 const PANEL_W: f64 = COLUMN_W * 2.0 + COLUMN_GAP;
 
+/// How to group `threads` columns into cores: Windows' layout when it
+/// fits the readings, else pairs (or singles for an odd count).
+fn core_layout(cores: &[Vec<usize>], threads: usize) -> Vec<Vec<usize>> {
+    let fits = !cores.is_empty()
+        && cores.iter().flatten().all(|&index| index < threads);
+    if fits {
+        return cores.to_vec();
+    }
+    let per_core = if threads.is_multiple_of(THREADS_PER_CORE) {
+        THREADS_PER_CORE
+    } else {
+        1
+    };
+    (0..threads)
+        .collect::<Vec<_>>()
+        .chunks(per_core)
+        .map(<[usize]>::to_vec)
+        .collect()
+}
+
 /// Where GPU `index`'s chart goes (top-left of its rings) when the
 /// charts are laid out two per row.
 fn gpu_grid_spot(index: usize) -> (f64, f64) {
@@ -1162,6 +1258,17 @@ impl Pen<'_, '_> {
     fn fill(&mut self, area: Area, paint: Paint) {
         let area = self.px(area);
         self.canvas.fill_rect(area, paint);
+    }
+
+    /// Fills an area with a colour that changes down it: `color_at`
+    /// gets each row's height in units.
+    fn fill_shaded(&mut self, area: Area, color_at: impl Fn(f64) -> Rgb) {
+        let px = self.px(area);
+        let (scale, oy) = (self.scale, self.origin.1);
+        self.canvas.fill_rect_rows(px, |y| Paint {
+            color: color_at(y / scale - oy),
+            alpha: 1.0,
+        });
     }
 
     /// Outlines an area in ink at `alpha`.
@@ -1497,6 +1604,7 @@ mod tests {
                 total: Some(10.0),
                 per_core: vec![10.0; 12],
                 clock_ghz: Some(4.3),
+                cores: Vec::new(),
             },
             gpus: vec![Gpu {
                 name: "NVIDIA GeForce RTX 2080".into(),

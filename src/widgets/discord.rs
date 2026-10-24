@@ -485,6 +485,12 @@ impl DiscordUi {
         wanted
     }
 
+    /// Drops every downloaded picture; they're asked for again.
+    pub fn clear_images(&mut self) {
+        self.images.clear();
+        self.asked.clear();
+    }
+
     /// Keeps a downloaded picture.
     pub fn add_image(&mut self, url: String, image: Image) {
         if self.images.len() >= MAX_IMAGES {
