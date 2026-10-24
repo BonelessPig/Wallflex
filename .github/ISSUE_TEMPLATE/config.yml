@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup guide
+    url: https://github.com/BonelessPig/Wallflex/blob/main/docs/SETUP.md
+    about: Installing, settings, layouts and Discord setup.
+  - name: Report a security problem
+    url: https://github.com/BonelessPig/Wallflex/security/advisories/new
+    about: Please report vulnerabilities privately, not as issues.
