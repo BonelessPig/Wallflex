@@ -271,6 +271,20 @@ impl Painter {
         let _ = unsafe { EndPaint(hwnd, &raw const ps) };
     }
 
+    /// Whether this monitor's layout places any widgets.
+    pub fn has_widgets(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
+    /// Frees the widget buffers and fonts. The next paint makes them
+    /// again (and redraws each widget whole).
+    pub fn release_buffers(&mut self) {
+        for slot in &mut self.slots {
+            slot.buffer = None;
+        }
+        self.fonts = Fonts::default();
+    }
+
     /// What a click at `point` (client pixels) would do, if anything.
     pub fn hit_test(&self, (x, y): (i32, i32)) -> Option<Action> {
         self.slots.iter().rev().find_map(|slot| {

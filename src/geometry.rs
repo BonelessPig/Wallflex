@@ -52,6 +52,22 @@ impl Rect {
         })
     }
 
+    /// Whether this rectangle covers every pixel of `other`.
+    pub fn covers(self, other: Self) -> bool {
+        self.left <= other.left
+            && self.top <= other.top
+            && self.right >= other.right
+            && self.bottom >= other.bottom
+    }
+
+    /// The pixel in the middle (rounded up and left).
+    pub fn center(self) -> Point {
+        Point {
+            x: self.left.saturating_add(self.width() / 2),
+            y: self.top.saturating_add(self.height() / 2),
+        }
+    }
+
     /// The same rectangle measured from `origin` instead of from the
     /// desktop's (0, 0). Used to turn a monitor's desktop position into a
     /// position inside a parent window whose top-left is at `origin`.
@@ -134,5 +150,29 @@ mod tests {
                 bottom: 1440,
             }
         );
+    }
+
+    #[test]
+    fn covers_only_whole_rectangles() {
+        let full = UPPER;
+        let bigger = Rect {
+            left: 0,
+            top: -1500,
+            right: 4000,
+            bottom: 10,
+        };
+        let short = Rect {
+            bottom: -40,
+            ..UPPER
+        };
+        assert!(full.covers(UPPER));
+        assert!(bigger.covers(UPPER));
+        assert!(!short.covers(UPPER));
+        assert!(!UPPER.covers(bigger));
+    }
+
+    #[test]
+    fn finds_the_middle() {
+        assert_eq!(UPPER.center(), Point { x: 1946, y: -720 });
     }
 }

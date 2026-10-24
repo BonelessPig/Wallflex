@@ -72,9 +72,12 @@ save. It sets:
   the area the taskbar leaves free, plus an overall size per layout.
 
 `performance = "smooth"` (the default) animates at up to 60 frames a
-second while the PC has room and eases off when it's busy;
+second until the PC is 80% busy, then drops to light;
 `performance = "light"` turns the glides off and reads sensors once a
-second. Either way Wallflex holds itself under 2% CPU and 120 MB.
+second. Either way Wallflex holds itself under 2% CPU and 120 MB. In
+light mode, monitors hidden by a full-screen game or video stop
+drawing, and with every widget hidden Wallflex sleeps until one shows
+again.
 
 If the file has a mistake, Wallflex keeps the previous settings and
 explains the problem in `%APPDATA%\Wallflex\wallflex.log`.

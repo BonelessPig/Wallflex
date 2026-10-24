@@ -80,6 +80,11 @@ const FRAME_TIMER: usize = 4;
 /// Timer for visualizer frames; runs only while sound plays or the bars
 /// are still falling.
 const VISUALIZER_TIMER: usize = 5;
+/// Timer id for checking, while asleep, whether a widget is visible
+/// again.
+const WAKE_TIMER: usize = 6;
+/// How often to check that, in milliseconds.
+const WAKE_CHECK_MS: u32 = 1_000;
 
 /// Health checks to skip after a failed attempt, so a desktop that won't
 /// split is asked again every 30 seconds rather than every 5.
@@ -117,6 +122,17 @@ static OPTIONS: OnceLock<Options> = OnceLock::new();
 static CONTROLLER: AtomicUsize = AtomicUsize::new(0);
 /// Message id Explorer broadcasts when it (re)starts.
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+
+/// Whether Wallflex is asleep.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Sleep {
+    /// Running as usual.
+    #[default]
+    Awake,
+    /// Every monitor with widgets is resting behind a full-screen
+    /// window, so sensors, sound and frames are stopped.
+    Asleep,
+}
 
 /// What the controller owns. Lives on the UI thread only.
 #[derive(Default)]
@@ -166,6 +182,8 @@ struct State {
     /// A full-screen app (a game, a video) is in front, so the
     /// visualizer rests.
     fullscreen: bool,
+    /// Whether everything is stopped while the widgets are hidden.
+    sleep: Sleep,
     /// Picks how smoothly to animate.
     governor: Option<Governor>,
     /// Wallflex's own CPU use.
@@ -376,7 +394,8 @@ pub fn diagnose() -> String {
 }
 
 /// Paints the surface whose window is `hwnd`. Returns whether it was
-/// found (it isn't while being created or during a rebuild).
+/// painted: not while it's being created, during a rebuild, or while it
+/// rests (the default handler then just validates it).
 pub(super) fn paint_surface(hwnd: HWND) -> bool {
     STATE.with(|state| {
         let Ok(mut state) = state.try_borrow_mut() else {
@@ -388,7 +407,7 @@ pub(super) fn paint_surface(hwnd: HWND) -> bool {
             ..
         } = &mut *state;
         let found = surfaces.iter_mut().find(|s| s.hwnd() == hwnd);
-        let painted = found.map(|surface| surface.paint(dashboard)).is_some();
+        let painted = found.is_some_and(|surface| surface.paint(dashboard));
         if painted {
             let zones =
                 surfaces.iter().flat_map(Surface::hover_zones).collect();
@@ -568,6 +587,7 @@ fn on_timer(hwnd: HWND, timer: usize) {
             if full {
                 check_fullscreen(hwnd);
                 check_pace(hwnd);
+                check_cover(hwnd);
             }
             if reload {
                 rebuild();
@@ -575,6 +595,7 @@ fn on_timer(hwnd: HWND, timer: usize) {
         }
         FRAME_TIMER => on_frame(hwnd),
         VISUALIZER_TIMER => on_visualizer_frame(hwnd),
+        WAKE_TIMER => check_cover(hwnd),
         _ => {}
     }
 }
@@ -655,12 +676,13 @@ fn apply_audio_settings() {
         let Ok(mut state) = state.try_borrow_mut() else {
             return;
         };
-        let wanted = state.settings.layouts.iter().any(|layout| {
-            layout
-                .widgets
-                .iter()
-                .any(|p| p.widget == Widget::Visualizer)
-        });
+        let wanted = state.sleep == Sleep::Awake
+            && state.settings.layouts.iter().any(|layout| {
+                layout
+                    .widgets
+                    .iter()
+                    .any(|p| p.widget == Widget::Visualizer)
+            });
         if wanted && state.audio.is_none() {
             let notify =
                 HWND(std::ptr::with_exposed_provenance_mut(controller));
@@ -768,12 +790,13 @@ fn check_fullscreen(hwnd: HWND) {
         };
         // Only a window covering a monitor that shows the visualizer
         // hides it; a full-screen video on another monitor doesn't.
-        let fullscreen = front.is_some_and(|window| {
-            state
-                .surfaces
-                .iter()
-                .any(|s| s.visualizer_hidden_by(window))
-        });
+        let fullscreen =
+            front.is_some_and(|window| {
+                state
+                    .surfaces
+                    .iter()
+                    .any(|s| s.visualizer_hidden_by(window))
+            }) || all_resting(&state.surfaces, Surface::shows_visualizer);
         let was = state.fullscreen;
         state.fullscreen = fullscreen;
         let stop = fullscreen && state.visualizer_running;
@@ -900,16 +923,20 @@ fn check_memory() {
 /// The window in front, in desktop pixels, unless it's the desktop
 /// itself (or there isn't one).
 fn foreground_rect() -> Option<Rect> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    // SAFETY: a plain query about the window in front.
+    app_window_rect(unsafe { GetForegroundWindow() })
+}
+
+/// The rectangle (desktop pixels) of the app window `window` belongs
+/// to, unless it's the desktop itself (or there isn't one).
+fn app_window_rect(window: HWND) -> Option<Rect> {
     use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowRect,
-    };
-    // SAFETY: plain queries about the window in front.
-    let window = unsafe { GetForegroundWindow() };
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
     if window.is_invalid() {
         return None;
     }
-    // SAFETY: as above.
+    // SAFETY: a plain query about a window handle.
     let root = unsafe { GetAncestor(window, GA_ROOT) };
     if DESKTOP_CLASSES.contains(&class_name(root).as_str()) {
         return None;
@@ -918,6 +945,112 @@ fn foreground_rect() -> Option<Rect> {
     // SAFETY: a valid window and a place to write.
     unsafe { GetWindowRect(root, &raw mut rect) }.ok()?;
     Some(super::to_rect(rect))
+}
+
+/// Whether an app window covers all of `monitor` (desktop pixels): the
+/// window on top at its middle, if that isn't the desktop.
+fn covered(monitor: Rect) -> bool {
+    let middle = monitor.center();
+    let point = POINT {
+        x: middle.x,
+        y: middle.y,
+    };
+    // SAFETY: a plain query about what's on screen at a point.
+    let window = unsafe { WindowFromPoint(point) };
+    app_window_rect(window).is_some_and(|rect| rect.covers(monitor))
+}
+
+/// Whether there are surfaces that `pick` chooses and all of them are
+/// resting.
+fn all_resting(surfaces: &[Surface], pick: fn(&Surface) -> bool) -> bool {
+    let mut picked = surfaces.iter().filter(|s| pick(s)).peekable();
+    picked.peek().is_some() && picked.all(Surface::is_resting)
+}
+
+/// Once a second (or, while asleep, on the wake timer): in Light, rests
+/// each monitor a full-screen window covers; wakes it once it's
+/// uncovered. While every monitor with widgets rests, Wallflex sleeps.
+fn check_cover(hwnd: HWND) {
+    let light = current_level() == Level::Light;
+    let (sleep, wake) = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return (false, false);
+        };
+        for surface in state.surfaces.iter_mut().filter(|s| s.has_widgets()) {
+            let covered = covered(surface.monitor());
+            if covered && light && !surface.is_resting() {
+                surface.rest();
+            } else if !covered && surface.is_resting() {
+                surface.wake();
+            }
+        }
+        let hidden = all_resting(&state.surfaces, Surface::has_widgets);
+        let asleep = state.sleep == Sleep::Asleep;
+        (hidden && !asleep, !hidden && asleep)
+    });
+    if sleep {
+        fall_asleep(hwnd);
+    } else if wake {
+        wake_up(hwnd);
+    }
+}
+
+/// Every widget is hidden: stops the sensors, frames and sound, frees
+/// the pictures and hands memory back to Windows, and checks once a
+/// second for a widget to come back into view.
+fn fall_asleep(hwnd: HWND) {
+    // SAFETY: our own timers; failure only means one was already gone.
+    unsafe {
+        let _ = KillTimer(Some(hwnd), SENSOR_TIMER);
+        let _ = KillTimer(Some(hwnd), FRAME_TIMER);
+        let _ = KillTimer(Some(hwnd), VISUALIZER_TIMER);
+    }
+    let threads = STATE.with(|state| {
+        let mut state = state.try_borrow_mut().ok()?;
+        state.sleep = Sleep::Asleep;
+        state.visualizer_running = false;
+        state.dashboard.rest_visualizer();
+        state.dashboard.clear_images();
+        Some((state.audio.take(), state.media.take()))
+    });
+    // Stops the capture and media threads, outside the borrow.
+    drop(threads);
+    usage::trim_working_set();
+    log!("asleep: every widget is behind a full-screen window");
+    // SAFETY: our own window; no callback, so WM_TIMER is posted.
+    if unsafe { SetTimer(Some(hwnd), WAKE_TIMER, WAKE_CHECK_MS, None) } == 0 {
+        // Without the check nothing would wake it: stay awake instead.
+        wake_up(hwnd);
+    }
+}
+
+/// A widget is visible again: takes a fresh reading and restarts the
+/// sensors, sound and pictures.
+fn wake_up(hwnd: HWND) {
+    // SAFETY: our own timer; failure only means it was already gone.
+    let _ = unsafe { KillTimer(Some(hwnd), WAKE_TIMER) };
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.sleep = Sleep::Awake;
+            let State {
+                dashboard, images, ..
+            } = &mut *state;
+            fetch_wanted_images(dashboard, images.as_mut());
+        }
+    });
+    log!("awake");
+    apply_audio_settings();
+    let (reload, _) = on_sensor_tick();
+    if reload {
+        rebuild();
+    }
+    let level = current_level();
+    // SAFETY: our own window; no callback, so WM_TIMER is posted.
+    if unsafe { SetTimer(Some(hwnd), SENSOR_TIMER, level.sensor_ms(), None) }
+        == 0
+    {
+        log!("couldn't restart the sensor timer");
+    }
 }
 
 /// Starts the glide frames if the last reading set the bars and rings
@@ -1356,6 +1489,7 @@ fn on_discord_update() {
             dashboard,
             surfaces,
             images,
+            sleep,
             ..
         } = &mut *state;
         let Some(link) = discord.as_ref() else {
@@ -1366,7 +1500,9 @@ fn on_discord_update() {
         if let Some(command) = dashboard.discord_request() {
             link.send(command);
         }
-        fetch_wanted_images(dashboard, images.as_mut());
+        if *sleep == Sleep::Awake {
+            fetch_wanted_images(dashboard, images.as_mut());
+        }
         for surface in surfaces.iter() {
             surface.invalidate_widgets(dashboard);
         }

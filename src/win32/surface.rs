@@ -40,6 +40,9 @@ pub struct Surface {
     painter: Painter,
     /// The monitor it covers, in desktop pixels.
     monitor: crate::geometry::Rect,
+    /// Hidden behind a full-screen window: its buffers are freed and it
+    /// ignores repaints until [`Surface::wake`].
+    resting: bool,
 }
 
 impl Surface {
@@ -47,10 +50,40 @@ impl Surface {
     /// hides this monitor's visualizer.
     pub fn visualizer_hidden_by(&self, window: crate::geometry::Rect) -> bool {
         self.painter.shows(crate::widgets::Widget::Visualizer)
-            && window.left <= self.monitor.left
-            && window.top <= self.monitor.top
-            && window.right >= self.monitor.right
-            && window.bottom >= self.monitor.bottom
+            && window.covers(self.monitor)
+    }
+
+    /// Whether this monitor shows the visualizer.
+    pub fn shows_visualizer(&self) -> bool {
+        self.painter.shows(crate::widgets::Widget::Visualizer)
+    }
+
+    /// The monitor it covers, in desktop pixels.
+    pub fn monitor(&self) -> Rect {
+        self.monitor
+    }
+
+    /// Whether this monitor's layout places any widgets.
+    pub fn has_widgets(&self) -> bool {
+        self.painter.has_widgets()
+    }
+
+    /// Whether it's resting behind a full-screen window.
+    pub fn is_resting(&self) -> bool {
+        self.resting
+    }
+
+    /// Stops painting and frees the widget buffers, while a full-screen
+    /// window hides the monitor. What's on screen stays as it was.
+    pub fn rest(&mut self) {
+        self.resting = true;
+        self.painter.release_buffers();
+    }
+
+    /// Starts painting again and redraws everything.
+    pub fn wake(&mut self) {
+        self.resting = false;
+        self.invalidate();
     }
 
     /// The surface's window.
@@ -99,12 +132,18 @@ impl Surface {
 
     /// Asks Windows to repaint the whole window.
     pub fn invalidate(&self) {
+        if self.resting {
+            return;
+        }
         // SAFETY: plain handle; failure only skips one repaint.
         let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
     }
 
     /// Asks Windows to repaint just the widgets.
     pub fn invalidate_widgets(&self, dashboard: &Dashboard) {
+        if self.resting {
+            return;
+        }
         for rect in self.painter.dirty_rects(dashboard) {
             // SAFETY: plain handle and rectangle; failure only skips one
             // repaint.
@@ -162,6 +201,9 @@ impl Surface {
 
     /// Asks Windows to repaint `rects` (client pixels).
     fn invalidate_rects(&self, rects: &[RECT]) {
+        if self.resting {
+            return;
+        }
         for rect in rects {
             // SAFETY: plain handle and rectangle; failure only skips one
             // frame.
@@ -181,9 +223,14 @@ impl Surface {
         self.painter.hit_test((point.x, point.y))
     }
 
-    /// Handles `WM_PAINT`.
-    pub fn paint(&mut self, dashboard: &Dashboard) {
+    /// Handles `WM_PAINT`. Returns whether it painted: a resting
+    /// surface doesn't, and leaves the message to the default handler.
+    pub fn paint(&mut self, dashboard: &Dashboard) -> bool {
+        if self.resting {
+            return false;
+        }
         self.painter.paint(self.hwnd, dashboard);
+        true
     }
 }
 
@@ -281,6 +328,7 @@ pub fn create(
         hwnd,
         painter,
         monitor: monitor.rect,
+        resting: false,
     };
 
     if layered {

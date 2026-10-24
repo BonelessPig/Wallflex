@@ -66,13 +66,13 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - `src/pace.rs`: performance. The config's `performance` ("smooth"
   default, or "light") caps a `Level` (Smooth: 0.4 s glides and
   visualizer at ~64 fps; Normal: 0.3 s / ~32 fps; Light: no glides,
-  sensors once a second, visualizer ~16 fps). The `Governor` steps down
-  at once when the PC is busy (60% / 85%) or Wallflex is over 2% CPU
-  for 3 s (`win32/usage.rs` measures it), and back up one level per
-  10 calm seconds. Timer intervals sit just under whole 15.625 ms
-  system ticks (15, 31, 62 ms), since a timer fires on the first tick
-  after it's due. Over 120 MB private, pictures are dropped and the
-  working set trimmed (health tick).
+  sensors once a second, visualizer ~16 fps). The `Governor` drops
+  straight to Light at once when the PC is 80% busy, steps down a level
+  when Wallflex is over 2% CPU for 3 s (`win32/usage.rs` measures it),
+  and climbs back one level per 10 calm seconds. Timer intervals sit
+  just under whole 15.625 ms system ticks (15, 31, 62 ms), since a
+  timer fires on the first tick after it's due. Over 120 MB private,
+  pictures are dropped and the working set trimmed (health tick).
 - `src/widgets/motion.rs`: the glide. After each reading the CPU
   columns, GPU rings and RAM bar ease to the new values over 0.3 s
   (text changes at once); `Dashboard::moving_areas` says which parts
@@ -158,6 +158,14 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     `CreateStreamOverRandomAccessStream`, cropped square). It posts
     `WM_MEDIA`; the visualizer shows art left of the bars and the title
     (scrolling in a clipped box when long) and artist underneath.
+  - Sleep (`check_cover` in `app.rs`): in Light, a monitor whose
+    middle shows an app window covering all of it (`WindowFromPoint`)
+    rests: `Surface::rest` frees its widget buffers and fonts, and it
+    ignores repaints, keeping what's on screen. It wakes once
+    uncovered, at any level. While every monitor with widgets rests,
+    the app sleeps: sensor, frame and visualizer timers stop, the audio
+    and media threads end, pictures are dropped, the working set is
+    trimmed, and a 1 s wake timer checks for a widget to show again.
   - The visualizer rests only while the foreground window covers a
     monitor showing it (`Surface::visualizer_hidden_by`), so full-screen
     video on another monitor doesn't stop it.

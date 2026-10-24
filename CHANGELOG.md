@@ -25,6 +25,12 @@ patch number (0.x.**y**) for fixes only.
 - The network graph shows the last 30 seconds by default (was a
   minute), with rounded lines and filled areas under download and
   upload.
+- Smooth mode now stays smooth until the PC is 80% busy, then drops
+  straight to light (it eased off at 60% and again at 85%).
+- In light mode, a monitor hidden by a full-screen window stops
+  drawing and frees its memory. When every monitor with widgets is
+  hidden, Wallflex sleeps (no sensor readings, sound capture or
+  animation) until one is visible again.
 
 ## [0.1.0] - 2026-10-24
 

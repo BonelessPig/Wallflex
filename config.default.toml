@@ -7,10 +7,12 @@
 # Background colour, as "#RRGGBB".
 background = "#000000"
 
-# "smooth": glides and the visualizer at up to 60 frames a second while
-# the PC has room, easing off when it gets busy. "light": no glides,
-# readings once a second, a slower visualizer; as light as it gets.
-# Either way Wallflex keeps itself under 2% CPU and 120 MB of memory.
+# "smooth": glides and the visualizer at up to 60 frames a second until
+# the PC is 80% busy, then light. "light": no glides, readings once a
+# second, a slower visualizer; as light as it gets. In light, monitors
+# hidden by a full-screen window stop drawing, and with every widget
+# hidden Wallflex sleeps until one shows again. Either way Wallflex
+# keeps itself under 2% CPU and 120 MB of memory.
 performance = "smooth"
 
 # One [[layout]] per monitor setup. Each monitor uses the first layout

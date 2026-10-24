@@ -172,10 +172,10 @@ impl Level {
     }
 }
 
-/// Whole-PC CPU use (%) at which animations step down to Normal.
-const BUSY: f64 = 60.0;
-/// Whole-PC CPU use (%) at which they step down to Light.
-const VERY_BUSY: f64 = 85.0;
+/// Whole-PC CPU use (%) at which animations drop straight to Light.
+/// Below it the PC caps nothing; only Wallflex's own CPU budget can
+/// hold it at Normal.
+const BUSY: f64 = 80.0;
 /// Wallflex's CPU budget, as a share of the whole CPU (%). Over it for
 /// [`OVER_BUDGET_SECONDS`] in a row, it steps down a level.
 pub const CPU_BUDGET: f64 = 2.0;
@@ -254,8 +254,7 @@ impl Governor {
             self.over = 0;
         }
         let load_cap = match system {
-            Some(busy) if busy >= VERY_BUSY => Level::Light,
-            Some(busy) if busy >= BUSY => Level::Normal,
+            Some(busy) if busy >= BUSY => Level::Light,
             _ => Level::Smooth,
         };
         let wanted = Level::top(self.mode).min(load_cap).min(self.budget_cap);
@@ -304,8 +303,10 @@ mod tests {
     #[test]
     fn a_busy_pc_steps_down_and_calm_steps_up() {
         let mut governor = Governor::new(Mode::Smooth);
-        assert_eq!(governor.tick(Some(70.0), 0.5), Some(Level::Normal));
-        assert_eq!(governor.tick(Some(95.0), 0.5), Some(Level::Light));
+        // Busy but under the limit: stays smooth.
+        assert_eq!(governor.tick(Some(79.0), 0.5), None);
+        // Over it: straight to Light.
+        assert_eq!(governor.tick(Some(85.0), 0.5), Some(Level::Light));
         // Calm again: one level per calm spell.
         let mut changes = Vec::new();
         for _ in 0..CALM_SECONDS * 2 {

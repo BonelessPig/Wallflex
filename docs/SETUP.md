@@ -42,9 +42,12 @@ explained in comments inside it (`config.example.toml` in the zip is
 the same file). Save it and the change shows about a second later.
 
 - `background`: the colour behind the widgets, such as `"#101418"`.
-- `performance`: `"smooth"` (the default) for smooth animations while
-  your PC has room, or `"light"` for no animations and the least work.
-  Either way Wallflex stays under 2% CPU and 120 MB of memory.
+- `performance`: `"smooth"` (the default) for smooth animations until
+  your PC is 80% busy (then it switches to light), or `"light"` for no
+  animations and the least work. Either way Wallflex stays under 2% CPU
+  and 120 MB of memory. In light, a full-screen game or video pauses
+  the widgets it hides, and Wallflex sleeps while all of them are
+  hidden.
 - `[[layout]]`: which widgets go on which monitor. `monitor` can be
   `"*"` (every monitor), `"primary"`, a resolution such as
   `"2560x1440"`, or a name such as `"DISPLAY2"` (the log lists your
