@@ -63,7 +63,18 @@ up to 50 testers, so each friend makes their own application.
 
 On first run Wallflex writes `%APPDATA%\Wallflex\config.toml`, with
 comments explaining every option. Changes apply about a second after you
-save. It sets:
+save.
+
+The optional settings app, `wallflex-settings.exe`, edits the same
+file in a window. It shows the monitors with live previews of the
+widgets, which you drag into place, and has forms for everything else.
+It serves one page on `127.0.0.1` (guarded by a random token) and
+opens it in an Edge app window. It asks `wallflex.exe` to check,
+preview and list monitors (`--check`, `--preview ... --widget all`,
+`--info`), so the two always agree. It runs only while its window is
+open; the installer lets you leave it out.
+
+The file sets:
 
 - the background colour;
 - a layout per monitor (all monitors, the primary one, a resolution such
@@ -101,6 +112,9 @@ wallflex --config my.toml     use another settings file
 wallflex --sensors            print one sensor reading and exit
 wallflex --preview 2160 a.bmp save the widgets as they'd look on a 2160p monitor
 wallflex --preview 1440 a.bmp --widget discord   ... the Discord widget, sample data
+wallflex --check              check the settings file and say what's wrong
+wallflex --info               print the monitors and GPUs as JSON
+wallflex-settings             open the settings app (--browser: default browser)
 wallflex --quit               stop the running copy
 wallflex --diagnose           show how Explorer's desktop windows are laid out
 ```

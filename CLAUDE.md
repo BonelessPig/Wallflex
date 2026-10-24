@@ -82,6 +82,24 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   optional clip rectangle. No
   graphics library: Direct2D and GDI+ cost far more memory.
 - `src/bmp.rs`: BMP writer for `--preview`.
+- `src/bin/wallflex-settings/`: the optional settings app, a second
+  binary using only std + serde_json + toml (no `unsafe`, no Win32).
+  `server.rs` serves `ui.html` on `127.0.0.1:<random port>`; API calls
+  need the token from the page's address (`X-Wallflex-Token`) and a
+  matching `Host`. It never validates or renders itself: it runs
+  `wallflex.exe --check`, `--info` and `--preview 1000 <dir> --widget
+  all --config <draft>` next to it, so it can't disagree with the
+  app. Saving checks first, refuses if the file's stamp changed since
+  loading (409), keeps `config.toml.bak` and swaps the file in by
+  rename. The page heartbeats; the app exits ~4 s after the window
+  closes (5 min of silence otherwise). `ui.html` mirrors
+  `Anchor::place` and monitor matching in JS; drags re-pick the anchor
+  by which third the widget's centre is in. It writes TOML itself
+  (the user's comments are not kept). `window.rs` opens Edge with
+  `--app=`, else the default browser. The tray's "Open settings"
+  starts it with `--config` when it sits next to `wallflex.exe`, else
+  opens the file. Test with `--no-open --config <scratch file>` and
+  curl (copy the token from its output).
 - `src/config.rs`: parses and validates `config.toml` (serde + toml)
   into `Settings`: background, and layouts matched to monitors by
   `*` / `primary` / resolution / `DISPLAYn` (first match wins), each
@@ -176,7 +194,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   - `http.rs`: WinHTTP requests and websockets (no TLS library).
     `images.rs`: download + WIC decode on a thread, with retries.
   - `tray.rs`: the notification-area icon (the exe's icon resource at
-    the small-icon size) and its menu; `app.rs` handles the choices and
+    the small-icon size) and its menu ("Open settings" starts
+    `wallflex-settings.exe` if installed); `app.rs` handles the choices and
     re-adds the icon when Explorer restarts. `startup.rs`: "Start with
     Windows" as an HKCU `Run` value.
   - `mouse.rs`: the WH_MOUSE_LL hook runs on its own thread that only
@@ -221,6 +240,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   time.
 - `--preview <h> <file> --widget discord` (or `discord-inbox`) draws
   the Discord widget with sample data and real downloaded avatars.
+  `--widget all` treats `<file>` as a folder and saves every widget
+  (`panel.bmp`, ..., `gpu1.bmp`; Discord without avatars).
 - Discord credentials and the bot token live in `[discord]` in the
   config; the OAuth token is `discord-token.json` next to it. Never
   print or commit them.

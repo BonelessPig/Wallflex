@@ -1,0 +1,1244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallflex Settings</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #111316;
+  --panel: #1a1d22;
+  --raised: #22262c;
+  --line: #2f343c;
+  --text: #e7e9ec;
+  --muted: #9aa1ab;
+  --accent: #4cc38a;
+  --accent-ink: #06130c;
+  --warn: #f0b429;
+  --bad: #ef5350;
+  --select: #5aa9ff;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #eef0f3;
+    --panel: #ffffff;
+    --raised: #f5f6f8;
+    --line: #d8dce2;
+    --text: #1b1e23;
+    --muted: #5d6570;
+    --accent: #1f9d63;
+    --accent-ink: #ffffff;
+    --warn: #b7791f;
+    --bad: #c62828;
+    --select: #1f6fd1;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+h1, h2, h3, .brand { font-family: Bahnschrift, "Segoe UI", sans-serif; }
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-size: 18px; letter-spacing: .04em; }
+.brand b { color: var(--accent); font-weight: 600; }
+.status { color: var(--muted); margin-left: auto; font-size: 13px; }
+.status.dirty { color: var(--warn); }
+.status.bad { color: var(--bad); }
+button, select, input, textarea {
+  font: inherit; color: inherit;
+}
+button {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 12px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: var(--accent); font-weight: 600;
+}
+button.icon { padding: 2px 7px; min-width: 28px; }
+button.link {
+  background: none; border: none; color: var(--select); padding: 0;
+}
+input[type=text], input[type=number], input[type=password], select,
+textarea {
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; min-width: 0;
+}
+input:focus, select:focus, textarea:focus, button:focus-visible {
+  outline: 2px solid var(--select); outline-offset: 1px;
+}
+input[type=number] { width: 76px; }
+textarea { width: 100%; min-height: 80px; resize: vertical; }
+#banner { display: none; padding: 8px 16px; font-size: 13px; }
+#banner.show { display: block; }
+#banner.bad { background: color-mix(in srgb, var(--bad) 18%, var(--panel)); }
+#banner.warn { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); }
+main {
+  flex: 1; display: grid; grid-template-columns: 1fr 420px; min-height: 0;
+}
+#stage {
+  position: relative; display: flex; flex-direction: column;
+  min-width: 0; min-height: 0; padding: 16px; gap: 10px;
+}
+#desk-wrap { position: relative; flex: 1; min-height: 0; }
+#desk { position: absolute; inset: 0; }
+.monitor {
+  position: absolute; border: 2px solid var(--line); border-radius: 4px;
+  overflow: hidden;
+}
+.monitor.active { border-color: var(--select); }
+.monitor .taskbar {
+  position: absolute; background: rgba(128, 128, 128, .22);
+}
+.monitor .label {
+  position: absolute; left: 6px; top: 6px; z-index: 3;
+  font-size: 11px; padding: 2px 6px; border-radius: 4px;
+  background: rgba(0, 0, 0, .55); color: #fff; pointer-events: none;
+  white-space: nowrap;
+}
+.widget {
+  position: absolute; cursor: grab; touch-action: none;
+  outline: 1px dashed rgba(255, 255, 255, .25);
+}
+.widget:hover { outline-color: rgba(255, 255, 255, .6); }
+.widget.selected { outline: 2px solid var(--select); z-index: 2; }
+.widget.dragging { cursor: grabbing; }
+.widget img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.widget.ghost {
+  background: rgba(128, 128, 128, .18);
+  display: grid; place-items: center;
+  font-size: 11px; color: #ccc; text-align: center;
+}
+.widget.empty { outline-color: var(--warn); }
+.hint { color: var(--muted); font-size: 12px; }
+aside {
+  background: var(--panel); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; min-height: 0;
+}
+nav { display: flex; border-bottom: 1px solid var(--line); }
+nav button {
+  flex: 1; border: none; border-radius: 0; background: none;
+  padding: 10px 4px; color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+nav button.on { color: var(--text); border-bottom-color: var(--accent); }
+#pane { overflow-y: auto; padding: 14px 16px 24px; }
+#pane h2 { font-size: 15px; margin: 18px 0 6px; font-weight: 600; }
+#pane h2:first-child { margin-top: 0; }
+#pane p { margin: 4px 0 10px; color: var(--muted); font-size: 13px; }
+.card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--raised); padding: 10px; margin-bottom: 12px;
+}
+.card.active { border-color: var(--select); }
+.row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.row > label:first-child { width: 72px; color: var(--muted); flex: none; }
+.row .grow { flex: 1; }
+.card-head { display: flex; align-items: center; gap: 6px; }
+.card-head h3 { margin: 0; font-size: 14px; font-weight: 600; flex: 1; }
+.note { font-size: 12px; color: var(--muted); }
+.note.warn { color: var(--warn); }
+.wlist { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.wrow {
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+  background: var(--panel);
+}
+.wrow.selected { border-color: var(--select); }
+.wrow .top { display: flex; gap: 6px; align-items: center; }
+.wrow .top select { flex: 1; min-width: 0; }
+.wrow .top select.kind { min-width: 120px; }
+.wrow .pos { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+.anchors {
+  display: grid; grid-template-columns: repeat(3, 14px); gap: 2px;
+  flex: none;
+}
+.anchors button {
+  width: 14px; height: 14px; padding: 0; border-radius: 3px;
+  background: var(--bg);
+}
+.anchors button.on { background: var(--select); border-color: var(--select); }
+.xy { display: flex; gap: 4px; align-items: center; font-size: 12px; }
+.xy span { color: var(--muted); }
+.check { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+.check input { margin-top: 3px; }
+.check small { display: block; color: var(--muted); }
+.range { display: flex; gap: 8px; align-items: center; }
+.range input[type=range] { flex: 1; }
+.secret { display: flex; gap: 6px; }
+.secret input { flex: 1; }
+.field { margin: 8px 0; }
+.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.field input[type=text], .field input[type=password] { width: 100%; }
+.add { display: flex; gap: 6px; margin-top: 8px; }
+.add select { flex: 1; }
+code { font-family: Consolas, monospace; font-size: 12px; }
+.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  main { grid-template-columns: 1fr; }
+  #stage { min-height: 420px; }
+  aside { border-left: none; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>Wallflex</b> Settings</div>
+  <div class="status" id="status">Loading…</div>
+  <button id="revert" disabled title="Undo changes since the last save">Revert</button>
+  <button id="save" class="primary" disabled title="Save (Ctrl+S)">Save</button>
+</header>
+<div id="banner"></div>
+<main>
+  <section id="stage">
+    <div id="desk-wrap"><div id="desk"></div></div>
+    <div class="hint" id="hint">
+      Drag a widget to move it; it anchors to the nearest corner, edge or
+      the centre. Arrow keys nudge the selected widget (Shift for 10).
+      <span id="pstatus"></span>
+    </div>
+  </section>
+  <aside>
+    <nav id="tabs">
+      <button data-tab="layouts" class="on">Layouts</button>
+      <button data-tab="panel">Panel</button>
+      <button data-tab="network">Network</button>
+      <button data-tab="discord">Discord</button>
+      <button data-tab="general">General</button>
+    </nav>
+    <div id="pane"></div>
+  </aside>
+</main>
+<script>
+"use strict";
+
+// ---- Constants mirrored from wallflex (config.rs, paint.rs) ----
+
+/** Design units per monitor height: 1 unit = 0.1% of the height. */
+const UNITS_PER_HEIGHT = 1000;
+/** Default gap from an anchored edge, in units. */
+const DEFAULT_OFFSET = 64;
+/** Allowed layout sizes. */
+const SIZE_MIN = 0.25, SIZE_MAX = 4;
+/** Network graph history range and default, in seconds. */
+const NET_MIN = 10, NET_MAX = 300, NET_DEFAULT = 30;
+/** How long to wait after a change before checking or re-previewing. */
+const CHECK_DELAY_MS = 500, PREVIEW_DELAY_MS = 700;
+/** Heartbeat interval, so the app knows the window is still open. */
+const PING_MS = 5000;
+/** Widget sizes (units) to show until the previews arrive. */
+const GUESS = {
+  panel: [433, 249], cpu: [195, 98], network: [195, 109],
+  gpus: [433, 90], gpu: [195, 90], info: [433, 18],
+  discord: [250, 244], visualizer: [481, 121],
+};
+const KINDS = [
+  ["panel", "Panel (everything)"],
+  ["cpu", "CPU threads"],
+  ["network", "Network graph"],
+  ["gpus", "All GPUs"],
+  ["gpu", "One GPU"],
+  ["info", "RAM and SSDs"],
+  ["discord", "Discord"],
+  ["visualizer", "Music visualizer"],
+];
+const ANCHORS = [
+  "top-left", "top", "top-right",
+  "left", "center", "right",
+  "bottom-left", "bottom", "bottom-right",
+];
+
+// ---- State ----
+
+const token = new URLSearchParams(location.search).get("t") || "";
+/** The settings being edited. */
+let model = null;
+/** TOML of the last saved (or loaded) settings, to tell if it's dirty. */
+let savedToml = "";
+/** The file's stamp when loaded or last saved. */
+let stamp = "none";
+/** Monitors and GPUs from `wallflex --info`. */
+let info = { monitors: [], gpus: [] };
+/** Default settings, for "Reset to defaults". */
+let defaults = null;
+/** Preview pictures by widget name: { url, w, h }. */
+let images = {};
+let previewsLoaded = false;
+let previewKey = "";
+let selected = { layout: 0, widget: -1 };
+let tab = "layouts";
+/** Last validation result for the current TOML. */
+let problem = null;
+let saving = false;
+let showSecrets = false;
+
+const $ = (id) => document.getElementById(id);
+
+async function api(path, body, headers = {}) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Wallflex-Token": token, ...headers },
+    body,
+  });
+  if (res.status === 403) throw new Error("This window has expired; reopen Wallflex Settings.");
+  return res;
+}
+
+// ---- Reading and writing the config ----
+
+function defaultOffset(anchor) {
+  const [h, v] = sides(anchor);
+  return [h === "middle" ? 0 : DEFAULT_OFFSET, v === "middle" ? 0 : DEFAULT_OFFSET];
+}
+
+function fromConfig(c) {
+  c = c || {};
+  const p = c.panel || {}, n = c.network || {}, d = c.discord;
+  return {
+    background: (c.background || "#000000").toUpperCase(),
+    performance: c.performance || "smooth",
+    layouts: (c.layout || []).map((l) => ({
+      monitor: l.monitor ?? "*",
+      size: l.size ?? 1,
+      widgets: (l.widget || []).map((w) => {
+        const anchor = w.anchor === "centre" ? "center" : (w.anchor || "bottom-right");
+        const [dx, dy] = defaultOffset(anchor);
+        return { kind: w.kind, anchor, x: w.x ?? dx, y: w.y ?? dy, gpu: w.gpu ?? 1 };
+      }),
+    })),
+    panel: {
+      cpu: p.cpu ?? true, network: p.network ?? true,
+      ram: p.ram ?? true, ssd: p.ssd ?? true,
+      gpus: p.gpus ?? null,
+    },
+    network: { seconds: n.seconds ?? NET_DEFAULT, max_mbps: n.max_mbps ?? null },
+    discordOn: !!d,
+    discord: {
+      client_id: d?.client_id ?? "", client_secret: d?.client_secret ?? "",
+      redirect_uri: d?.redirect_uri ?? "", bot_token: d?.bot_token ?? "",
+      friends: d?.friends ?? [],
+    },
+  };
+}
+
+/** A TOML string: JSON's escapes are valid TOML, apart from DEL. */
+function str(s) {
+  return JSON.stringify(String(s)).replace(/\u007f/g, "\\u007F");
+}
+
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "0";
+}
+
+function toToml(m) {
+  const out = [
+    "# Wallflex settings, saved by Wallflex Settings.",
+    "# config.example.toml (next to wallflex.exe) explains every option;",
+    "# you can still edit this file by hand.",
+    "",
+    `background = ${str(m.background)}`,
+    `performance = ${str(m.performance)}`,
+  ];
+  for (const l of m.layouts) {
+    out.push("", "[[layout]]", `monitor = ${str(l.monitor)}`, `size = ${num(l.size)}`);
+    for (const w of l.widgets) {
+      out.push("", "[[layout.widget]]", `kind = ${str(w.kind)}`);
+      if (w.kind === "gpu") out.push(`gpu = ${Math.max(1, Math.round(w.gpu))}`);
+      out.push(`anchor = ${str(w.anchor)}`, `x = ${num(w.x)}`, `y = ${num(w.y)}`);
+    }
+  }
+  const p = m.panel;
+  const panel = [];
+  for (const k of ["cpu", "network", "ram", "ssd"]) {
+    if (!p[k]) panel.push(`${k} = false`);
+  }
+  if (p.gpus) panel.push(`gpus = [${p.gpus.join(", ")}]`);
+  if (panel.length) out.push("", "[panel]", ...panel);
+  const net = [];
+  if (m.network.seconds !== NET_DEFAULT) net.push(`seconds = ${Math.round(m.network.seconds)}`);
+  if (m.network.max_mbps != null) net.push(`max_mbps = ${num(m.network.max_mbps)}`);
+  if (net.length) out.push("", "[network]", ...net);
+  if (m.discordOn) {
+    const d = m.discord;
+    out.push("", "[discord]", `client_id = ${str(d.client_id.trim())}`,
+      `client_secret = ${str(d.client_secret.trim())}`);
+    if (d.redirect_uri.trim()) out.push(`redirect_uri = ${str(d.redirect_uri.trim())}`);
+    if (d.bot_token.trim()) out.push(`bot_token = ${str(d.bot_token.trim())}`);
+    if (d.friends.length) out.push(`friends = [${d.friends.map(str).join(", ")}]`);
+  }
+  return out.join("\n") + "\n";
+}
+
+// ---- Geometry, as wallflex places widgets (config.rs Anchor::place) ----
+
+function sides(anchor) {
+  const [v, h] = {
+    "top-left": ["start", "start"], top: ["start", "middle"], "top-right": ["start", "end"],
+    left: ["middle", "start"], center: ["middle", "middle"], right: ["middle", "end"],
+    "bottom-left": ["end", "start"], bottom: ["end", "middle"], "bottom-right": ["end", "end"],
+  }[anchor] || ["end", "end"];
+  return [h, v];
+}
+
+function anchorFor(h, v) {
+  const row = { start: 0, middle: 1, end: 2 }[v];
+  const col = { start: 0, middle: 1, end: 2 }[h];
+  return ANCHORS[row * 3 + col];
+}
+
+function along(side, start, end, length, offset) {
+  if (side === "start") return start + offset;
+  if (side === "end") return end - offset - length;
+  return start + Math.trunc((end - start - length) / 2) + offset;
+}
+
+function keepInside(pos, length, start, end) {
+  return Math.max(Math.min(pos, end - length), start);
+}
+
+/** Pixels per unit on a monitor for a layout. */
+function monitorScale(mon, layout) {
+  const height = mon.rect.bottom - mon.rect.top;
+  return Math.max(height / UNITS_PER_HEIGHT, 1) * layout.size;
+}
+
+function imageName(w) {
+  return w.kind === "gpu" ? `gpu${Math.round(w.gpu)}` : w.kind;
+}
+
+/** A widget's size in units, and whether it's known to be empty. */
+function unitSize(w) {
+  const img = images[imageName(w)];
+  if (img) return { w: img.w, h: img.h, empty: false };
+  if (previewsLoaded) return { w: 120, h: 40, empty: true };
+  const g = GUESS[w.kind] || [200, 100];
+  return { w: g[0], h: g[1], empty: false };
+}
+
+function placeWidget(mon, layout, w) {
+  const scale = monitorScale(mon, layout);
+  const u = unitSize(w);
+  const width = Math.ceil(u.w * scale), height = Math.ceil(u.h * scale);
+  const [h, v] = sides(w.anchor);
+  const work = mon.work, r = mon.rect;
+  let left = along(h, work.left, work.right, width, Math.round(w.x * scale));
+  let top = along(v, work.top, work.bottom, height, Math.round(w.y * scale));
+  left = keepInside(left, width, r.left, r.right);
+  top = keepInside(top, height, r.top, r.bottom);
+  return { left, top, width, height, scale, empty: u.empty };
+}
+
+/** The anchor and offsets (units) that put a widget at `left, top`. */
+function offsetsFor(mon, rect, anchor, autoAnchor) {
+  const work = mon.work;
+  let [h, v] = sides(anchor);
+  if (autoAnchor) {
+    const third = (pos, len, start, end) => {
+      const c = pos + len / 2, span = end - start;
+      return c < start + span / 3 ? "start" : c > start + span * 2 / 3 ? "end" : "middle";
+    };
+    h = third(rect.left, rect.width, work.left, work.right);
+    v = third(rect.top, rect.height, work.top, work.bottom);
+  }
+  const off = (side, pos, len, start, end) => {
+    if (side === "start") return pos - start;
+    if (side === "end") return end - pos - len;
+    return pos - (start + Math.trunc((end - start - len) / 2));
+  };
+  return {
+    anchor: anchorFor(h, v),
+    x: Math.round(off(h, rect.left, rect.width, work.left, work.right) / rect.scale),
+    y: Math.round(off(v, rect.top, rect.height, work.top, work.bottom) / rect.scale),
+  };
+}
+
+// ---- Monitors and layouts ----
+
+function monitorMatches(text, mon) {
+  const t = String(text).trim();
+  if (t === "*") return true;
+  if (t.toLowerCase() === "primary") return mon.primary;
+  const res = /^\s*([+-]?\d+)\s*[xX]\s*([+-]?\d+)\s*$/.exec(t);
+  if (res) {
+    return mon.rect.right - mon.rect.left === Number(res[1])
+      && mon.rect.bottom - mon.rect.top === Number(res[2]);
+  }
+  return t.replace(/^\\\\\.\\/, "").toLowerCase() === mon.name.toLowerCase();
+}
+
+/** Index of the layout each monitor uses, or -1. */
+function layoutOf(mon) {
+  return model.layouts.findIndex((l) => monitorMatches(l.monitor, mon));
+}
+
+function monitorSize(mon) {
+  return `${mon.rect.right - mon.rect.left}×${mon.rect.bottom - mon.rect.top}`;
+}
+
+// ---- Drawing the desk ----
+
+let view = null;
+
+function renderDesk() {
+  const desk = $("desk");
+  desk.textContent = "";
+  const mons = info.monitors;
+  if (!mons.length) {
+    desk.innerHTML = '<p class="hint">No monitors found (is wallflex.exe next to this app?).</p>';
+    return;
+  }
+  const minX = Math.min(...mons.map((m) => m.rect.left));
+  const minY = Math.min(...mons.map((m) => m.rect.top));
+  const maxX = Math.max(...mons.map((m) => m.rect.right));
+  const maxY = Math.max(...mons.map((m) => m.rect.bottom));
+  const box = $("desk-wrap").getBoundingClientRect();
+  const scale = Math.min(box.width / (maxX - minX), box.height / (maxY - minY));
+  const padX = (box.width - (maxX - minX) * scale) / 2;
+  const padY = (box.height - (maxY - minY) * scale) / 2;
+  view = { minX, minY, scale, padX, padY };
+  const px = (x) => padX + (x - minX) * scale;
+  const py = (y) => padY + (y - minY) * scale;
+
+  for (const mon of mons) {
+    const li = layoutOf(mon);
+    const el = document.createElement("div");
+    el.className = "monitor" + (li === selected.layout ? " active" : "");
+    Object.assign(el.style, {
+      left: px(mon.rect.left) + "px", top: py(mon.rect.top) + "px",
+      width: (mon.rect.right - mon.rect.left) * scale + "px",
+      height: (mon.rect.bottom - mon.rect.top) * scale + "px",
+      background: model.background,
+    });
+    el.addEventListener("pointerdown", (e) => {
+      if (e.target === el && li >= 0) select(li, -1);
+    });
+    for (const strip of taskbarStrips(mon)) {
+      const t = document.createElement("div");
+      t.className = "taskbar";
+      Object.assign(t.style, {
+        left: (strip.left - mon.rect.left) * scale + "px",
+        top: (strip.top - mon.rect.top) * scale + "px",
+        width: (strip.right - strip.left) * scale + "px",
+        height: (strip.bottom - strip.top) * scale + "px",
+      });
+      el.appendChild(t);
+    }
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = `${mon.name}${mon.primary ? " (primary)" : ""} · ${monitorSize(mon)} · `
+      + (li >= 0 ? `layout ${li + 1}` : "no layout");
+    el.appendChild(label);
+    desk.appendChild(el);
+    if (li < 0) continue;
+    const layout = model.layouts[li];
+    layout.widgets.forEach((w, wi) => {
+      const r = placeWidget(mon, layout, w);
+      const we = document.createElement("div");
+      const isSel = li === selected.layout && wi === selected.widget;
+      const img = images[imageName(w)];
+      we.className = "widget" + (isSel ? " selected" : "") + (img ? "" : " ghost")
+        + (r.empty ? " empty" : "");
+      Object.assign(we.style, {
+        left: (r.left - mon.rect.left) * scale + "px",
+        top: (r.top - mon.rect.top) * scale + "px",
+        width: r.width * scale + "px", height: r.height * scale + "px",
+      });
+      we.title = kindLabel(w) + (r.empty ? " (nothing to show on this PC)" : "");
+      if (img) {
+        const i = document.createElement("img");
+        i.src = img.url;
+        i.alt = "";
+        we.appendChild(i);
+      } else {
+        we.textContent = r.empty ? "nothing to show" : kindLabel(w);
+      }
+      we.addEventListener("pointerdown", (e) => startDrag(e, we, mon, li, wi, r));
+      el.appendChild(we);
+    });
+  }
+}
+
+/** The parts of a monitor outside its work area (the taskbar). */
+function taskbarStrips(mon) {
+  const r = mon.rect, w = mon.work, out = [];
+  const strip = (left, right, top, bottom) => out.push({ left, right, top, bottom });
+  if (w.bottom < r.bottom) strip(r.left, r.right, w.bottom, r.bottom);
+  if (w.top > r.top) strip(r.left, r.right, r.top, w.top);
+  if (w.left > r.left) strip(r.left, w.left, r.top, r.bottom);
+  if (w.right < r.right) strip(w.right, r.right, r.top, r.bottom);
+  return out;
+}
+
+function kindLabel(w) {
+  const k = KINDS.find(([v]) => v === w.kind);
+  const name = k ? k[1] : w.kind;
+  return w.kind === "gpu" ? `GPU ${w.gpu}` : name;
+}
+
+function startDrag(e, el, mon, li, wi, rect) {
+  e.preventDefault();
+  e.stopPropagation();
+  select(li, wi, false);
+  el.setPointerCapture(e.pointerId);
+  el.classList.add("dragging");
+  el.focus?.();
+  const sx = e.clientX, sy = e.clientY;
+  const w = model.layouts[li].widgets[wi];
+  const r = mon.rect;
+  let moved = false;
+  const move = (ev) => {
+    const dx = (ev.clientX - sx) / view.scale, dy = (ev.clientY - sy) / view.scale;
+    if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return;
+    moved = true;
+    const left = keepInside(Math.round(rect.left + dx), rect.width, r.left, r.right);
+    const top = keepInside(Math.round(rect.top + dy), rect.height, r.top, r.bottom);
+    el.style.left = (left - r.left) * view.scale + "px";
+    el.style.top = (top - r.top) * view.scale + "px";
+    Object.assign(w, offsetsFor(mon, { ...rect, left, top }, w.anchor, true));
+    updateWidgetFields(li, wi);
+  };
+  const up = () => {
+    el.removeEventListener("pointermove", move);
+    el.removeEventListener("pointerup", up);
+    el.removeEventListener("pointercancel", up);
+    el.classList.remove("dragging");
+    if (moved) changed();
+    else render();
+  };
+  el.addEventListener("pointermove", move);
+  el.addEventListener("pointerup", up);
+  el.addEventListener("pointercancel", up);
+}
+
+// ---- Side panel ----
+
+function el(tag, props = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "class") e.className = v;
+    else if (k in e) e[k] = v;
+    else e.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c != null && c !== false) e.append(c);
+  }
+  return e;
+}
+
+function renderPane() {
+  const pane = $("pane");
+  const scroll = pane.scrollTop;
+  pane.textContent = "";
+  const build = { layouts: paneLayouts, panel: panePanel, network: paneNetwork,
+    discord: paneDiscord, general: paneGeneral }[tab];
+  pane.append(...build());
+  pane.scrollTop = scroll;
+  for (const b of $("tabs").children) b.classList.toggle("on", b.dataset.tab === tab);
+}
+
+function monitorOptions(current) {
+  const opts = [["*", "Every monitor"], ["primary", "The primary monitor"]];
+  for (const m of info.monitors) {
+    opts.push([m.name, `${m.name} only (${monitorSize(m)}${m.primary ? ", primary" : ""})`]);
+  }
+  const sizes = [...new Set(info.monitors.map((m) => monitorSize(m).replace("×", "x")))];
+  for (const s of sizes) opts.push([s, `Any ${s.replace("x", "×")} monitor`]);
+  const known = opts.some(([v]) => v.toLowerCase() === String(current).toLowerCase());
+  if (!known) opts.push([current, `${current} (custom)`]);
+  return opts;
+}
+
+function paneLayouts() {
+  const out = [
+    el("p", {}, "Each monitor shows the first layout that matches it, top to bottom. "
+      + "Sizes and positions are in units of 0.1% of the monitor's height."),
+  ];
+  const claimed = new Map();
+  for (const m of info.monitors) claimed.set(m.name, layoutOf(m));
+  model.layouts.forEach((l, li) => {
+    const matches = info.monitors.filter((m) => monitorMatches(l.monitor, m));
+    const used = matches.filter((m) => claimed.get(m.name) === li);
+    let note;
+    if (!matches.length) {
+      note = el("div", { class: "note warn" }, "No monitor connected now matches this.");
+    } else if (!used.length) {
+      note = el("div", { class: "note warn" }, "An earlier layout already covers these "
+        + "monitors, so this one isn't used. Move it up.");
+    } else {
+      note = el("div", { class: "note" }, "Shown on " + used.map((m) => m.name).join(", "));
+    }
+
+    const monSel = el("select", { class: "grow", onchange: (e) => {
+      if (e.target.value === "__custom") {
+        const v = prompt('Monitor: "*", "primary", a resolution like "3440x1440" '
+          + 'or a name like "DISPLAY2"', l.monitor);
+        if (v != null && v.trim()) l.monitor = v.trim();
+      } else l.monitor = e.target.value;
+      changed();
+    } },
+      monitorOptions(l.monitor).map(([v, t]) =>
+        el("option", { value: v, selected: v === l.monitor }, t)),
+      el("option", { value: "__custom" }, "Other…"));
+
+    const sizeRange = { min: SIZE_MIN, max: SIZE_MAX, step: 0.05, value: l.size };
+    const size = el("input", { type: "range", ...sizeRange, oninput: (e) => {
+      l.size = Number(e.target.value);
+      sizeNum.value = l.size;
+      changed(false);
+    } });
+    const sizeNum = el("input", { type: "number", ...sizeRange, onchange: (e) => {
+      l.size = clamp(Number(e.target.value), SIZE_MIN, SIZE_MAX, 1);
+      changed();
+    } });
+
+    const card = el("div", { class: "card" + (li === selected.layout ? " active" : ""),
+      onpointerdown: () => { if (selected.layout !== li) select(li, -1); } },
+      el("div", { class: "card-head" },
+        el("h3", {}, `Layout ${li + 1}`),
+        el("button", { class: "icon", title: "Move up", disabled: li === 0,
+          onclick: () => moveLayout(li, -1) }, "↑"),
+        el("button", { class: "icon", title: "Move down", disabled: li === model.layouts.length - 1,
+          onclick: () => moveLayout(li, 1) }, "↓"),
+        el("button", { class: "icon", title: "Delete layout",
+          onclick: () => {
+            model.layouts.splice(li, 1);
+            select(Math.max(0, li - 1), -1, false);
+            changed();
+          } }, "✕")),
+      el("div", { class: "row" }, el("label", {}, "Monitor"), monSel),
+      note,
+      el("div", { class: "row" }, el("label", {}, "Size"),
+        el("div", { class: "range grow" }, size, sizeNum)),
+      el("div", { class: "wlist" }, l.widgets.map((w, wi) => widgetRow(li, wi))),
+      addWidget(li));
+    out.push(card);
+  });
+  out.push(el("button", { onclick: addLayout }, "+ Add layout"));
+  return out;
+}
+
+function widgetRow(li, wi) {
+  const l = model.layouts[li], w = l.widgets[wi];
+  const isSel = li === selected.layout && wi === selected.widget;
+  const kind = el("select", { class: "kind",
+    onchange: (e) => { w.kind = e.target.value; changed(); } },
+    KINDS.map(([v, t]) => el("option", { value: v, selected: v === w.kind }, t)));
+  const gpu = w.kind === "gpu" ? el("select", { title: "Which GPU",
+    onchange: (e) => { w.gpu = Number(e.target.value); changed(); } },
+    gpuChoices(w.gpu).map(([n, t]) => el("option", { value: n, selected: n === w.gpu }, t))) : null;
+  const anchors = el("div",
+    { class: "anchors", title: "Anchor: the corner or edge it sits against" },
+    ANCHORS.map((a) => el("button", { class: a === w.anchor ? "on" : "", title: a,
+      onclick: () => {
+        const [dx, dy] = defaultOffset(a);
+        const [oh, ov] = sides(w.anchor), [nh, nv] = sides(a);
+        if (oh !== nh) w.x = dx;
+        if (ov !== nv) w.y = dy;
+        w.anchor = a;
+        changed();
+      } })));
+  const xy = (axis) => el("label", { class: "xy" }, el("span", {}, axis),
+    el("input", { type: "number", step: 1, value: w[axis], "data-field": `${li}-${wi}-${axis}`,
+      onchange: (e) => { w[axis] = Number(e.target.value) || 0; changed(); } }));
+  return el("div", { class: "wrow" + (isSel ? " selected" : ""),
+    onpointerdown: () => { if (!isSel) select(li, wi); } },
+    el("div", { class: "top" }, kind, gpu,
+      el("button", { class: "icon", title: "Move up (drawn earlier)", disabled: wi === 0,
+        onclick: () => moveWidget(li, wi, -1) }, "↑"),
+      el("button", { class: "icon", title: "Move down (drawn later, on top)",
+        disabled: wi === l.widgets.length - 1,
+        onclick: () => moveWidget(li, wi, 1) }, "↓"),
+      el("button", { class: "icon", title: "Remove widget",
+        onclick: () => { l.widgets.splice(wi, 1); select(li, -1, false); changed(); } }, "✕")),
+    el("div", { class: "pos" },
+      anchors, el("span", { class: "note" }, w.anchor), xy("x"), xy("y")));
+}
+
+function gpuChoices(current) {
+  const list = info.gpus.map((name, i) => [i + 1, `GPU ${i + 1}: ${name}`]);
+  if (!list.some(([n]) => n === current)) list.push([current, `GPU ${current} (not found)`]);
+  return list;
+}
+
+function addWidget(li) {
+  const sel = el("select", {}, KINDS.map(([v, t]) => el("option", { value: v }, t)));
+  return el("div", { class: "add" }, sel, el("button", { onclick: () => {
+    const l = model.layouts[li];
+    l.widgets.push({ kind: sel.value, anchor: "center", x: 0, y: 0, gpu: 1 });
+    select(li, l.widgets.length - 1, false);
+    changed();
+  } }, "+ Add widget"));
+}
+
+function addLayout() {
+  const taken = new Set(model.layouts.map((l) => String(l.monitor).toLowerCase()));
+  const free = info.monitors.find((m) => !taken.has(m.name.toLowerCase()));
+  // A specific monitor's layout has to come before a "*" one to be used.
+  model.layouts.unshift({ monitor: free ? free.name : "*", size: 1, widgets: [] });
+  select(0, -1, false);
+  changed();
+}
+
+function moveLayout(li, by) {
+  const ls = model.layouts, to = li + by;
+  [ls[li], ls[to]] = [ls[to], ls[li]];
+  select(to, -1, false);
+  changed();
+}
+
+function moveWidget(li, wi, by) {
+  const ws = model.layouts[li].widgets, to = wi + by;
+  [ws[wi], ws[to]] = [ws[to], ws[wi]];
+  select(li, to, false);
+  changed();
+}
+
+function checkbox(label, help, get, set) {
+  return el("label", { class: "check" },
+    el("input", { type: "checkbox", checked: get(),
+      onchange: (e) => { set(e.target.checked); changed(); } }),
+    el("span", {}, label, help ? el("small", {}, help) : null));
+}
+
+function panePanel() {
+  const p = model.panel;
+  const out = [
+    el("h2", {}, "What the panel shows"),
+    el("p", {}, "Applies to the Panel widget, and the All GPUs and RAM and SSDs widgets. "
+      + "Hidden parts leave no gap."),
+  ];
+  const parts = [["cpu", "CPU threads"], ["network", "Network graph"],
+    ["ram", "RAM"], ["ssd", "SSD temperatures"]];
+  for (const [k, t] of parts) out.push(checkbox(t, null, () => p[k], (v) => { p[k] = v; }));
+  out.push(el("h2", {}, "GPUs"));
+  out.push(el("label", { class: "check" },
+    el("input", { type: "radio", name: "gpus", checked: p.gpus == null,
+      onchange: () => { p.gpus = null; changed(); } }),
+    el("span", {}, "Every GPU in this PC")));
+  out.push(el("label", { class: "check" },
+    el("input", { type: "radio", name: "gpus", checked: p.gpus != null,
+      onchange: () => {
+        p.gpus = info.gpus.length ? info.gpus.map((_, i) => i + 1) : [1];
+        changed();
+      } }),
+    el("span", {}, "Only these:")));
+  if (p.gpus != null) {
+    const n = Math.max(info.gpus.length, ...p.gpus);
+    for (let i = 1; i <= n; i++) {
+      const name = info.gpus[i - 1] || "not found";
+      out.push(el("label", { class: "check", style: "margin-left: 24px" },
+        el("input", { type: "checkbox", checked: p.gpus.includes(i),
+          onchange: (e) => {
+            p.gpus = e.target.checked
+              ? [...p.gpus, i].sort((a, b) => a - b)
+              : p.gpus.filter((g) => g !== i);
+            changed();
+          } }),
+        el("span", {}, `GPU ${i}: ${name}`)));
+    }
+  }
+  return out;
+}
+
+function paneNetwork() {
+  const n = model.network;
+  const secNum = el("input", { type: "number", min: NET_MIN, max: NET_MAX, value: n.seconds,
+    onchange: (e) => {
+      n.seconds = clamp(Math.round(Number(e.target.value)), NET_MIN, NET_MAX, NET_DEFAULT);
+      changed();
+    } });
+  const mbps = el("input", { type: "number", min: 1, step: 1, value: n.max_mbps ?? "",
+    disabled: n.max_mbps == null,
+    onchange: (e) => {
+      const v = Number(e.target.value);
+      n.max_mbps = v > 0 ? v : 100;
+      changed();
+    } });
+  return [
+    el("h2", {}, "History"),
+    el("p", {}, "How many seconds of download and upload the graph shows."),
+    el("div", { class: "range" },
+      el("input", { type: "range", min: NET_MIN, max: NET_MAX, step: 5, value: n.seconds,
+        oninput: (e) => {
+          n.seconds = Number(e.target.value);
+          secNum.value = n.seconds;
+          changed(false);
+        } }),
+      secNum, el("span", { class: "note" }, "seconds")),
+    el("h2", {}, "When the graph turns red"),
+    el("p", {}, "The graph goes from green to red as the download speed nears its limit."),
+    el("label", { class: "check" },
+      el("input", { type: "radio", name: "mbps", checked: n.max_mbps == null,
+        onchange: () => { n.max_mbps = null; changed(); } }),
+      el("span", {}, "At my network adapter's speed")),
+    el("label", { class: "check" },
+      el("input", { type: "radio", name: "mbps", checked: n.max_mbps != null,
+        onchange: () => { n.max_mbps = 500; changed(); } }),
+      el("span", {}, "At my internet plan's download speed:")),
+    el("div", { class: "row", style: "margin-left: 24px" },
+      mbps, el("span", { class: "note" }, "Mbit/s")),
+  ];
+}
+
+function secretField(label, get, set, help) {
+  const input = el("input", { type: showSecrets ? "text" : "password", value: get(),
+    autocomplete: "off",
+    spellcheck: false, oninput: (e) => { set(e.target.value); changed(false); } });
+  return el("div", { class: "field" }, el("label", {}, label), input,
+    help ? el("div", { class: "note" }, help) : null);
+}
+
+function textField(label, get, set, help, placeholder = "") {
+  return el("div", { class: "field" }, el("label", {}, label),
+    el("input", { type: "text", value: get(), placeholder, spellcheck: false,
+      oninput: (e) => { set(e.target.value); changed(false); } }),
+    help ? el("div", { class: "note" }, help) : null);
+}
+
+function paneDiscord() {
+  const d = model.discord;
+  const out = [
+    checkbox("Use Discord", "Shows your call, notifications, a server's channels and friends.",
+      () => model.discordOn, (v) => { model.discordOn = v; }),
+  ];
+  if (!model.discordOn) return out;
+  const hasWidget = model.layouts.some((l) => l.widgets.some((w) => w.kind === "discord"));
+  if (!hasWidget) {
+    out.push(el("p", { class: "note warn" }, "No layout has a Discord widget yet. ",
+      el("button", { class: "link", onclick: () => {
+        if (!model.layouts.length) model.layouts.push({ monitor: "*", size: 1, widgets: [] });
+        const li = Math.min(selected.layout, model.layouts.length - 1);
+        model.layouts[li].widgets.push({ kind: "discord", anchor: "top-right",
+          x: DEFAULT_OFFSET, y: DEFAULT_OFFSET, gpu: 1 });
+        select(li, model.layouts[li].widgets.length - 1, false);
+        changed();
+      } }, "Add one")));
+  }
+  out.push(
+    el("h2", {}, "Your Discord application"),
+    el("p", {}, "Make one at discord.com/developers. Its OAuth2 page has the client id and secret; "
+      + 'add the redirect "http://localhost" there too. Discord asks you to approve '
+      + "Wallflex the first time."),
+    textField("Client id", () => d.client_id, (v) => { d.client_id = v; },
+      null, "123456789012345678"),
+    secretField("Client secret", () => d.client_secret, (v) => { d.client_secret = v; }),
+    textField("Redirect", () => d.redirect_uri, (v) => { d.redirect_uri = v; },
+      "Leave empty for http://localhost.", "http://localhost"),
+    el("h2", {}, "Bot (optional)"),
+    el("p", {}, "For who's online and the FRIENDS page: the application's bot token, with the "
+      + "Presence and Server Members intents turned on."),
+    secretField("Bot token", () => d.bot_token, (v) => { d.bot_token = v; }),
+    el("div", { class: "field" }, el("label", {}, "Friends' user ids, one per line"),
+      el("textarea", { value: d.friends.join("\n"), spellcheck: false,
+        oninput: (e) => {
+          d.friends = e.target.value.split(/\s+/).filter(Boolean);
+          changed(false);
+        } })),
+    el("label", { class: "check" },
+      el("input", { type: "checkbox", checked: showSecrets,
+        onchange: (e) => { showSecrets = e.target.checked; renderPane(); } }),
+      el("span", {}, "Show the secret and token")),
+  );
+  return out;
+}
+
+function paneGeneral() {
+  const hex = el("input", { type: "text", value: model.background, maxLength: 7,
+    style: "width: 90px",
+    onchange: (e) => {
+      const v = e.target.value.trim().toUpperCase();
+      if (/^#?[0-9A-F]{6}$/.test(v)) model.background = v.startsWith("#") ? v : "#" + v;
+      changed();
+    } });
+  const perf = (value, label, help) => el("label", { class: "check" },
+    el("input", { type: "radio", name: "perf", checked: model.performance === value,
+      onchange: () => { model.performance = value; changed(); } }),
+    el("span", {}, label, el("small", {}, help)));
+  return [
+    el("h2", {}, "Background"),
+    el("p", {}, "The colour behind the widgets, in place of a wallpaper."),
+    el("div", { class: "row" },
+      el("input", { type: "color", value: model.background.toLowerCase(),
+        oninput: (e) => {
+          model.background = e.target.value.toUpperCase();
+          hex.value = model.background;
+          changed(false);
+        } }),
+      hex),
+    el("h2", {}, "Performance"),
+    perf("smooth", "Smooth", "Glides and the visualizer at up to 60 frames a second while the PC "
+      + "has room, easing off when it gets busy."),
+    perf("light", "Light", "No glides, readings once a second, a slower visualizer: "
+      + "as light as it gets."),
+    el("p", {}, "Either way Wallflex keeps itself under 2% CPU and 120 MB of memory."),
+    el("h2", {}, "Settings file"),
+    el("p", {}, el("code", {}, filePath)),
+    el("p", {}, "Saved changes show about a second later while Wallflex is running."),
+    el("button", { onclick: () => {
+      const ask = "Replace these settings with Wallflex's defaults? "
+        + "Nothing is saved until you press Save.";
+      if (confirm(ask)) {
+        model = fromConfig(defaults);
+        select(0, -1, false);
+        changed();
+      }
+    } }, "Reset to defaults"),
+  ];
+}
+
+function clamp(v, lo, hi, fallback) {
+  return Number.isFinite(v) ? Math.min(Math.max(v, lo), hi) : fallback;
+}
+
+/** Updates the x/y boxes and anchor of a widget row during a drag. */
+function updateWidgetFields(li, wi) {
+  const w = model.layouts[li].widgets[wi];
+  for (const axis of ["x", "y"]) {
+    const input = document.querySelector(`[data-field="${li}-${wi}-${axis}"]`);
+    if (input) input.value = w[axis];
+  }
+}
+
+// ---- Selection, changes, saving ----
+
+let filePath = "";
+
+function select(li, wi, rerender = true) {
+  selected = { layout: li, widget: wi };
+  if (rerender) render();
+}
+
+function render() {
+  renderDesk();
+  renderPane();
+  updateStatus();
+}
+
+let checkTimer = 0, previewTimer = 0;
+
+/** Something changed: redraw, then check the result and refresh previews. */
+function changed(full = true) {
+  if (full) render();
+  else { renderDesk(); updateStatus(); }
+  clearTimeout(checkTimer);
+  checkTimer = setTimeout(check, CHECK_DELAY_MS);
+  schedulePreview();
+}
+
+function isDirty() {
+  return model && toToml(model) !== savedToml;
+}
+
+function updateStatus() {
+  const s = $("status");
+  const dirty = isDirty();
+  $("save").disabled = !dirty || saving;
+  $("revert").disabled = !dirty || saving;
+  s.className = "status" + (problem ? " bad" : dirty ? " dirty" : "");
+  s.textContent = saving ? "Saving…" : problem ? "Wallflex won't accept this yet"
+    : dirty ? "Unsaved changes" : "Saved";
+}
+
+function banner(text, kind = "bad") {
+  const b = $("banner");
+  b.className = text ? `show ${kind}` : "";
+  b.textContent = text || "";
+}
+
+async function check() {
+  if (!model) return;
+  const text = toToml(model);
+  try {
+    const res = await (await api("/api/check", text)).json();
+    if (text !== toToml(model)) return;
+    problem = res.ok ? null : res.error;
+    banner(problem ? "Wallflex says: " + problem : "");
+  } catch (e) {
+    banner(e.message);
+  }
+  updateStatus();
+}
+
+async function save() {
+  if (!isDirty() || saving) return;
+  saving = true;
+  updateStatus();
+  const text = toToml(model);
+  try {
+    // No stamp after a conflict: the next save replaces the file.
+    const res = await api("/api/save", text,
+      stamp == null ? {} : { "X-Wallflex-Stamp": stamp });
+    const out = await res.json();
+    if (out.ok) {
+      savedToml = text;
+      stamp = out.stamp;
+      problem = null;
+      banner("");
+    } else if (res.status === 409) {
+      banner(out.error + " Reload this window to see those changes (yours will be lost), "
+        + "or save again to replace them.", "warn");
+      stamp = null;
+      problem = null;
+    } else {
+      problem = out.error;
+      banner("Not saved. Wallflex says: " + out.error);
+    }
+  } catch (e) {
+    banner("Not saved: " + e.message);
+  }
+  saving = false;
+  updateStatus();
+}
+
+async function revert() {
+  if (!confirm("Undo all changes since the last save?")) return;
+  await load();
+}
+
+// ---- Previews ----
+
+function schedulePreview() {
+  const key = JSON.stringify([model.background, model.panel, model.network.seconds]);
+  if (key === previewKey) return;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => refreshPreviews(key), PREVIEW_DELAY_MS);
+}
+
+let previewRunning = false, previewAgain = null;
+
+async function refreshPreviews(key) {
+  if (previewRunning) { previewAgain = key; return; }
+  previewRunning = true;
+  previewKey = key;
+  $("pstatus").innerHTML = '<span class="spin">◌</span> Drawing previews with live readings…';
+  try {
+    const res = await (await api("/api/preview", toToml(model))).json();
+    if (res.ok) {
+      const next = {};
+      await Promise.all(res.images.map(async (name) => {
+        const blob = await (await api(`/api/preview/${name}.bmp`)).blob();
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        next[name] = { url, w: img.naturalWidth, h: img.naturalHeight };
+      }));
+      for (const old of Object.values(images)) URL.revokeObjectURL(old.url);
+      images = next;
+      previewsLoaded = true;
+      $("pstatus").textContent = "";
+    } else {
+      // An invalid draft can't be previewed; keep the last pictures.
+      previewKey = "";
+      $("pstatus").textContent = "";
+    }
+  } catch (e) {
+    previewKey = "";
+    $("pstatus").textContent = "Previews unavailable: " + e.message;
+  }
+  previewRunning = false;
+  renderDesk();
+  if (previewAgain && previewAgain !== previewKey) {
+    const again = previewAgain;
+    previewAgain = null;
+    refreshPreviews(again);
+  }
+}
+
+// ---- Start-up ----
+
+async function load() {
+  const [state, inf] = await Promise.all([
+    (await api("/api/state")).json(),
+    (await api("/api/info")).json(),
+  ]);
+  if (state.fatal) {
+    banner(state.fatal);
+    return;
+  }
+  if (inf.error) banner("Couldn't ask wallflex.exe about the monitors: " + inf.error, "warn");
+  else info = inf;
+  filePath = state.path;
+  defaults = state.defaults;
+  stamp = state.stamp;
+  model = fromConfig(state.config || state.defaults);
+  savedToml = state.config ? toToml(model) : "";
+  problem = null;
+  if (!state.config) {
+    banner("Your settings file isn't valid TOML, so these are the defaults. Saving replaces it. ("
+      + state.problem + ")", "warn");
+  } else if (state.problem) {
+    banner("Wallflex doesn't accept your current settings file: " + state.problem
+      + ". Fix it here and save.", "warn");
+  } else if (!state.exists) {
+    banner("There's no settings file yet; these are the defaults.", "warn");
+    savedToml = "";
+  } else {
+    banner("");
+  }
+  const primary = info.monitors.find((m) => m.primary) || info.monitors[0];
+  const li = primary ? layoutOf(primary) : 0;
+  select(Math.max(li, 0), -1, false);
+  render();
+  previewKey = "";
+  schedulePreview();
+}
+
+for (const b of $("tabs").children) {
+  b.addEventListener("click", () => { tab = b.dataset.tab; renderPane(); });
+}
+$("save").addEventListener("click", save);
+$("revert").addEventListener("click", revert);
+addEventListener("resize", () => { if (model) renderDesk(); });
+addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    save();
+    return;
+  }
+  const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const dir = arrows[e.key];
+  const tag = document.activeElement?.tagName;
+  const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(tag);
+  if (!dir || !model || selected.widget < 0 || typing) return;
+  const w = model.layouts[selected.layout]?.widgets[selected.widget];
+  if (!w) return;
+  e.preventDefault();
+  const step = e.shiftKey ? 10 : 1;
+  const [h, v] = sides(w.anchor);
+  // x and y count inward from end edges, so moving right shrinks x there.
+  w.x += dir[0] * step * (h === "end" ? -1 : 1);
+  w.y += dir[1] * step * (v === "end" ? -1 : 1);
+  changed();
+});
+addEventListener("beforeunload", (e) => {
+  if (isDirty()) { e.preventDefault(); e.returnValue = ""; }
+});
+addEventListener("pagehide", () => {
+  navigator.sendBeacon(`/api/bye?t=${encodeURIComponent(token)}`);
+});
+setInterval(() => { api("/api/ping", "").catch(() => {}); }, PING_MS);
+
+load().catch((e) => banner("Couldn't load the settings: " + e.message));
+</script>
+</body>
+</html>

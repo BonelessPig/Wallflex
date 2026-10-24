@@ -14,6 +14,7 @@
 
 #define AppName "Wallflex"
 #define AppExe "wallflex.exe"
+#define SettingsExe "wallflex-settings.exe"
 #define RunKey "Software\Microsoft\Windows\CurrentVersion\Run"
 
 [Setup]
@@ -50,12 +51,28 @@ OutputBaseFilename=wallflex-{#AppVersion}-setup
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Types]
+Name: "full"; Description: "Wallflex and the settings app"
+Name: "compact"; Description: "Wallflex only (edit config.toml by hand)"
+Name: "custom"; Description: "Custom"; Flags: iscustom
+
+[Components]
+Name: "main"; Description: "Wallflex"; Types: full compact custom; \
+  Flags: fixed
+; Optional: a window for arranging the widgets and changing settings.
+; It only runs while open, so it costs nothing otherwise.
+Name: "settings"; \
+  Description: "Settings app: drag widgets into place, change settings in a window"; \
+  Types: full
+
 [Tasks]
 Name: "startup"; Description: "Start Wallflex when I sign in"
 
 [Files]
 Source: "..\target\release\{#AppExe}"; DestDir: "{app}"; \
   Flags: ignoreversion
+Source: "..\target\release\{#SettingsExe}"; DestDir: "{app}"; \
+  Components: settings; Flags: ignoreversion
 Source: "..\docs\SETUP.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\config.default.toml"; DestDir: "{app}"; \
   DestName: "config.example.toml"; Flags: ignoreversion
@@ -64,6 +81,14 @@ Source: "..\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
+Name: "{autoprograms}\{#AppName} Settings"; \
+  Filename: "{app}\{#SettingsExe}"; Components: settings
+
+[InstallDelete]
+; Reinstalling without the settings app removes an earlier copy of it.
+Type: files; Name: "{app}\{#SettingsExe}"; Components: not settings
+Type: files; Name: "{autoprograms}\{#AppName} Settings.lnk"; \
+  Components: not settings
 
 [Registry]
 ; The same value the tray menu's "Start with Windows" writes.

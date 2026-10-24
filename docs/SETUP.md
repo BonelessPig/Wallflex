@@ -15,6 +15,11 @@ that it's from an unknown publisher, because it isn't signed: choose
 **More info > Run anyway**. To update, run a newer setup: it closes
 Wallflex, replaces it and keeps your settings.
 
+The setup also offers the **settings app** (ticked by default; choose
+"Wallflex only" to leave it out). It's a window for arranging the
+widgets by dragging them and changing settings without editing the
+file. It only runs while its window is open.
+
 Or, for a portable copy, unzip `wallflex-<version>.zip` somewhere
 permanent and double-click `wallflex.exe`. (If you move the exe later,
 turn "Start with Windows" off and on again so it points at the new
@@ -28,8 +33,9 @@ button at first; drag it onto the taskbar to keep it in sight.
 
 Click or right-click the Wallflex icon:
 
-- **Open settings** opens `config.toml` (in Notepad if nothing else is
-  set up for `.toml` files).
+- **Open settings** opens the settings app, if you installed it.
+  Otherwise it opens `config.toml` (in Notepad if nothing else is set
+  up for `.toml` files).
 - **Open log** opens `wallflex.log`, which explains any problem.
 - **Start with Windows** starts Wallflex when you sign in. Click again
   to stop that.
@@ -37,9 +43,19 @@ Click or right-click the Wallflex icon:
 
 ## 3. Settings
 
-The first run writes `%APPDATA%\Wallflex\config.toml`. Every option is
-explained in comments inside it (`config.example.toml` in the zip is
-the same file). Save it and the change shows about a second later.
+The easy way is the settings app (**Open settings** in the tray menu,
+or **Wallflex Settings** in the Start menu). It shows your monitors
+with the widgets where they'll appear, drawn with live readings. Drag
+a widget to move it; it sticks to the nearest corner or edge, so it
+stays in place if the resolution changes. The tabs on the right cover
+everything below. Press **Save** (or Ctrl+S) and the desktop updates
+about a second later. Your previous file is kept as
+`config.toml.bak`. Saving rewrites the file without your own comments.
+
+Or edit the file by hand. The first run writes
+`%APPDATA%\Wallflex\config.toml`. Every option is explained in
+comments inside it (`config.example.toml` in the zip is the same
+file). Save it and the change shows about a second later.
 
 - `background`: the colour behind the widgets, such as `"#101418"`.
 - `performance`: `"smooth"` (the default) for smooth animations until

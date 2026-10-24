@@ -66,8 +66,11 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Command::Preview { height, path } => {
-            preview(height, &path, options.background, options.widget)
+        Command::Preview { height, path } => preview(height, &path, &options),
+        Command::Check => check(options.config.as_deref()),
+        Command::Info => {
+            println!("{}", info());
+            ExitCode::SUCCESS
         }
         Command::Diagnose => {
             println!("{}", win32::app::diagnose());
@@ -122,23 +125,95 @@ fn default_config_path() -> Option<PathBuf> {
     Some(PathBuf::from(app_data).join("Wallflex").join("config.toml"))
 }
 
+/// Reads and checks a settings file: `--config`'s, or the default one.
+///
+/// # Errors
+///
+/// What's wrong, ready to show the user.
+fn load_settings(path: Option<&str>) -> Result<config::Settings, String> {
+    let path = path
+        .map(PathBuf::from)
+        .or_else(default_config_path)
+        .ok_or("can't find the settings folder (%APPDATA%)")?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("can't read {}: {e}", path.display()))?;
+    config::parse(&text).map_err(|e| e.to_string())
+}
+
+/// `--check`: says whether the settings file is valid, and if not why.
+fn check(path: Option<&str>) -> ExitCode {
+    match load_settings(path) {
+        Ok(_) => {
+            println!("ok");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--info`: the monitors and GPUs, as JSON for the settings app.
+fn info() -> serde_json::Value {
+    let rect = |r: geometry::Rect| {
+        serde_json::json!({
+            "left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom,
+        })
+    };
+    let monitors: Vec<_> = win32::monitors::list()
+        .into_iter()
+        .map(|m| {
+            serde_json::json!({
+                "name": m.name.trim_start_matches(r"\\.\"),
+                "rect": rect(m.rect),
+                "work": rect(m.work),
+                "primary": m.primary,
+            })
+        })
+        .collect();
+    let gpus: Vec<_> = win32::sensors::Sensors::new()
+        .sample()
+        .gpus
+        .into_iter()
+        .map(|g| g.name)
+        .collect();
+    serde_json::json!({ "monitors": monitors, "gpus": gpus })
+}
+
 /// Renders the widgets with live readings, as they'd look on a monitor
-/// `height` pixels tall, and saves them as a BMP at `path`.
-fn preview(
-    height: u32,
-    path: &str,
-    background: Option<color::Rgb>,
-    kind: args::PreviewWidget,
-) -> ExitCode {
+/// `height` pixels tall, and saves them as a BMP at `path` (or, for
+/// `--widget all`, one BMP per widget in the folder `path`). With
+/// `--config`, that file's panel parts, graph length and background
+/// apply.
+fn preview(height: u32, path: &str, options: &Options) -> ExitCode {
     use args::PreviewWidget;
     use widgets::Widget;
+    let settings =
+        match options.config.as_deref().map(|p| load_settings(Some(p))) {
+            Some(Ok(settings)) => Some(settings),
+            Some(Err(error)) => {
+                eprintln!("wallflex: {error}");
+                return ExitCode::FAILURE;
+            }
+            None => None,
+        };
     let mut sensors = win32::sensors::Sensors::new();
     let mut dashboard = widgets::Dashboard::default();
+    if let Some(settings) = &settings {
+        dashboard.set_parts(settings.parts.clone());
+        dashboard.set_net_seconds(settings.net_seconds);
+    }
     for _ in 0..PREVIEW_READINGS {
         dashboard.update(sensors.sample());
         std::thread::sleep(SENSOR_WARMUP);
     }
     dashboard.settle();
+    let background = options
+        .background
+        .or(settings.map(|s| s.background))
+        .unwrap_or(color::Rgb::BLACK);
+    let kind = options.widget;
     let widget = match kind {
         PreviewWidget::Panel => Widget::Panel,
         PreviewWidget::Cpu => Widget::Cpu,
@@ -160,19 +235,86 @@ fn preview(
             fetch_preview_images(&mut dashboard);
             Widget::Discord
         }
+        PreviewWidget::All => {
+            return preview_all(&mut dashboard, height, path, background);
+        }
     };
-    let background = background.unwrap_or(color::Rgb::BLACK);
-    let image = win32::paint::preview(&dashboard, widget, height, background)
+    if save_preview(&dashboard, widget, height, background, path) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Most single GPUs `--widget all` saves (`gpu1.bmp` and up).
+const PREVIEW_MAX_GPUS: usize = 8;
+
+/// `--widget all`: saves every widget into the folder `dir`, as
+/// `panel.bmp`, `cpu.bmp`, ..., `gpu1.bmp` for each GPU, with the
+/// visualizer and Discord showing sample data (no avatars, so it's
+/// quick). Widgets with nothing to show are left out.
+fn preview_all(
+    dashboard: &mut widgets::Dashboard,
+    height: u32,
+    dir: &str,
+    background: color::Rgb,
+) -> ExitCode {
+    use widgets::Widget;
+    if let Err(error) = std::fs::create_dir_all(dir) {
+        eprintln!("wallflex: can't make {dir}: {error}");
+        return ExitCode::FAILURE;
+    }
+    dashboard.show_visualizer_demo();
+    dashboard.show_discord_demo(widgets::Demo::Names);
+    let mut all = vec![
+        ("panel".to_owned(), Widget::Panel),
+        ("cpu".to_owned(), Widget::Cpu),
+        ("network".to_owned(), Widget::Network),
+        ("gpus".to_owned(), Widget::Gpus),
+        ("info".to_owned(), Widget::Info),
+        ("visualizer".to_owned(), Widget::Visualizer),
+        ("discord".to_owned(), Widget::Discord),
+    ];
+    for (number, index) in (1_u32..).zip(0..PREVIEW_MAX_GPUS) {
+        all.push((format!("gpu{number}"), Widget::Gpu(index)));
+    }
+    let mut ok = true;
+    for (name, widget) in all {
+        let (width, height_units) = dashboard.size(widget);
+        if width <= 0.0 || height_units <= 0.0 {
+            continue;
+        }
+        let path = std::path::Path::new(dir).join(format!("{name}.bmp"));
+        let path = path.to_string_lossy();
+        ok &= save_preview(dashboard, widget, height, background, &path);
+    }
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Renders one widget and saves it as a BMP at `path`. Says what went
+/// wrong on stderr and returns false if it couldn't.
+fn save_preview(
+    dashboard: &widgets::Dashboard,
+    widget: widgets::Widget,
+    height: u32,
+    background: color::Rgb,
+    path: &str,
+) -> bool {
+    let image = win32::paint::preview(dashboard, widget, height, background)
         .and_then(|(w, h, pixels)| bmp::encode(w, h, &pixels));
     let Some(image) = image else {
         eprintln!("wallflex: couldn't render the preview");
-        return ExitCode::FAILURE;
+        return false;
     };
     match std::fs::write(path, image) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => true,
         Err(error) => {
             eprintln!("wallflex: can't write {path}: {error}");
-            ExitCode::FAILURE
+            false
         }
     }
 }

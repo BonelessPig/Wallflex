@@ -11,7 +11,7 @@ mod discord;
 mod http;
 pub mod images;
 mod media;
-mod monitors;
+pub mod monitors;
 mod mouse;
 pub mod paint;
 pub mod sensors;

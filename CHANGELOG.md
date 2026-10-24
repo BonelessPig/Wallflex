@@ -19,6 +19,17 @@ patch number (0.x.**y**) for fixes only.
   Start menu, Installed apps and the installer.
 - `[network] seconds` sets how much history the network graph shows
   (10 to 300).
+- An optional settings app, `wallflex-settings.exe` (**Open settings**
+  in the tray menu, or **Wallflex Settings** in the Start menu): your
+  monitors with live previews of the widgets, which you drag into
+  place, and tabs for layouts, panel parts, the network graph, Discord,
+  background and performance. It checks changes with Wallflex before
+  saving and keeps the old file as `config.toml.bak`. The installer
+  offers it as an optional component.
+- `wallflex --check` checks the settings file, `wallflex --info`
+  prints the monitors and GPUs as JSON, and `--preview` with
+  `--widget all` saves every widget. With `--config`, previews use
+  that file's panel parts, graph length and background.
 
 ### Changed
 

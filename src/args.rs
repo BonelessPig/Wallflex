@@ -21,7 +21,10 @@ Options:
   --widget <KIND>   the widget --preview draws: panel (default), cpu,
                     network, gpus, info, discord, discord-avatars,
                     discord-inbox or visualizer (the last four with
-                    sample data)
+                    sample data); or all, with FILE a folder to save
+                    each widget in as <kind>.bmp
+  --check           check the settings file, print what's wrong, exit
+  --info            print the monitors and GPUs as JSON, then exit
   --diagnose        print how the desktop windows are laid out, then exit
   --quit            stop the running copy of Wallflex
   -h, --help        show this help";
@@ -44,6 +47,10 @@ pub enum Command {
         /// Where to save the BMP.
         path: String,
     },
+    /// Check the settings file and say what's wrong with it.
+    Check,
+    /// Print the monitors and GPUs as JSON, for the settings app.
+    Info,
     /// Print the help text.
     Help,
 }
@@ -83,6 +90,8 @@ pub enum PreviewWidget {
     DiscordInbox,
     /// The music visualizer with sample bars.
     Visualizer,
+    /// Every widget, each to its own file in a folder.
+    All,
 }
 
 impl Default for Options {
@@ -185,6 +194,7 @@ where
                     "discord-avatars" => PreviewWidget::DiscordAvatars,
                     "discord-inbox" => PreviewWidget::DiscordInbox,
                     "visualizer" => PreviewWidget::Visualizer,
+                    "all" => PreviewWidget::All,
                     _ => {
                         return Err(ArgError::BadValue {
                             option: "--widget",
@@ -195,6 +205,8 @@ where
             }
             "--diagnose" => options.command = Command::Diagnose,
             "--quit" => options.command = Command::Quit,
+            "--check" => options.command = Command::Check,
+            "--info" => options.command = Command::Info,
             "-h" | "--help" => options.command = Command::Help,
             _ => return Err(ArgError::Unknown(arg)),
         }
@@ -235,6 +247,8 @@ mod tests {
         assert_eq!(command(&["--quit"]), Ok(Command::Quit));
         assert_eq!(command(&["--diagnose"]), Ok(Command::Diagnose));
         assert_eq!(command(&["--sensors"]), Ok(Command::Sensors));
+        assert_eq!(command(&["--check"]), Ok(Command::Check));
+        assert_eq!(command(&["--info"]), Ok(Command::Info));
         assert_eq!(
             command(&["--preview", "2160", "a.bmp"]),
             Ok(Command::Preview {

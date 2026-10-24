@@ -107,6 +107,8 @@ const WM_AUDIO: u32 = WM_APP + 6;
 const WM_MEDIA: u32 = WM_APP + 7;
 /// The log's file name, next to the config.
 const LOG_FILE: &str = "wallflex.log";
+/// The optional settings app, installed next to this exe.
+const SETTINGS_APP: &str = "wallflex-settings.exe";
 /// `ShellExecuteW` results above this mean success.
 const SHELL_EXECUTE_OK: usize = 32;
 /// Top-level desktop windows: a click on one of these reached the
@@ -1526,7 +1528,9 @@ fn on_tray(hwnd: HWND, lparam: LPARAM) {
     });
     match choice {
         Choice::Settings => {
-            if let Some(path) = &config {
+            if let Some(path) = &config
+                && !open_settings_app(path)
+            {
                 open_file(path);
             }
         }
@@ -1548,6 +1552,30 @@ fn on_tray(hwnd: HWND, lparam: LPARAM) {
             }
         }
         Choice::Quit => post_to_controller(WM_CLOSE),
+    }
+}
+
+/// Starts the optional settings app (`wallflex-settings.exe`, next to
+/// this exe) on `config`. Returns false if it isn't installed or won't
+/// start, so the caller can open the file instead.
+fn open_settings_app(config: &std::path::Path) -> bool {
+    let Some(app) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(SETTINGS_APP)))
+        .filter(|app| app.is_file())
+    else {
+        return false;
+    };
+    match std::process::Command::new(&app)
+        .arg("--config")
+        .arg(config)
+        .spawn()
+    {
+        Ok(_child) => true,
+        Err(error) => {
+            log!("can't start {}: {error}", app.display());
+            false
+        }
     }
 }
 
