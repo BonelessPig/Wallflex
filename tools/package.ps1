@@ -5,15 +5,20 @@ Builds a release of Wallflex and zips it for sharing.
 .DESCRIPTION
 Runs the checks (fmt, clippy, tests), builds the release exe, and puts
 dist\wallflex-<version>.zip together with the exe, the setup guide, the
-default settings and the licences. Nothing personal goes in: settings,
-Discord tokens and logs live in %APPDATA%\Wallflex, not in the repo.
+default settings and the licences. Then builds the installer,
+dist\wallflex-<version>-setup.exe, from installer\wallflex.iss with
+Inno Setup 6 (winget install JRSoftware.InnoSetup). Nothing personal
+goes in: settings, Discord tokens and logs live in %APPDATA%\Wallflex,
+not in the repo.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File tools\package.ps1
 #>
 param(
     # Skip fmt, clippy and the tests (for a quick rebuild).
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+    # Only make the zip (for a PC without Inno Setup).
+    [switch]$NoInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +66,31 @@ try {
 
     $size = [math]::Round((Get-Item $zip).Length / 1KB)
     Write-Host "== $zip ($size KB)"
+
+    if (-not $NoInstaller) {
+        # winget installs it per user; the Inno Setup installer itself
+        # defaults to Program Files.
+        $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+        $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+            (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+        )
+        if (-not $iscc) {
+            $iscc = $candidates | Where-Object { Test-Path $_ } |
+                Select-Object -First 1
+        }
+        if (-not $iscc) {
+            throw ('Inno Setup 6 is needed for the installer ' +
+                '(winget install JRSoftware.InnoSetup), or pass -NoInstaller')
+        }
+        Invoke-Step 'installer' {
+            & $iscc /Qp "/DAppVersion=$version" 'installer\wallflex.iss'
+        }
+        $setup = Join-Path $root "dist\$name-setup.exe"
+        $size = [math]::Round((Get-Item $setup).Length / 1KB)
+        Write-Host "== $setup ($size KB)"
+    }
 }
 finally {
     Pop-Location

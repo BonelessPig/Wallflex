@@ -15,8 +15,9 @@ To release:
 
 It checks the tree is clean and pushed, that the tag doesn't exist yet
 and that CHANGELOG.md has notes for the version; then runs
-tools\package.ps1 (checks, release build, zip), tags vX.Y.Z, pushes the
-tag and creates the GitHub release with the zip and those notes.
+tools\package.ps1 (checks, release build, zip, installer), tags vX.Y.Z,
+pushes the tag and creates the GitHub release with the installer, the
+zip and those notes.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
@@ -77,16 +78,21 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail 'packaging failed' }
     $zip = Join-Path $root "dist\wallflex-$version.zip"
     if (-not (Test-Path $zip)) { Fail "$zip is missing" }
+    $installer = Join-Path $root "dist\wallflex-$version-setup.exe"
+    if (-not (Test-Path $installer)) { Fail "$installer is missing" }
 
     git tag -a $tag -m "Wallflex $version"
     git push origin $tag
     if ($LASTEXITCODE -ne 0) { Fail 'pushing the tag failed' }
 
     $notesFile = Join-Path ([IO.Path]::GetTempPath()) "wallflex-$tag-notes.md"
-    $setup = "Download **wallflex-$version.zip**, unzip it somewhere " +
-        "permanent and see SETUP.md inside.`n`n"
+    $setup = "Download and run **wallflex-$version-setup.exe** (no " +
+        "admin needed), or for a portable copy unzip " +
+        "**wallflex-$version.zip** somewhere permanent. SETUP.md " +
+        "explains the rest.`n`n"
     Set-Content -Path $notesFile -Value ($setup + $notes) -Encoding utf8
-    & $gh release create $tag $zip --title "Wallflex $version" --notes-file $notesFile
+    & $gh release create $tag $installer $zip --title "Wallflex $version" `
+        --notes-file $notesFile
     if ($LASTEXITCODE -ne 0) { Fail 'creating the GitHub release failed' }
     Remove-Item $notesFile
     Write-Host "== released $tag"

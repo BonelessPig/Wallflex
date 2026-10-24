@@ -8,6 +8,14 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Added
+
+- An installer, `wallflex-<version>-setup.exe`: installs for your
+  account only (no admin), adds a Start menu entry and optionally
+  starts Wallflex at sign-in. Upgrades close the running copy and keep
+  your settings; it uninstalls from Installed apps and asks before
+  deleting your settings. The zip is still there for a portable copy.
+
 ## [0.1.0] - 2026-10-24
 
 The first release.

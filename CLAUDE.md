@@ -221,8 +221,15 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   publishes the version in `Cargo.toml` (checks, package, tag, GitHub
   release with the changelog's notes).
 - `tools\package.ps1` builds `dist\wallflex-<version>.zip` (exe,
-  `docs/SETUP.md`, the default config, licences). `docs/SETUP.md` is
-  the friend-facing guide: keep it in step with the config and menu.
+  `docs/SETUP.md`, the default config, licences) and the installer
+  `dist\wallflex-<version>-setup.exe` from `installer\wallflex.iss`
+  (Inno Setup 6, per user, no admin, into `%LOCALAPPDATA%\Wallflex`;
+  ISCC is in `%LOCALAPPDATA%\Programs\Inno Setup 6`). Never change its
+  `AppId`. Test it with `/VERYSILENT /DIR=<scratch>`: its install and
+  uninstall run `--quit`, which closes the user's running copy, and the
+  startup task rewrites their `Run` value, so save and restore both.
+  `docs/SETUP.md` is the friend-facing guide: keep it in step with the
+  config, menu and installer.
 - Test layouts with `--config <file>` instead of editing the user's
   real `%APPDATA%\Wallflex\config.toml`; the log goes next to that
   file.

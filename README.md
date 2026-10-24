@@ -118,7 +118,11 @@ powershell -ExecutionPolicy Bypass -File tools\measure.ps1 -Seconds 30
 
 `tools\package.ps1` runs the checks, builds the release and writes
 `dist\wallflex-<version>.zip` with the exe, the setup guide, the
-default settings and the licences:
+default settings and the licences, and the installer
+`dist\wallflex-<version>-setup.exe` from `installer\wallflex.iss`. The
+installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install JRSoftware.InnoSetup`); `-NoInstaller` makes only the
+zip:
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\package.ps1
@@ -132,7 +136,7 @@ changed settings and the patch number for fixes. Changes are listed in
 [CHANGELOG.md](CHANGELOG.md). To release: set the version in
 `Cargo.toml`, move the changelog's Unreleased notes under it, commit and
 push, then run `tools\release.ps1` (it packages, tags and publishes the
-GitHub release with the zip).
+GitHub release with the installer and the zip).
 
 ## License
 

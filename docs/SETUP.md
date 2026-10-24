@@ -2,18 +2,23 @@
 
 Wallflex draws desktop widgets (CPU, network, GPU, RAM, SSDs and an
 optional Discord panel) behind your desktop icons. It's one small exe:
-no installer, no admin rights, no Wallpaper Engine.
+no admin rights, no Wallpaper Engine.
 
 Needs Windows 10 or 11.
 
 ## 1. Install
 
-1. Unzip `wallflex-<version>.zip` somewhere permanent, for example
-   `%LOCALAPPDATA%\Wallflex`. (If you move the exe later, turn "Start
-   with Windows" off and on again so it points at the new place.)
-2. Double-click `wallflex.exe`. Windows SmartScreen may warn that it's
-   from an unknown publisher, because the exe isn't signed: choose
-   **More info > Run anyway**.
+Run `wallflex-<version>-setup.exe`. It installs for your account only
+(no admin) into `%LOCALAPPDATA%\Wallflex`, adds Wallflex to the Start
+menu, and can start it when you sign in. Windows SmartScreen may warn
+that it's from an unknown publisher, because it isn't signed: choose
+**More info > Run anyway**. To update, run a newer setup: it closes
+Wallflex, replaces it and keeps your settings.
+
+Or, for a portable copy, unzip `wallflex-<version>.zip` somewhere
+permanent and double-click `wallflex.exe`. (If you move the exe later,
+turn "Start with Windows" off and on again so it points at the new
+place.)
 
 The widgets appear behind your icons, and a Wallflex icon appears in
 the notification area. Windows 11 hides new icons under the **^**
@@ -96,6 +101,12 @@ as your application. Wallflex only stores them in your settings file
 and its sign-in token in `discord-token.json` beside it.
 
 ## 5. Uninstall
+
+If you used the setup: **Settings > Apps > Installed apps > Wallflex >
+Uninstall**. It closes Wallflex, stops it starting with Windows, and
+asks whether to delete your settings too.
+
+If you unzipped it:
 
 1. Tray menu: untick **Start with Windows**, then **Quit Wallflex**.
 2. Delete the folder you unzipped and `%APPDATA%\Wallflex`.
