@@ -233,12 +233,12 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - Test layouts with `--config <file>` instead of editing the user's
   real `%APPDATA%\Wallflex\config.toml`; the log goes next to that
   file.
-- The user's own copy runs from `%LOCALAPPDATA%\Wallflex\wallflex.exe`
-  (started at sign-in via the HKCU Run key); copy a new release build
-  there after `wallflex --quit`. The old setup (DiscordBridge task,
-  PerformanceMonitor and Wallpaper Engine services, WEAdapterFix) is
-  disabled, with backups in `%LOCALAPPDATA%\Wallflex\retired`.
-etired`.
+- The user's own copy is installed by the setup into
+  `%LOCALAPPDATA%\Wallflex` (started at sign-in via the HKCU Run key);
+  update it by running a newer `dist\wallflex-<version>-setup.exe`,
+  which quits the running copy first. The old setup (DiscordBridge
+  task, PerformanceMonitor and Wallpaper Engine services, WEAdapterFix)
+  is disabled; its backups have been deleted.
 - Don't restart Explorer or put the PC to sleep to test without asking
   the user first: restarting Explorer closes their File Explorer windows.
 
