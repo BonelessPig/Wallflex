@@ -1,26 +1,38 @@
 # Wallflex
 
+[![CI](https://github.com/BonelessPig/Wallflex/actions/workflows/ci.yml/badge.svg)](https://github.com/BonelessPig/Wallflex/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/BonelessPig/Wallflex)](https://github.com/BonelessPig/Wallflex/releases/latest)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)](docs/SETUP.md)
+
 Lightweight desktop widgets for Windows, drawn behind the desktop icons.
-No Wallpaper Engine, no browser engine, no admin rights.
+No Wallpaper Engine, no browser engine, no admin rights. It keeps itself
+under 2% CPU and 120 MB of memory (typically 20 to 40 MB).
 
-**Status: milestone 6, ready to share.** Wallflex paints a solid background on every
-monitor, between the wallpaper and the icons, with widgets placed by a
-layout per monitor and updated once a second:
+![The performance panel, the Discord widget and the music visualizer](docs/screenshot.png)
 
-- **CPU threads:** a column per thread, paired by core, with the clock.
-- **Network:** the last minute of download and upload.
+**[Download the latest release](https://github.com/BonelessPig/Wallflex/releases/latest)**
+and see [docs/SETUP.md](docs/SETUP.md) to get started.
+
+Wallflex paints a solid background on every monitor, between the
+wallpaper and the icons, with widgets placed by a layout per monitor:
+
+- **CPU threads:** a column per thread, grouped by real core, with the
+  clock.
+- **Network:** the last minute of download and upload, shaded green to
+  red as it nears your connection's speed.
 - **GPU rings:** per GPU, load, VRAM, temperature, power and fan.
+- **RAM and SSDs:** RAM use with a bar per memory stick, SSD
+  temperatures.
+- **Discord** (optional): your call (who's talking, muted, deafened, on
+  camera, sharing), recent notifications (click one to open it), a
+  server's voice channels, and which friends are online.
+- **Music visualizer** (optional): 32 bands from 20 Hz to 20 kHz for
+  whatever your speakers play, with the song's art, title and artist.
 
-plus RAM use and SSD temperatures, and an optional **Discord** widget:
-your call (who's talking, muted, deafened, on camera, sharing), recent
-notifications (click one to open it in Discord), a server's voice
-channels, and which friends are online and what they're playing, plus
-an optional music **visualizer** (`kind = "visualizer"`): 32 bars for
-whatever your speakers are playing, drawn only while sound plays. Sizes
-follow the monitor's height, so the widgets look the same on any
-resolution.
-
-**Setting it up from a release zip:** see [docs/SETUP.md](docs/SETUP.md).
+Everything glides smoothly while your PC has room and eases off when
+it's busy (or set `performance = "light"`). Sizes follow the monitor's
+height, so the widgets look the same at any resolution.
 
 ## Tray icon
 

@@ -210,6 +210,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - Discord credentials and the bot token live in `[discord]` in the
   config; the OAuth token is `discord-token.json` next to it. Never
   print or commit them.
+- `docs/screenshot.png` (in the README) is composed from `--preview 1440`
+  renders of `panel`, `discord` and `visualizer` (sample people and
+  song, so no real Discord data): panel and Discord on top, visualizer
+  centred below, black, 48 px margins. Never use a capture of the
+  user's desktop; it shows their friends, servers and media.
 - Versioning: SemVer, tags `vX.Y.Z`; before 1.0, minor = features or
   config changes, patch = fixes. Note user-visible changes under
   `## [Unreleased]` in `CHANGELOG.md` as they're made. `tools\release.ps1`
