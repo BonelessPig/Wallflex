@@ -6,6 +6,10 @@
 //! wallpaper's 0.1vh), which is also the line weight. Shapes go to a
 //! [`Canvas`]; text comes back as [`Label`]s for GDI to draw on top.
 
+mod discord;
+
+pub use discord::Action;
+
 use std::collections::VecDeque;
 
 use crate::canvas::{Area, Canvas, Paint, mix};
@@ -222,12 +226,32 @@ pub enum Widget {
     Gpu(usize),
     /// RAM use and SSD temperatures on one line.
     Info,
+    /// Discord: your call, notifications and more.
+    Discord,
 }
 
 /// Height of the RAM/SSD line.
 const INFO_H: f64 = HEAD_SIZE * 1.4;
 /// Height of one GPU ring chart, names included.
 const GPU_CHART_H: f64 = RING_NAME_ROOM + RING_SIZE;
+
+/// A clickable area of a drawn widget, in pixels from its top-left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hit {
+    /// The area.
+    pub area: Area,
+    /// What a click there does.
+    pub action: Action,
+}
+
+/// What drawing a widget produced besides its pixels.
+#[derive(Default)]
+pub struct Drawing {
+    /// Text for GDI to draw on top.
+    pub labels: Vec<Label>,
+    /// Clickable areas, later ones on top.
+    pub hits: Vec<Hit>,
+}
 
 /// What the widgets show: the latest reading plus the network history.
 #[derive(Default)]
@@ -236,6 +260,8 @@ pub struct Dashboard {
     snapshot: Snapshot,
     /// The last [`NET_SPAN`] network readings, oldest first.
     net: VecDeque<Network>,
+    /// The Discord widget's state.
+    discord: discord::DiscordUi,
 }
 
 impl Dashboard {
@@ -266,25 +292,27 @@ impl Dashboard {
                 }
             }
             Widget::Info => (PANEL_W, INFO_H),
+            Widget::Discord => self.discord.size(),
         }
     }
 
     /// Draws `widget` into `canvas` (already sized to it and cleared to
     /// `background`) at `scale` pixels per unit. Returns the text to draw
-    /// on top.
+    /// on top and the clickable areas.
     pub fn draw(
         &self,
         widget: Widget,
         canvas: &mut Canvas<'_>,
         scale: f64,
         background: Rgb,
-    ) -> Vec<Label> {
+    ) -> Drawing {
         let mut pen = Pen {
             canvas,
             scale,
             background,
             origin: (0.0, 0.0),
             labels: Vec::new(),
+            hits: Vec::new(),
         };
         match widget {
             Widget::Panel => self.draw_panel(&mut pen),
@@ -297,8 +325,60 @@ impl Dashboard {
                 }
             }
             Widget::Info => self.draw_info(&mut pen),
+            Widget::Discord => self.discord.draw(&mut pen),
         }
-        pen.labels
+        Drawing {
+            labels: pen.labels,
+            hits: pen.hits,
+        }
+    }
+
+    /// Handles a click on a widget. Returns a command for the Discord
+    /// session, if the click needs one.
+    pub fn click(
+        &mut self,
+        action: &Action,
+    ) -> Option<crate::discord::session::Command> {
+        self.discord.click(action)
+    }
+
+    /// Whether Discord is set up; the Discord widget hides otherwise.
+    pub fn set_discord_configured(&mut self, configured: bool, bot: bool) {
+        self.discord.set_configured(configured, bot);
+    }
+
+    /// Takes in a new view from the Discord bot.
+    pub fn update_bot(&mut self, view: Option<crate::discord::bot::BotView>) {
+        self.discord.update_bot(view);
+    }
+
+    /// Pictures the Discord widget needs but doesn't have yet. Each URL
+    /// is returned once.
+    pub fn wanted_images(&mut self) -> Vec<String> {
+        self.discord.wanted_images()
+    }
+
+    /// A command for the Discord session when the SERVER page needs a
+    /// different server's channels.
+    pub fn discord_request(
+        &mut self,
+    ) -> Option<crate::discord::session::Command> {
+        self.discord.server_request()
+    }
+
+    /// Hands over a downloaded picture.
+    pub fn add_image(&mut self, url: String, image: crate::image::Image) {
+        self.discord.add_image(url, image);
+    }
+
+    /// Fills the Discord widget with sample data, for `--preview`.
+    pub fn show_discord_demo(&mut self, inbox: bool) {
+        self.discord.show_demo(inbox);
+    }
+
+    /// Takes in a new view from the Discord session.
+    pub fn update_discord(&mut self, view: crate::discord::model::DiscordView) {
+        self.discord.update(view);
     }
 
     /// The panel: CPU and network side by side, GPUs under them, then
@@ -755,6 +835,8 @@ struct Pen<'a, 'b> {
     origin: (f64, f64),
     /// Text collected for GDI.
     labels: Vec<Label>,
+    /// Clickable areas collected.
+    hits: Vec<Hit>,
 }
 
 impl Pen<'_, '_> {
@@ -838,6 +920,127 @@ impl Pen<'_, '_> {
         let centre = self.point((cx, cy));
         self.canvas
             .arc(centre, radius * self.scale, weight, fraction, paint);
+    }
+
+    /// Makes an area (in units) clickable.
+    fn hit(&mut self, area: Area, action: Action) {
+        let area = self.px(area);
+        self.hits.push(Hit { area, action });
+    }
+
+    /// A filled circle.
+    fn circle(
+        &mut self,
+        centre: (f64, f64),
+        radius: f64,
+        color: Rgb,
+        alpha: f64,
+    ) {
+        let centre = self.point(centre);
+        let radius = radius * self.scale;
+        // A ring as wide as the radius, centred halfway out, is a disc.
+        self.canvas.arc(
+            centre,
+            radius / 2.0,
+            radius,
+            1.0,
+            Paint { color, alpha },
+        );
+    }
+
+    /// An image clipped to a circle.
+    fn image_circle(
+        &mut self,
+        centre: (f64, f64),
+        radius: f64,
+        image: &crate::image::Image,
+    ) {
+        let centre = self.point(centre);
+        self.canvas.image_circle(centre, radius * self.scale, image);
+    }
+
+    /// An image clipped to a rounded square.
+    fn image_rounded(
+        &mut self,
+        centre: (f64, f64),
+        half: f64,
+        corner: f64,
+        image: &crate::image::Image,
+    ) {
+        let centre = self.point(centre);
+        let s = self.scale;
+        self.canvas
+            .image_rounded(centre, half * s, corner * s, image);
+    }
+
+    /// A filled rounded square.
+    fn rounded(
+        &mut self,
+        centre: (f64, f64),
+        half: f64,
+        corner: f64,
+        color: Rgb,
+        alpha: f64,
+    ) {
+        let centre = self.point(centre);
+        let s = self.scale;
+        self.canvas.fill_rounded(
+            centre,
+            half * s,
+            corner * s,
+            Paint { color, alpha },
+        );
+    }
+
+    /// A circle outline `width` units wide.
+    fn ring(
+        &mut self,
+        centre: (f64, f64),
+        radius: f64,
+        width: f64,
+        color: Rgb,
+        alpha: f64,
+    ) {
+        let centre = self.point(centre);
+        let width = (width * self.scale).max(1.0);
+        self.canvas.arc(
+            centre,
+            radius * self.scale,
+            width,
+            1.0,
+            Paint { color, alpha },
+        );
+    }
+
+    /// A line `width` units wide.
+    fn line_width(&mut self, points: &[(f64, f64)], width: f64, paint: Paint) {
+        let points = self.points(points);
+        let width = (width * self.scale).max(1.0);
+        self.canvas.polyline(&points, width, paint);
+    }
+
+    /// Text in `color` at `alpha`.
+    fn text_in(
+        &mut self,
+        color: Rgb,
+        (x, y): (f64, f64),
+        size: f64,
+        alpha: f64,
+        align: Align,
+        text: &str,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let (x, y) = self.point((x, y));
+        self.labels.push(Label {
+            x,
+            y,
+            size: size * self.scale,
+            color: mix(color, self.background, alpha),
+            align,
+            text: text.to_owned(),
+        });
     }
 
     /// Text in ink at `alpha`.
@@ -1016,7 +1219,8 @@ mod tests {
             let mut canvas = Canvas::new(700, 450, &mut buffer).unwrap();
             dashboard.draw(Widget::Panel, &mut canvas, scale, Rgb::BLACK)
         };
-        let texts: Vec<&str> = labels.iter().map(|l| l.text.as_str()).collect();
+        let texts: Vec<&str> =
+            labels.labels.iter().map(|l| l.text.as_str()).collect();
         assert!(texts.contains(&"CPU THREADS"));
         assert!(texts.contains(&"4.30 GHZ · 6C / 12T"));
         assert!(texts.contains(&"C6"));

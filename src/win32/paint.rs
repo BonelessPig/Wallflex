@@ -23,7 +23,9 @@ use crate::canvas::Canvas;
 use crate::color::Rgb;
 use crate::config::{Layout, Placement};
 use crate::geometry::Rect;
-use crate::widgets::{Align, Dashboard, Label, UNITS_PER_HEIGHT, Widget};
+use crate::widgets::{
+    Action, Align, Dashboard, Hit, Label, UNITS_PER_HEIGHT, Widget,
+};
 
 /// Smallest pixels-per-unit, so text stays readable on small monitors
 /// (8-unit text would be under 8 pixels below 1000 pixels tall).
@@ -62,6 +64,8 @@ struct Slot {
     buffer: Option<DibBuffer>,
     /// Where it was last drawn, so a move repaints the old area too.
     last: Option<Rect>,
+    /// Its clickable areas from the last paint.
+    hits: Vec<Hit>,
 }
 
 impl Painter {
@@ -92,6 +96,7 @@ impl Painter {
                 placement,
                 buffer: None,
                 last: None,
+                hits: Vec::new(),
             })
             .collect();
         Ok(Self {
@@ -140,7 +145,7 @@ impl Painter {
                         scale: self.scale,
                         background: self.background_color,
                     };
-                    draw_widget(
+                    slot.hits = draw_widget(
                         hdc,
                         rect,
                         &mut slot.buffer,
@@ -175,6 +180,33 @@ impl Painter {
         }
         // SAFETY: pairs the BeginPaint above. It cannot fail.
         let _ = unsafe { EndPaint(hwnd, &raw const ps) };
+    }
+
+    /// What a click at `point` (client pixels) would do, if anything.
+    pub fn hit_test(&self, (x, y): (i32, i32)) -> Option<Action> {
+        self.slots.iter().rev().find_map(|slot| {
+            let rect = slot.last?;
+            let inside = rect.left <= x
+                && x < rect.right
+                && rect.top <= y
+                && y < rect.bottom;
+            if !inside {
+                return None;
+            }
+            let local_x = f64::from(x.saturating_sub(rect.left));
+            let local_y = f64::from(y.saturating_sub(rect.top));
+            slot.hits
+                .iter()
+                .rev()
+                .find(|hit| {
+                    let a = hit.area;
+                    a.x0 <= local_x
+                        && local_x < a.x1
+                        && a.y0 <= local_y
+                        && local_y < a.y1
+                })
+                .map(|hit| hit.action.clone())
+        })
     }
 
     /// Where a widget goes on this monitor, or `None` if it has nothing
@@ -271,7 +303,7 @@ struct WidgetJob {
 }
 
 /// Renders a widget off-screen, then copies it to `rect` on `hdc` in one
-/// go.
+/// go. Returns its clickable areas.
 fn draw_widget(
     hdc: HDC,
     rect: Rect,
@@ -279,12 +311,12 @@ fn draw_widget(
     fonts: &mut Fonts,
     job: WidgetJob,
     dashboard: &Dashboard,
-) {
+) -> Vec<Hit> {
     let (width, height) = (rect.width(), rect.height());
-    let Some(source) =
+    let Some((source, hits)) =
         render(hdc, (width, height), buffer, fonts, job, dashboard)
     else {
-        return;
+        return Vec::new();
     };
     // SAFETY: both DCs are valid and the area is inside each. A failed
     // copy only leaves the widget stale until the next paint.
@@ -301,10 +333,12 @@ fn draw_widget(
             SRCCOPY,
         )
     };
+    hits
 }
 
 /// Renders a widget into `buffer` (recreated if the size changed):
-/// shapes from the canvas, then the text on top. Returns the buffer's DC.
+/// shapes from the canvas, then the text on top. Returns the buffer's DC
+/// and the clickable areas.
 fn render(
     hdc: HDC,
     (width, height): (i32, i32),
@@ -312,7 +346,7 @@ fn render(
     fonts: &mut Fonts,
     job: WidgetJob,
     dashboard: &Dashboard,
-) -> Option<HDC> {
+) -> Option<(HDC, Vec<Hit>)> {
     let w = usize::try_from(width).ok()?;
     let h = usize::try_from(height).ok()?;
     let fits = buffer
@@ -324,7 +358,7 @@ fn render(
         *buffer = DibBuffer::new(hdc, width, height);
     }
     let buffer = buffer.as_mut()?;
-    let labels = {
+    let drawing = {
         let mut canvas = Canvas::new(w, h, buffer.pixels())?;
         canvas.fill(job.background);
         dashboard.draw(job.widget, &mut canvas, job.scale, job.background)
@@ -333,10 +367,10 @@ fn render(
     // SAFETY: `dc` is the buffer's DC, valid while the buffer lives. The
     // result is the previous mode, not an error.
     let _ = unsafe { SetBkMode(dc, TRANSPARENT) };
-    for label in &labels {
+    for label in &drawing.labels {
         fonts.draw_label(dc, label);
     }
-    Some(dc)
+    Some((dc, drawing.hits))
 }
 
 /// Fonts by pixel size, created on first use.

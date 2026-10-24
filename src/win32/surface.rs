@@ -4,7 +4,9 @@
 use windows::Win32::Foundation::{
     COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{ClientToScreen, InvalidateRect};
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, InvalidateRect, ScreenToClient,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, HTTRANSPARENT,
     HWND_TOP, IsWindow, LWA_ALPHA, RegisterClassExW, SW_SHOWNA, SWP_NOACTIVATE,
@@ -23,7 +25,7 @@ use super::struct_size;
 use crate::color::Rgb;
 use crate::config::Layout as ConfigLayout;
 use crate::geometry::Point;
-use crate::widgets::Dashboard;
+use crate::widgets::{Action, Dashboard};
 
 /// Window class for surfaces.
 const SURFACE_CLASS: PCWSTR = w!("WallflexSurface");
@@ -98,6 +100,16 @@ impl Surface {
                 InvalidateRect(Some(self.hwnd), Some(&raw const rect), false)
             };
         }
+    }
+
+    /// What a click at `screen` (desktop pixels) would do, if anything.
+    pub fn hit_test(&self, screen: POINT) -> Option<Action> {
+        let mut point = screen;
+        // SAFETY: `point` is a valid place for the call to update.
+        if !unsafe { ScreenToClient(self.hwnd, &raw mut point) }.as_bool() {
+            return None;
+        }
+        self.painter.hit_test((point.x, point.y))
     }
 
     /// Handles `WM_PAINT`.

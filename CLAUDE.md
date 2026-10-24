@@ -71,6 +71,19 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   and checked by a test to equal `Settings::default()`.
 - `src/log.rs`: `log!` writes to stderr and `wallflex.log` next to the
   config. Use it instead of `eprintln!` in the running app.
+- `src/discord/`: safe Discord code, ported from the user's
+  DiscordBridge. `rpc.rs` frames the local pipe protocol over a
+  `Transport` that also delivers UI commands (one blocking wait, no
+  polling). `session.rs` signs in (OAuth token refresh), follows your
+  call, speaking, notifications and the SERVER page's channels.
+  `bot.rs` is the gateway protocol and member/presence cache for the
+  optional bot. `model.rs` is the view types. All unit-tested with
+  fake transports.
+- `src/widgets/discord.rs` (+ `discord/server.rs`, `discord/friends.rs`):
+  the Discord widget redrawn from the wallpaper's `discord.js`: tabs,
+  VOICE (same name-row rules), SERVER, FRIENDS, INBOX, summary line,
+  offline icon. It records hit areas while drawing.
+- `src/image.rs`: decoded pictures (premultiplied BGRA).
 - `src/win32/`: the Win32 layer.
   - `desktop.rs`: finds where to draw. Explorer's split desktop has two
     shapes: **Raised** (Windows 11 24H2+: surfaces are layered children
@@ -89,6 +102,15 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     Scale = monitor height / 1000 (at least 1 px per unit) x layout size.
   - `monitors.rs`: each monitor's rectangle, work area, name and primary
     flag.
+  - `discord/`: the session thread plus a pipe-reader thread
+    (overlapped I/O on `\\.\pipe\discord-ipc-N`), the bot thread plus a
+    websocket-reader thread (`gateway.rs`), and `focus.rs` (raise
+    Discord's window after opening a `discord://` link).
+  - `http.rs`: WinHTTP requests and websockets (no TLS library).
+    `images.rs`: download + WIC decode on a thread, with retries.
+  - Clicks: a WH_MOUSE_LL hook (only while Discord is set up) notes a
+    press and release at the same spot, and only acts when the desktop
+    itself is under the pointer. It never swallows clicks.
   - `sensors/`: raw readings, all from built-in Windows sources with no
     admin: `pdh.rs` (CPU per core and clock, GPU engine use, VRAM in
     use), `gpu.rs` (D3DKMT: temperature, fan, power, VRAM size),
@@ -109,6 +131,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   `WorkerW`.
 - Stop a running copy with `wallflex --quit`. Only one copy runs at a
   time.
+- `--preview <h> <file> --widget discord` (or `discord-inbox`) draws
+  the Discord widget with sample data and real downloaded avatars.
+- Discord credentials and the bot token live in `[discord]` in the
+  config; the OAuth token is `discord-token.json` next to it. Never
+  print or commit them.
 - Test layouts with `--config <file>` instead of editing the user's
   real `%APPDATA%\Wallflex\config.toml`; the log goes next to that
   file.
@@ -150,3 +177,11 @@ toml). Anchors, live reload and error reporting were tested on the
 upper monitor with a test config; plugging monitors in and out hasn't
 been tested on real hardware yet (it goes through the same
 WM_DISPLAYCHANGE rebuild).
+
+Milestone 5 (23 Oct 2026, release build, 60 s, Discord + bot in 9
+servers following 34 friends): 17.6 MB working set, 8.9 MB private,
+0.1% CPU, exe 760 KB. Tested live: sign-in with a stored token, tabs and
+clicks, the server list and a server's channels, FRIENDS with real
+presences and avatars. Not yet tested live: being in a call (speaking
+rings, camera badges) and opening a notification, since that needs a
+call or a message to arrive.

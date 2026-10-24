@@ -18,6 +18,9 @@ Options:
   --preview <HEIGHT> <FILE>
                     save the widgets as a BMP, as they'd look on a
                     monitor HEIGHT pixels tall, then exit
+  --widget <KIND>   the widget --preview draws: panel (default), cpu,
+                    network, gpus, info, discord or discord-inbox (the
+                    last two with sample data)
   --diagnose        print how the desktop windows are laid out, then exit
   --quit            stop the running copy of Wallflex
   -h, --help        show this help";
@@ -53,6 +56,28 @@ pub struct Options {
     pub background: Option<Rgb>,
     /// Settings file from `--config`, instead of the default one.
     pub config: Option<String>,
+    /// The widget `--preview` draws, from `--widget`.
+    pub widget: PreviewWidget,
+}
+
+/// What `--preview` draws.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreviewWidget {
+    /// The full panel.
+    #[default]
+    Panel,
+    /// CPU threads.
+    Cpu,
+    /// Network graph.
+    Network,
+    /// GPU rings.
+    Gpus,
+    /// RAM and SSD line.
+    Info,
+    /// Discord, in a sample call.
+    Discord,
+    /// Discord's INBOX page with sample notifications.
+    DiscordInbox,
 }
 
 impl Default for Options {
@@ -61,6 +86,7 @@ impl Default for Options {
             command: Command::Run,
             background: None,
             config: None,
+            widget: PreviewWidget::Panel,
         }
     }
 }
@@ -141,6 +167,25 @@ where
                     )?;
                 options.command = Command::Preview { height, path };
             }
+            "--widget" => {
+                let value =
+                    args.next().ok_or(ArgError::MissingValue("--widget"))?;
+                options.widget = match value.as_str() {
+                    "panel" => PreviewWidget::Panel,
+                    "cpu" => PreviewWidget::Cpu,
+                    "network" => PreviewWidget::Network,
+                    "gpus" => PreviewWidget::Gpus,
+                    "info" => PreviewWidget::Info,
+                    "discord" => PreviewWidget::Discord,
+                    "discord-inbox" => PreviewWidget::DiscordInbox,
+                    _ => {
+                        return Err(ArgError::BadValue {
+                            option: "--widget",
+                            value,
+                        });
+                    }
+                };
+            }
             "--diagnose" => options.command = Command::Diagnose,
             "--quit" => options.command = Command::Quit,
             "-h" | "--help" => options.command = Command::Help,
@@ -172,6 +217,7 @@ mod tests {
                 command: Command::Run,
                 background: Some(Rgb { r: 255, g: 0, b: 0 }),
                 config: None,
+                widget: super::PreviewWidget::Panel,
             })
         );
     }

@@ -31,7 +31,13 @@ if (Get-Process -Name 'wallflex' -ErrorAction SilentlyContinue) {
     Start-Sleep -Seconds 2
 }
 
-$proc = Start-Process -FilePath $Exe -PassThru
+$arguments = @()
+if ($Config) { $arguments = @('--config', $Config) }
+$proc = if ($arguments) {
+    Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru
+} else {
+    Start-Process -FilePath $Exe -PassThru
+}
 Start-Sleep -Seconds $SettleSeconds
 $proc.Refresh()
 $cpuStart = $proc.TotalProcessorTime.TotalSeconds

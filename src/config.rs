@@ -25,6 +25,23 @@ pub struct Settings {
     pub background: Rgb,
     /// Layouts in file order; a monitor uses the first that matches.
     pub layouts: Vec<Layout>,
+    /// Discord, if set up.
+    pub discord: Option<DiscordSettings>,
+}
+
+/// The `[discord]` section: your Discord application's details.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscordSettings {
+    /// Application (client) id.
+    pub client_id: String,
+    /// Client secret.
+    pub client_secret: String,
+    /// Redirect URI registered for the application.
+    pub redirect_uri: String,
+    /// Bot token, for who's online and friends.
+    pub bot_token: Option<String>,
+    /// Friends' user ids, for the FRIENDS page.
+    pub friends: Vec<String>,
 }
 
 /// What goes on the monitors a [`MonitorMatch`] selects.
@@ -223,6 +240,7 @@ impl Default for Settings {
                     offset: (DEFAULT_OFFSET, DEFAULT_OFFSET),
                 }],
             }],
+            discord: None,
         }
     }
 }
@@ -248,6 +266,25 @@ struct RawConfig {
     /// `[[layout]]` tables.
     #[serde(default)]
     layout: Vec<RawLayout>,
+    /// `[discord]` table.
+    discord: Option<RawDiscord>,
+}
+
+/// `[discord]` as written.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDiscord {
+    /// Application id.
+    client_id: String,
+    /// Client secret.
+    client_secret: String,
+    /// Redirect URI.
+    redirect_uri: Option<String>,
+    /// Bot token.
+    bot_token: Option<String>,
+    /// Friends' user ids.
+    #[serde(default)]
+    friends: Vec<String>,
 }
 
 /// One `[[layout]]` as written.
@@ -300,9 +337,42 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
                 .map_err(|e| ConfigError(format!("layout {number}: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let discord = raw
+        .discord
+        .map(parse_discord)
+        .transpose()
+        .map_err(|e| ConfigError(format!("discord: {e}")))?;
     Ok(Settings {
         background,
         layouts,
+        discord,
+    })
+}
+
+/// Default redirect URI, as `DiscordBridge`'s setup guide registers.
+const DEFAULT_REDIRECT: &str = "http://localhost";
+
+/// Validates the `[discord]` section.
+fn parse_discord(raw: RawDiscord) -> Result<DiscordSettings, String> {
+    let is_id =
+        |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !is_id(&raw.client_id) {
+        return Err("client_id must be the application's number".into());
+    }
+    if raw.client_secret.trim().is_empty() {
+        return Err("client_secret is empty".into());
+    }
+    if let Some(bad) = raw.friends.iter().find(|f| !is_id(f)) {
+        return Err(format!("friends: '{bad}' isn't a user id"));
+    }
+    Ok(DiscordSettings {
+        client_id: raw.client_id,
+        client_secret: raw.client_secret,
+        redirect_uri: raw
+            .redirect_uri
+            .unwrap_or_else(|| DEFAULT_REDIRECT.to_owned()),
+        bot_token: raw.bot_token.filter(|t| !t.trim().is_empty()),
+        friends: raw.friends,
     })
 }
 
@@ -337,6 +407,7 @@ fn parse_widget(raw: &RawWidget) -> Result<Placement, String> {
         ("network", None) => Widget::Network,
         ("gpus", None) => Widget::Gpus,
         ("info", None) => Widget::Info,
+        ("discord", None) => Widget::Discord,
         ("gpu", Some(number)) if number >= 1 => {
             let index = number.saturating_sub(1);
             Widget::Gpu(usize::try_from(index).map_err(|e| e.to_string())?)
@@ -506,6 +577,22 @@ mod tests {
         let bad_anchor =
             "[[layout]]\n[[layout.widget]]\nkind = \"cpu\"\nanchor = \"up\"";
         assert!(error(bad_anchor).contains("anchor"));
+    }
+
+    #[test]
+    fn reads_discord_settings() {
+        let text = "[discord]
+client_id = \"123\"
+client_secret = \"s\"
+                    friends = [\"9\"]";
+        let discord = parse(text).unwrap().discord.unwrap();
+        assert_eq!(discord.redirect_uri, "http://localhost");
+        assert_eq!(discord.friends, ["9"]);
+        assert!(discord.bot_token.is_none());
+        let bad = "[discord]
+client_id = \"abc\"
+client_secret = \"s\"";
+        assert!(parse(bad).unwrap_err().0.contains("client_id"));
     }
 
     #[test]

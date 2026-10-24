@@ -10,6 +10,7 @@
 use std::f64::consts::TAU;
 
 use crate::color::Rgb;
+use crate::image::Image;
 
 /// A colour with an opacity, 0.0 (invisible) to 1.0 (solid).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -271,6 +272,99 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Draws `image` scaled into a circle of `radius` around (`cx`,
+    /// `cy`), with a smooth edge.
+    pub fn image_circle(
+        &mut self,
+        centre: (f64, f64),
+        radius: f64,
+        image: &Image,
+    ) {
+        self.image_rounded(centre, radius, radius, image);
+    }
+
+    /// Draws `image` scaled into a square `half` from `centre` to each
+    /// side, with corners rounded to `corner` and smooth edges.
+    pub fn image_rounded(
+        &mut self,
+        (cx, cy): (f64, f64),
+        half: f64,
+        corner: f64,
+        image: &Image,
+    ) {
+        if half <= 0.0 || image.width == 0 || image.height == 0 {
+            return;
+        }
+        let scale_x = index_to_f64(image.width) / (half * 2.0);
+        let scale_y = index_to_f64(image.height) / (half * 2.0);
+        for y in self.span_y(cy - half - 1.0, cy + half + 1.0) {
+            let dy = index_to_f64(y) + HALF - cy;
+            for x in self.span_x(cx - half - 1.0, cx + half + 1.0) {
+                let dx = index_to_f64(x) + HALF - cx;
+                let cover =
+                    unit(HALF - rounded_distance((dx, dy), half, corner));
+                if cover <= 0.0 {
+                    continue;
+                }
+                let sample = bilinear(
+                    image,
+                    (dx + half) * scale_x,
+                    (dy + half) * scale_y,
+                );
+                self.blend_premultiplied(x, y, sample, cover);
+            }
+        }
+    }
+
+    /// Fills a square `half` from `centre` to each side, corners rounded
+    /// to `corner`.
+    pub fn fill_rounded(
+        &mut self,
+        (cx, cy): (f64, f64),
+        half: f64,
+        corner: f64,
+        paint: Paint,
+    ) {
+        for y in self.span_y(cy - half - 1.0, cy + half + 1.0) {
+            let dy = index_to_f64(y) + HALF - cy;
+            for x in self.span_x(cx - half - 1.0, cx + half + 1.0) {
+                let dx = index_to_f64(x) + HALF - cx;
+                let cover =
+                    unit(HALF - rounded_distance((dx, dy), half, corner));
+                if cover > 0.0 {
+                    self.blend(x, y, paint, cover);
+                }
+            }
+        }
+    }
+
+    /// Mixes a premultiplied (r, g, b, a) colour into pixel (`x`, `y`) at
+    /// `coverage`.
+    fn blend_premultiplied(
+        &mut self,
+        x: usize,
+        y: usize,
+        rgba: [f64; 4],
+        coverage: f64,
+    ) {
+        let index =
+            y.checked_mul(self.width).and_then(|row| row.checked_add(x));
+        let Some(pixel) = index.and_then(|i| self.pixels.get_mut(i)) else {
+            return;
+        };
+        let [red, green, blue, alpha] = rgba;
+        let keep = 1.0 - alpha * coverage;
+        let old = unpack(*pixel);
+        let channel = |src: f64, dst: u8| {
+            unit_to_u8(src * coverage + f64::from(dst) / 255.0 * keep)
+        };
+        *pixel = pack(Rgb {
+            r: channel(red, old.r),
+            g: channel(green, old.g),
+            b: channel(blue, old.b),
+        });
+    }
+
     /// Pixel columns that `x0..x1` touches, clipped to the canvas.
     fn span_x(&self, x0: f64, x1: f64) -> std::ops::Range<usize> {
         clip_span(x0, x1, self.width)
@@ -340,6 +434,41 @@ fn arc_coverage(angle: f64, sweep: f64, distance: f64) -> f64 {
         let outside = (angle - sweep).min(TAU - angle) * distance;
         unit(HALF - outside)
     }
+}
+
+/// Signed distance from `(dx, dy)` (relative to the centre) to the edge
+/// of a rounded square `half` to each side with corner radius `corner`:
+/// negative inside.
+fn rounded_distance((dx, dy): (f64, f64), half: f64, corner: f64) -> f64 {
+    let corner = corner.clamp(0.0, half);
+    let qx = dx.abs() - (half - corner);
+    let qy = dy.abs() - (half - corner);
+    let outside = qx.max(0.0).hypot(qy.max(0.0));
+    outside + qx.max(qy).min(0.0) - corner
+}
+
+/// `image` sampled at (`x`, `y`) in its own pixels, blending the four
+/// nearest pixels.
+fn bilinear(image: &Image, x: f64, y: f64) -> [f64; 4] {
+    let (x, y) = (x - HALF, y - HALF);
+    let (fx, fy) = (x.floor(), y.floor());
+    let (tx, ty) = (x - fx, y - fy);
+    let (x0, y0) = (f64_to_index(fx), f64_to_index(fy));
+    let x1 = x0.saturating_add(1).min(image.width.saturating_sub(1));
+    let y1 = y0.saturating_add(1).min(image.height.saturating_sub(1));
+    let corners = [
+        (image.pixel(x0, y0), (1.0 - tx) * (1.0 - ty)),
+        (image.pixel(x1, y0), tx * (1.0 - ty)),
+        (image.pixel(x0, y1), (1.0 - tx) * ty),
+        (image.pixel(x1, y1), tx * ty),
+    ];
+    let mut out = [0.0; 4];
+    for (pixel, weight) in corners {
+        for (sum, channel) in out.iter_mut().zip(pixel) {
+            *sum += channel * weight;
+        }
+    }
+    out
 }
 
 /// Distance from `p` to the segment `a`-`b`.
@@ -537,6 +666,20 @@ mod tests {
         assert_eq!(pixel(&canvas, 9, 5), 255);
         assert_eq!(pixel(&canvas, 5, 0), 255);
         assert_eq!(pixel(&canvas, 5, 5), 0);
+    }
+
+    #[test]
+    fn draws_images_in_circles() {
+        let image = crate::image::Image {
+            width: 2,
+            height: 2,
+            pixels: vec![0xFFFF_FFFF; 4],
+        };
+        let mut buffer = vec![0; 400];
+        let mut canvas = Canvas::new(20, 20, &mut buffer).unwrap();
+        canvas.image_circle((10.0, 10.0), 8.0, &image);
+        assert_eq!(pixel(&canvas, 10, 10), 255, "centre");
+        assert_eq!(pixel(&canvas, 0, 0), 0, "outside the circle");
     }
 
     #[test]

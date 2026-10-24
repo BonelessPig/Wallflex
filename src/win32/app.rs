@@ -3,32 +3,39 @@
 //! Explorer restarts, the displays change, the PC wakes up or the config
 //! file is saved.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::SystemTime;
 
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{
+    HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    FindWindowW, GW_HWNDNEXT, GetMessageW, GetWindow, IsWindow, KillTimer, MSG,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, FindWindowW, GA_ROOT, GW_HWNDNEXT, GetAncestor,
+    GetMessageW, GetWindow, HHOOK, IsWindow, KillTimer, MSG, MSLLHOOKSTRUCT,
     PBT_APMRESUMEAUTOMATIC, PostMessageW, PostQuitMessage, RegisterClassExW,
-    RegisterWindowMessageW, SetTimer, TranslateMessage, WM_CLOSE, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_POWERBROADCAST, WM_TIMER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    RegisterWindowMessageW, SetTimer, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_POWERBROADCAST,
+    WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
 use super::desktop::{self, DesktopHost, Layout};
+use super::discord::{BotSettings, DiscordLink};
+use super::images::ImageFetcher;
 use super::sensors::Sensors;
 use super::surface::{self, Surface};
-use super::{monitors, struct_size};
+use super::{class_name, monitors, struct_size};
 use crate::args::Options;
-use crate::config::{self, MonitorInfo, Settings};
+use crate::config::{self, DiscordSettings, MonitorInfo, Settings};
+use crate::discord::session::Credentials;
 use crate::log;
 use crate::widgets::Dashboard;
 
@@ -57,6 +64,20 @@ const SENSOR_INTERVAL_MS: u32 = 1_000;
 /// split is asked again every 30 seconds rather than every 5.
 const RETRY_SKIP_TICKS: u32 = 5;
 
+/// Posted by the Discord thread when it has a new view.
+const WM_DISCORD: u32 = WM_APP + 1;
+/// Posted by the mouse hook when the desktop was clicked.
+const WM_DESKTOP_CLICK: u32 = WM_APP + 2;
+/// Posted by the image thread when a picture is ready.
+const WM_IMAGES: u32 = WM_APP + 3;
+/// A press and release this close together (pixels) count as a click.
+const CLICK_SLOP: i32 = 4;
+/// Top-level desktop windows: a click on one of these reached the
+/// desktop rather than an app.
+const DESKTOP_CLASSES: [&str; 2] = ["Progman", "WorkerW"];
+/// File the Discord sign-in token is kept in, next to the config.
+const DISCORD_TOKEN_FILE: &str = "discord-token.json";
+
 /// Options for this run, set once at startup.
 static OPTIONS: OnceLock<Options> = OnceLock::new();
 /// The controller window's handle as an address, for the Ctrl+C handler
@@ -84,6 +105,16 @@ struct State {
     settings: Settings,
     /// The config file, if there is one to watch.
     config: Option<ConfigFile>,
+    /// The running Discord session, if Discord is set up.
+    discord: Option<DiscordLink>,
+    /// The settings it was started with.
+    discord_settings: Option<DiscordSettings>,
+    /// Where the Discord token is kept.
+    token_path: Option<PathBuf>,
+    /// The mouse hook, while a clickable widget may be showing.
+    mouse_hook: Option<HHOOK>,
+    /// Downloads pictures, started with the Discord session.
+    images: Option<ImageFetcher>,
 }
 
 /// The config file and when it was last loaded.
@@ -143,6 +174,10 @@ impl ConfigFile {
 thread_local! {
     /// The controller's state.
     static STATE: RefCell<State> = RefCell::new(State::default());
+    /// Where the left button went down, for telling clicks from drags.
+    static PRESSED_AT: Cell<Option<POINT>> = const { Cell::new(None) };
+    /// The click waiting for `WM_DESKTOP_CLICK`.
+    static CLICKED_AT: Cell<Option<POINT>> = const { Cell::new(None) };
 }
 
 /// Why Wallflex couldn't run.
@@ -232,6 +267,10 @@ pub fn run(
     // Without a console (release builds) this fails harmlessly.
     let _ = unsafe { SetConsoleCtrlHandler(Some(on_console_ctrl), true) };
 
+    let token_path = config_path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|dir| dir.join(DISCORD_TOKEN_FILE));
     let mut config = config_path.map(|path| ConfigFile {
         path,
         modified: None,
@@ -245,6 +284,7 @@ pub fn run(
             state.sensors = Some(Sensors::new());
             state.settings = settings;
             state.config = config;
+            state.token_path = token_path;
         }
     });
     let _ = on_sensor_tick();
@@ -391,8 +431,24 @@ unsafe extern "system" fn controller_proc(
             let _ = unsafe { DestroyWindow(hwnd) };
             return LRESULT(0);
         }
+        WM_DISCORD => {
+            on_discord_update();
+            return LRESULT(0);
+        }
+        WM_IMAGES => {
+            on_images_ready();
+            return LRESULT(0);
+        }
+        WM_DESKTOP_CLICK => {
+            if let Some(point) = CLICKED_AT.take() {
+                on_desktop_click(point);
+            }
+            return LRESULT(0);
+        }
         WM_DESTROY => {
             drop(take_surfaces());
+            stop_discord();
+            remove_mouse_hook();
             // SAFETY: plain value; ends the message loop.
             unsafe { PostQuitMessage(0) };
             return LRESULT(0);
@@ -574,6 +630,7 @@ fn take_surfaces() -> Vec<Surface> {
 /// with the layout the settings give it.
 fn rebuild() {
     drop(take_surfaces());
+    apply_discord_settings();
     let Some(settings) = STATE.with(|state| {
         state.try_borrow().ok().map(|state| state.settings.clone())
     }) else {
@@ -644,6 +701,265 @@ fn set_retry_delay() {
     STATE.with(|state| {
         if let Ok(mut state) = state.try_borrow_mut() {
             state.skip_ticks = RETRY_SKIP_TICKS;
+        }
+    });
+}
+
+/// Starts, restarts or stops the Discord session to match the settings.
+fn apply_discord_settings() {
+    let controller = CONTROLLER.load(Ordering::Acquire);
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let wanted = state.settings.discord.clone();
+        state.dashboard.set_discord_configured(
+            wanted.is_some(),
+            wanted.as_ref().is_some_and(|d| d.bot_token.is_some()),
+        );
+        state.mouse_hook =
+            install_mouse_hook(state.mouse_hook, wanted.is_some());
+        if wanted == state.discord_settings {
+            return;
+        }
+        // Stop the old session before starting a new one.
+        state.discord = None;
+        state.discord_settings.clone_from(&wanted);
+        let (Some(settings), Some(token_path)) =
+            (wanted, state.token_path.clone())
+        else {
+            return;
+        };
+        let bot = settings.bot_token.map(|token| BotSettings {
+            token,
+            friends: settings.friends,
+        });
+        let credentials = Credentials {
+            client_id: settings.client_id,
+            client_secret: settings.client_secret,
+            redirect_uri: settings.redirect_uri,
+        };
+        let notify = HWND(std::ptr::with_exposed_provenance_mut(controller));
+        state.discord = Some(DiscordLink::start(
+            credentials,
+            bot,
+            token_path,
+            notify,
+            WM_DISCORD,
+        ));
+        if state.images.is_none() {
+            state.images = Some(ImageFetcher::start(notify, WM_IMAGES));
+        }
+        log!("Discord: started");
+    });
+}
+
+/// Installs or removes the mouse hook. The hook only watches for clicks
+/// on the desktop; it never blocks or changes them. Returns the hook now
+/// in place.
+fn install_mouse_hook(current: Option<HHOOK>, wanted: bool) -> Option<HHOOK> {
+    match (current, wanted) {
+        (None, true) => {
+            let instance = module_instance().ok()?;
+            // SAFETY: a low-level hook with a plain function, called on
+            // this thread's message loop.
+            let hook = unsafe {
+                SetWindowsHookExW(
+                    WH_MOUSE_LL,
+                    Some(mouse_hook),
+                    Some(instance),
+                    0,
+                )
+            };
+            match hook {
+                Ok(hook) => Some(hook),
+                Err(error) => {
+                    log!("can't watch for clicks: {error}");
+                    None
+                }
+            }
+        }
+        (Some(hook), false) => {
+            // SAFETY: the hook was installed by this program. If it's
+            // already gone, there's nothing to undo.
+            let _ = unsafe { UnhookWindowsHookEx(hook) };
+            None
+        }
+        (current, _) => current,
+    }
+}
+
+/// Removes the mouse hook (on shutdown).
+fn remove_mouse_hook() {
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.mouse_hook = install_mouse_hook(state.mouse_hook, false);
+        }
+    });
+}
+
+/// The low-level mouse hook: notes left-button presses and, when the
+/// release is at the same spot, posts the click to the controller.
+/// Kept tiny: it runs for every mouse event on the system.
+unsafe extern "system" fn mouse_hook(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let message = u32::try_from(wparam.0).unwrap_or(0);
+    if code >= 0 && (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+        let info = std::ptr::with_exposed_provenance::<MSLLHOOKSTRUCT>(
+            lparam.0.cast_unsigned(),
+        );
+        // SAFETY: for WH_MOUSE_LL, lParam points to an MSLLHOOKSTRUCT
+        // that's valid for the duration of the call.
+        if let Some(info) = unsafe { info.as_ref() } {
+            note_button(message, info.pt);
+        }
+    }
+    // SAFETY: passes the event on unchanged, as hooks must.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// Remembers a press; on a release at the same spot, posts a click.
+fn note_button(message: u32, point: POINT) {
+    if message == WM_LBUTTONDOWN {
+        PRESSED_AT.set(Some(point));
+    } else if let Some(down) = PRESSED_AT.take() {
+        let near = down.x.saturating_sub(point.x).abs() <= CLICK_SLOP
+            && down.y.saturating_sub(point.y).abs() <= CLICK_SLOP;
+        if near {
+            CLICKED_AT.set(Some(point));
+            post_to_controller(WM_DESKTOP_CLICK);
+        }
+    }
+}
+
+/// Posts `message` to the controller window.
+fn post_to_controller(message: u32) {
+    let address = CONTROLLER.load(Ordering::Acquire);
+    if address != 0 {
+        let hwnd = HWND(std::ptr::with_exposed_provenance_mut(address));
+        // SAFETY: posting is safe from any thread; plain values. If it
+        // fails, the click is just lost.
+        let _ =
+            unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) };
+    }
+}
+
+/// Whether the desktop (not an app window) is under `point`.
+fn desktop_under(point: POINT) -> bool {
+    // SAFETY: both only read window state.
+    let root = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
+    !root.is_invalid() && DESKTOP_CLASSES.contains(&class_name(root).as_str())
+}
+
+/// Handles a click on the desktop: if it hit a widget's control, acts on
+/// it and repaints.
+fn on_desktop_click(point: POINT) {
+    if !desktop_under(point) {
+        return;
+    }
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let State {
+            surfaces,
+            dashboard,
+            discord,
+            images,
+            ..
+        } = &mut *state;
+        let Some(action) = surfaces.iter().find_map(|s| s.hit_test(point))
+        else {
+            return;
+        };
+        let command = dashboard.click(&action);
+        if let Some(link) = discord.as_ref() {
+            for command in
+                command.into_iter().chain(dashboard.discord_request())
+            {
+                link.send(command);
+            }
+        }
+        fetch_wanted_images(dashboard, images.as_mut());
+        for surface in surfaces.iter() {
+            surface.invalidate_widgets(dashboard);
+        }
+    });
+}
+
+/// Asks the image thread for pictures the widgets now need.
+fn fetch_wanted_images(
+    dashboard: &mut Dashboard,
+    images: Option<&mut ImageFetcher>,
+) {
+    if let Some(images) = images {
+        for url in dashboard.wanted_images() {
+            images.fetch(&url);
+        }
+    }
+}
+
+/// Pictures arrived: hand them to the widgets and repaint.
+fn on_images_ready() {
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let State {
+            images,
+            dashboard,
+            surfaces,
+            ..
+        } = &mut *state;
+        let Some(images) = images.as_ref() else {
+            return;
+        };
+        for (url, image) in images.take_ready() {
+            dashboard.add_image(url, image);
+        }
+        for surface in surfaces.iter() {
+            surface.invalidate_widgets(dashboard);
+        }
+    });
+}
+
+/// Stops the Discord session.
+fn stop_discord() {
+    STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            state.discord = None;
+            state.discord_settings = None;
+        }
+    });
+}
+
+/// The Discord thread published a new view: show it.
+fn on_discord_update() {
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let State {
+            discord,
+            dashboard,
+            surfaces,
+            images,
+            ..
+        } = &mut *state;
+        let Some(link) = discord.as_ref() else {
+            return;
+        };
+        dashboard.update_discord(link.view());
+        dashboard.update_bot(link.bot_view());
+        if let Some(command) = dashboard.discord_request() {
+            link.send(command);
+        }
+        fetch_wanted_images(dashboard, images.as_mut());
+        for surface in surfaces.iter() {
+            surface.invalidate_widgets(dashboard);
         }
     });
 }

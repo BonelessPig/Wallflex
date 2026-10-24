@@ -27,6 +27,7 @@ size = 1.0
 #   "gpus"     every GPU's rings, two per row
 #   "gpu"      one GPU's rings: add gpu = 1 (or 2, ...)
 #   "info"     RAM use and SSD temperatures
+#   "discord"  your call, notifications and more (needs [discord] below)
 # "anchor" is the corner or edge it sits against: top-left, top,
 # top-right, left, center, right, bottom-left, bottom or bottom-right.
 # Positions are measured from the edges of the area the taskbar leaves
@@ -64,3 +65,16 @@ y = 64
 # anchor = "top-right"
 # x = 64
 # y = 190
+
+# Discord: needs your own Discord application (discord.com/developers):
+# its client id and secret from the OAuth2 page, with the redirect
+# "http://localhost" added there. The first time, Discord asks you to
+# approve Wallflex. Add a widget with kind = "discord" to show it.
+#
+# [discord]
+# client_id = "123456789012345678"
+# client_secret = "..."
+# # Optional, for who's online and friends: the application's bot token
+# # (with the Presence and Server Members intents) and friends' user ids.
+# bot_token = "..."
+# friends = ["123456789012345678"]

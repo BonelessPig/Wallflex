@@ -6,6 +6,9 @@
 pub mod app;
 pub mod console;
 mod desktop;
+mod discord;
+mod http;
+pub mod images;
 mod monitors;
 pub mod paint;
 pub mod sensors;

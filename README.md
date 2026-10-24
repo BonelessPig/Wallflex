@@ -3,7 +3,7 @@
 Lightweight desktop widgets for Windows, drawn behind the desktop icons.
 No Wallpaper Engine, no browser engine, no admin rights.
 
-**Status: milestone 4.** Wallflex paints a solid background on every
+**Status: milestone 5.** Wallflex paints a solid background on every
 monitor, between the wallpaper and the icons, with widgets placed by a
 layout per monitor and updated once a second:
 
@@ -11,8 +11,29 @@ layout per monitor and updated once a second:
 - **Network:** the last minute of download and upload.
 - **GPU rings:** per GPU, load, VRAM, temperature, power and fan.
 
-plus RAM use and SSD temperatures. Sizes follow the monitor's height, so
-the widgets look the same on any resolution.
+plus RAM use and SSD temperatures, and an optional **Discord** widget:
+your call (who's talking, muted, deafened, on camera, sharing), recent
+notifications (click one to open it in Discord), a server's voice
+channels, and which friends are online and what they're playing. Sizes
+follow the monitor's height, so the widgets look the same on any
+resolution.
+
+## Discord
+
+Discord needs your own application from
+<https://discord.com/developers/applications>: copy its client id and
+secret from the OAuth2 page and add the redirect `http://localhost`
+there, then fill in `[discord]` in the config and add a widget with
+`kind = "discord"`. The first time, Discord asks you to approve
+Wallflex.
+
+For who's online and the FRIENDS page, also set `bot_token` (the
+application's bot, with the Presence and Server Members intents turned
+on, added to your servers) and `friends` (user ids: Discord settings >
+Advanced > Developer Mode, then right-click a name > Copy User ID).
+
+Discord only allows its local connection for an application's owner and
+up to 50 testers, so each friend makes their own application.
 
 ## Settings
 
@@ -47,6 +68,7 @@ wallflex --color 203040       background colour, overriding the config
 wallflex --config my.toml     use another settings file
 wallflex --sensors            print one sensor reading and exit
 wallflex --preview 2160 a.bmp save the widgets as they'd look on a 2160p monitor
+wallflex --preview 1440 a.bmp --widget discord   ... the Discord widget, sample data
 wallflex --quit               stop the running copy
 wallflex --diagnose           show how Explorer's desktop windows are laid out
 ```

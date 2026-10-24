@@ -12,7 +12,9 @@ mod bmp;
 mod canvas;
 mod color;
 mod config;
+mod discord;
 mod geometry;
+mod image;
 mod log;
 mod sensors;
 mod text;
@@ -60,7 +62,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Preview { height, path } => {
-            preview(height, &path, options.background)
+            preview(height, &path, options.background, options.widget)
         }
         Command::Diagnose => {
             println!("{}", win32::app::diagnose());
@@ -121,21 +123,31 @@ fn preview(
     height: u32,
     path: &str,
     background: Option<color::Rgb>,
+    kind: args::PreviewWidget,
 ) -> ExitCode {
+    use args::PreviewWidget;
+    use widgets::Widget;
     let mut sensors = win32::sensors::Sensors::new();
     let mut dashboard = widgets::Dashboard::default();
     for _ in 0..PREVIEW_READINGS {
         dashboard.update(sensors.sample());
         std::thread::sleep(SENSOR_WARMUP);
     }
+    let widget = match kind {
+        PreviewWidget::Panel => Widget::Panel,
+        PreviewWidget::Cpu => Widget::Cpu,
+        PreviewWidget::Network => Widget::Network,
+        PreviewWidget::Gpus => Widget::Gpus,
+        PreviewWidget::Info => Widget::Info,
+        PreviewWidget::Discord | PreviewWidget::DiscordInbox => {
+            dashboard.show_discord_demo(kind == PreviewWidget::DiscordInbox);
+            fetch_preview_images(&mut dashboard);
+            Widget::Discord
+        }
+    };
     let background = background.unwrap_or(color::Rgb::BLACK);
-    let image = win32::paint::preview(
-        &dashboard,
-        widgets::Widget::Panel,
-        height,
-        background,
-    )
-    .and_then(|(w, h, pixels)| bmp::encode(w, h, &pixels));
+    let image = win32::paint::preview(&dashboard, widget, height, background)
+        .and_then(|(w, h, pixels)| bmp::encode(w, h, &pixels));
     let Some(image) = image else {
         eprintln!("wallflex: couldn't render the preview");
         return ExitCode::FAILURE;
@@ -147,4 +159,33 @@ fn preview(
             ExitCode::FAILURE
         }
     }
+}
+
+/// Longest wait for `--preview`'s pictures.
+const PREVIEW_IMAGE_WAIT: Duration = Duration::from_secs(10);
+/// How often `--preview` checks for them.
+const PREVIEW_IMAGE_POLL: Duration = Duration::from_millis(100);
+
+/// Downloads the pictures the preview's sample data uses, waiting up to
+/// [`PREVIEW_IMAGE_WAIT`].
+fn fetch_preview_images(dashboard: &mut widgets::Dashboard) {
+    let wanted = dashboard.wanted_images();
+    // No window to notify: the preview checks for itself.
+    let mut fetcher = win32::images::ImageFetcher::start(
+        windows::Win32::Foundation::HWND::default(),
+        0,
+    );
+    for url in &wanted {
+        fetcher.fetch(url);
+    }
+    let start = std::time::Instant::now();
+    let mut received = 0;
+    while received < wanted.len() && start.elapsed() < PREVIEW_IMAGE_WAIT {
+        std::thread::sleep(PREVIEW_IMAGE_POLL);
+        for (url, image) in fetcher.take_ready() {
+            dashboard.add_image(url, image);
+            received = received.saturating_add(1);
+        }
+    }
+    crate::log!("preview: {received} of {} pictures", wanted.len());
 }
