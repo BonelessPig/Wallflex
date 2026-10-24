@@ -12,7 +12,9 @@ pub mod images;
 mod monitors;
 pub mod paint;
 pub mod sensors;
+mod startup;
 mod surface;
+mod tray;
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;

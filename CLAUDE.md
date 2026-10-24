@@ -108,6 +108,10 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     Discord's window after opening a `discord://` link).
   - `http.rs`: WinHTTP requests and websockets (no TLS library).
     `images.rs`: download + WIC decode on a thread, with retries.
+  - `tray.rs`: the notification-area icon (drawn with the canvas at the
+    small-icon size) and its menu; `app.rs` handles the choices and
+    re-adds the icon when Explorer restarts. `startup.rs`: "Start with
+    Windows" as an HKCU `Run` value.
   - Clicks: a WH_MOUSE_LL hook (only while Discord is set up) notes a
     press and release at the same spot, and only acts when the desktop
     itself is under the pointer. It never swallows clicks.
@@ -136,6 +140,9 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - Discord credentials and the bot token live in `[discord]` in the
   config; the OAuth token is `discord-token.json` next to it. Never
   print or commit them.
+- `tools\package.ps1` builds `dist\wallflex-<version>.zip` (exe,
+  `docs/SETUP.md`, the default config, licences). `docs/SETUP.md` is
+  the friend-facing guide: keep it in step with the config and menu.
 - Test layouts with `--config <file>` instead of editing the user's
   real `%APPDATA%\Wallflex\config.toml`; the log goes next to that
   file.
@@ -185,3 +192,12 @@ clicks, the server list and a server's channels, FRIENDS with real
 presences and avatars. Not yet tested live: being in a call (speaking
 rings, camera badges) and opening a notification, since that needs a
 call or a message to arrive.
+
+Milestone 6 (23 Oct 2026, release build): the tray icon adds about
+1.2 MB working set and 0.4-0.8 MB private (shell32's notification-area
+DLLs). Default config: 18.7 MB working set, 9.6 MB private, 0.07% CPU.
+With Discord + bot while in a call: 28.1 MB working set, 12.8 MB
+private, 0.12% CPU; the milestone 5 build measured 27 MB / 12 MB under
+the same conditions, so the call, not the tray, is most of that (to
+look into). Exe 768 KB, release zip 397 KB. Tested live: tray menu,
+Start with Windows on and off (Run value written and removed), Quit.

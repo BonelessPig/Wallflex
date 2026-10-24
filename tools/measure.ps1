@@ -17,6 +17,8 @@ powershell -ExecutionPolicy Bypass -File tools\measure.ps1 -Seconds 60
 param(
     [int]$Seconds = 30,
     [int]$SettleSeconds = 5,
+    # Settings file to run with, instead of the user's own.
+    [string]$Config = '',
     [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\wallflex.exe')
 )
 

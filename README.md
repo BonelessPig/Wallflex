@@ -3,7 +3,7 @@
 Lightweight desktop widgets for Windows, drawn behind the desktop icons.
 No Wallpaper Engine, no browser engine, no admin rights.
 
-**Status: milestone 5.** Wallflex paints a solid background on every
+**Status: milestone 6, ready to share.** Wallflex paints a solid background on every
 monitor, between the wallpaper and the icons, with widgets placed by a
 layout per monitor and updated once a second:
 
@@ -17,6 +17,15 @@ notifications (click one to open it in Discord), a server's voice
 channels, and which friends are online and what they're playing. Sizes
 follow the monitor's height, so the widgets look the same on any
 resolution.
+
+**Setting it up from a release zip:** see [docs/SETUP.md](docs/SETUP.md).
+
+## Tray icon
+
+Wallflex puts an icon in the notification area (Windows 11 hides it
+under **^** at first). Its menu opens the settings or the log, turns
+**Start with Windows** on or off (a value under the current user's
+`Run` key, no admin), and quits.
 
 ## Discord
 
@@ -73,7 +82,8 @@ wallflex --quit               stop the running copy
 wallflex --diagnose           show how Explorer's desktop windows are laid out
 ```
 
-Release builds have no console window; stop them with `--quit`. Debug
+Release builds have no console window; stop them from the tray menu
+or with `--quit`. Debug
 builds (`cargo run`) keep a console, and Ctrl+C stops them.
 
 ## Measuring
@@ -83,6 +93,16 @@ and whether a GPU driver was loaded:
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\measure.ps1 -Seconds 30
+```
+
+## Packaging
+
+`tools\package.ps1` runs the checks, builds the release and writes
+`dist\wallflex-<version>.zip` with the exe, the setup guide, the
+default settings and the licences:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\package.ps1
 ```
 
 ## License

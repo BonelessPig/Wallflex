@@ -15,15 +15,17 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, FindWindowW, GA_ROOT, GW_HWNDNEXT, GetAncestor,
     GetMessageW, GetWindow, HHOOK, IsWindow, KillTimer, MSG, MSLLHOOKSTRUCT,
     PBT_APMRESUMEAUTOMATIC, PostMessageW, PostQuitMessage, RegisterClassExW,
-    RegisterWindowMessageW, SetTimer, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CLOSE, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_POWERBROADCAST,
-    WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
+    RegisterWindowMessageW, SW_SHOWNORMAL, SetTimer, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CLOSE,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+    WS_POPUP, WindowFromPoint,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -31,7 +33,9 @@ use super::desktop::{self, DesktopHost, Layout};
 use super::discord::{BotSettings, DiscordLink};
 use super::images::ImageFetcher;
 use super::sensors::Sensors;
+use super::startup;
 use super::surface::{self, Surface};
+use super::tray::{self, Choice, Tray};
 use super::{class_name, monitors, struct_size};
 use crate::args::Options;
 use crate::config::{self, DiscordSettings, MonitorInfo, Settings};
@@ -70,6 +74,12 @@ const WM_DISCORD: u32 = WM_APP + 1;
 const WM_DESKTOP_CLICK: u32 = WM_APP + 2;
 /// Posted by the image thread when a picture is ready.
 const WM_IMAGES: u32 = WM_APP + 3;
+/// Sent by the tray icon when it's clicked.
+const WM_TRAY: u32 = WM_APP + 4;
+/// The log's file name, next to the config.
+const LOG_FILE: &str = "wallflex.log";
+/// `ShellExecuteW` results above this mean success.
+const SHELL_EXECUTE_OK: usize = 32;
 /// A press and release this close together (pixels) count as a click.
 const CLICK_SLOP: i32 = 4;
 /// Top-level desktop windows: a click on one of these reached the
@@ -115,6 +125,8 @@ struct State {
     mouse_hook: Option<HHOOK>,
     /// Downloads pictures, started with the Discord session.
     images: Option<ImageFetcher>,
+    /// The tray icon.
+    tray: Option<Tray>,
 }
 
 /// The config file and when it was last loaded.
@@ -285,6 +297,7 @@ pub fn run(
             state.settings = settings;
             state.config = config;
             state.token_path = token_path;
+            state.tray = Tray::add(controller, WM_TRAY);
         }
     });
     let _ = on_sensor_tick();
@@ -435,6 +448,10 @@ unsafe extern "system" fn controller_proc(
             on_discord_update();
             return LRESULT(0);
         }
+        WM_TRAY => {
+            on_tray(hwnd, lparam);
+            return LRESULT(0);
+        }
         WM_IMAGES => {
             on_images_ready();
             return LRESULT(0);
@@ -449,6 +466,11 @@ unsafe extern "system" fn controller_proc(
             drop(take_surfaces());
             stop_discord();
             remove_mouse_hook();
+            STATE.with(|state| {
+                if let Ok(mut state) = state.try_borrow_mut() {
+                    state.tray = None;
+                }
+            });
             // SAFETY: plain value; ends the message loop.
             unsafe { PostQuitMessage(0) };
             return LRESULT(0);
@@ -500,9 +522,17 @@ fn set_rebuild_pending(pending: bool) {
     });
 }
 
-/// Explorer restarted. Rebuilds unless a rebuild is already scheduled or
-/// a health check has already put the surfaces back.
+/// Explorer restarted. Puts the tray icon back, and rebuilds unless a
+/// rebuild is already scheduled or a health check has already put the
+/// surfaces back.
 fn on_explorer_restart(hwnd: HWND) {
+    STATE.with(|state| {
+        if let Ok(state) = state.try_borrow()
+            && let Some(tray) = &state.tray
+        {
+            tray.show();
+        }
+    });
     let settled = STATE.with(|state| {
         state.try_borrow().is_ok_and(|state| {
             state.rebuild_pending
@@ -962,4 +992,80 @@ fn on_discord_update() {
             surface.invalidate_widgets(dashboard);
         }
     });
+}
+
+/// The tray icon was clicked: shows the menu and does what was picked.
+fn on_tray(hwnd: HWND, lparam: LPARAM) {
+    let event = u32::try_from(lparam.0).unwrap_or(0);
+    if event != WM_RBUTTONUP && event != WM_LBUTTONUP {
+        return;
+    }
+    let Some(choice) = tray::show_menu(hwnd, startup::is_enabled()) else {
+        return;
+    };
+    let config = STATE.with(|state| {
+        state
+            .try_borrow()
+            .ok()
+            .and_then(|s| s.config.as_ref().map(|c| c.path.clone()))
+    });
+    match choice {
+        Choice::Settings => {
+            if let Some(path) = &config {
+                open_file(path);
+            }
+        }
+        Choice::Log => {
+            if let Some(dir) = config.as_ref().and_then(|p| p.parent()) {
+                open_file(&dir.join(LOG_FILE));
+            }
+        }
+        Choice::Startup => {
+            let enable = !startup::is_enabled();
+            match startup::set_enabled(enable) {
+                Ok(()) => log!(
+                    "start with Windows: {}",
+                    if enable { "on" } else { "off" }
+                ),
+                Err(error) => {
+                    log!("can't change starting with Windows: {error}");
+                }
+            }
+        }
+        Choice::Quit => post_to_controller(WM_CLOSE),
+    }
+}
+
+/// Opens a file in its default app, or Notepad if it has none (a
+/// `.toml` file often doesn't).
+fn open_file(path: &std::path::Path) {
+    let file = windows::core::HSTRING::from(path.as_os_str());
+    // SAFETY: the strings are null-terminated and outlive the calls. The
+    // results only signal success (above 32).
+    let opened = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &file,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if opened.0.addr() <= SHELL_EXECUTE_OK {
+        // SAFETY: as above.
+        let notepad = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                w!("notepad.exe"),
+                &file,
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if notepad.0.addr() <= SHELL_EXECUTE_OK {
+            log!("can't open {}", path.display());
+        }
+    }
 }
