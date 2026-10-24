@@ -58,8 +58,13 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   of the monitor height (the wallpaper's 0.1vh), also the line weight.
   `Dashboard` holds the latest reading and a minute of network history,
   draws shapes to a `Canvas` and returns text as `Label`s.
+- `src/widgets/motion.rs`: the glide. After each reading the CPU
+  columns, GPU rings and RAM bar ease to the new values over 0.3 s
+  (text changes at once); `Dashboard::moving_areas` says which parts
+  move. Previews call `settle()`.
 - `src/canvas.rs`: a small anti-aliased software rasteriser (rects,
-  ring arcs, polylines, area fill) over a borrowed pixel slice. No
+  ring arcs, polylines, area fill) over a borrowed pixel slice, with an
+  optional clip rectangle. No
   graphics library: Direct2D and GDI+ cost far more memory.
 - `src/bmp.rs`: BMP writer for `--preview`.
 - `src/config.rs`: parses and validates `config.toml` (serde + toml)
@@ -82,7 +87,10 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - `src/widgets/discord.rs` (+ `discord/server.rs`, `discord/friends.rs`):
   the Discord widget redrawn from the wallpaper's `discord.js`: tabs,
   VOICE (same name-row rules), SERVER, FRIENDS, INBOX, summary line,
-  offline icon. It records hit areas while drawing.
+  offline icon. It records hit areas while drawing. The VOICE page has
+  a names / avatars-only toggle (icon at the end of the channel line).
+  The widget is drawn `BLEED` units in from each side so rings and
+  badges at its edges aren't cut off.
 - `src/image.rs`: decoded pictures (premultiplied BGRA).
 - `src/win32/`: the Win32 layer.
   - `desktop.rs`: finds where to draw. Explorer's split desktop has two
@@ -90,15 +98,23 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     of `Progman`, directly below `SHELLDLL_DefView`) and **Classic**
     (surfaces inside the wallpaper `WorkerW`). Undocumented; message
     `0x052C` with wParam `0xD` asks Explorer to split.
-  - `app.rs`: hidden controller window and message loop. Sensors and a
-    config-file change check every 1 s; health check every 5 s; rebuilds
+  - `app.rs`: hidden controller window and message loop. A sensor
+    tick every 0.5 s: the CPU and network every tick (repainting only
+    their blocks), the GPUs, RAM, SSDs and a config-file change check
+    every other tick. The CPU and GPU counters are separate PDH
+    queries because the GPU engine counter (one instance per process
+    per engine) is the expensive one. Health check every 5 s; rebuilds
     on config change, Explorer restart (`TaskbarCreated`), display change
     and resume. A bad config is logged and the old settings kept.
   - `surface.rs`: one window per monitor. `paint.rs`: GDI background
     plus the layout's widgets, each with its own persistent DIB section:
     the canvas draws straight into it, GDI adds the text (Bahnschrift,
     built into Windows; the wallpaper's own font isn't ours to ship) and
-    BitBlts it in. Only the widgets' areas are repainted each second.
+    BitBlts it in. Only the widgets' areas are repainted each second,
+    and `WM_PAINT` redraws just the rectangles in the window's update
+    region (clipped canvas + clipped text), so glide frames redraw only
+    the moving parts. `app.rs` runs a 33 ms frame timer only while a
+    glide is under way.
     Scale = monitor height / 1000 (at least 1 px per unit) x layout size.
   - `monitors.rs`: each monitor's rectangle, work area, name and primary
     flag.
@@ -114,7 +130,14 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     Windows" as an HKCU `Run` value.
   - Clicks: a WH_MOUSE_LL hook (only while Discord is set up) notes a
     press and release at the same spot, and only acts when the desktop
-    itself is under the pointer. It never swallows clicks.
+    itself is under the pointer. It never swallows clicks. Pointer
+    moves only matter inside the Discord widget's rectangles (cached
+    after each paint): there, one `WM_DESKTOP_HOVER` at a time carries
+    the position, and the widget repaints only when the hovered control
+    changes (notes, the view toggle, SERVER buttons and list).
+  - Discord text goes through `model::clean_text` (via `fit`): GDI draws
+    invisible characters such as Discord's direction isolates as boxes,
+    and has no colour emoji (they draw in one colour).
   - `sensors/`: raw readings, all from built-in Windows sources with no
     admin: `pdh.rs` (CPU per core and clock, GPU engine use, VRAM in
     use), `gpu.rs` (D3DKMT: temperature, fan, power, VRAM size),
@@ -146,6 +169,12 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - Test layouts with `--config <file>` instead of editing the user's
   real `%APPDATA%\Wallflex\config.toml`; the log goes next to that
   file.
+- The user's own copy runs from `%LOCALAPPDATA%\Wallflex\wallflex.exe`
+  (started at sign-in via the HKCU Run key); copy a new release build
+  there after `wallflex --quit`. The old setup (DiscordBridge task,
+  PerformanceMonitor and Wallpaper Engine services, WEAdapterFix) is
+  disabled, with backups in `%LOCALAPPDATA%\Wallflex\retired`.
+etired`.
 - Don't restart Explorer or put the PC to sleep to test without asking
   the user first: restarting Explorer closes their File Explorer windows.
 
@@ -201,3 +230,14 @@ private, 0.12% CPU; the milestone 5 build measured 27 MB / 12 MB under
 the same conditions, so the call, not the tray, is most of that (to
 look into). Exe 768 KB, release zip 397 KB. Tested live: tray menu,
 Start with Windows on and off (Run value written and removed), Quit.
+
+After milestone 6 (23 Oct 2026, release build, 60 s, panel on both
+monitors, no Discord): repainting everything 30 times a second cost
+0.79% CPU (60: 1.7%) against 0.17% at once a second, with no RAM
+change. With the 0.3 s glide (about 9 frames per reading) and
+update-region repaints: 0.28% CPU, 18.7 MB working set. The RAM bar
+has a section per stick, counted from SMBIOS type 17 entries.
+
+CPU and network twice a second (23 Oct 2026, same setup): 0.31% CPU
+against 0.20% for everything once a second, measured back to back.
+Reading everything twice a second cost 0.82%.

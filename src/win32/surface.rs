@@ -2,7 +2,7 @@
 //! desktop icons.
 
 use windows::Win32::Foundation::{
-    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, InvalidateRect, ScreenToClient,
@@ -24,7 +24,7 @@ use super::paint::Painter;
 use super::struct_size;
 use crate::color::Rgb;
 use crate::config::Layout as ConfigLayout;
-use crate::geometry::Point;
+use crate::geometry::{Point, Rect};
 use crate::widgets::{Action, Dashboard};
 
 /// Window class for surfaces.
@@ -98,6 +98,58 @@ impl Surface {
             // repaint.
             let _ = unsafe {
                 InvalidateRect(Some(self.hwnd), Some(&raw const rect), false)
+            };
+        }
+    }
+
+    /// Asks Windows to repaint just the parts of the widgets that are
+    /// gliding (bars and rings).
+    pub fn invalidate_moving(&self, dashboard: &Dashboard) {
+        self.invalidate_rects(&self.painter.moving_rects(dashboard));
+    }
+
+    /// Asks Windows to repaint just what a quick reading changed (the
+    /// CPU and network).
+    pub fn invalidate_quick(&self) {
+        self.invalidate_rects(&self.painter.quick_rects());
+    }
+
+    /// Asks Windows to repaint the widgets with hover highlights.
+    pub fn invalidate_hoverable(&self) {
+        let rects: Vec<RECT> = self
+            .painter
+            .hover_rects()
+            .into_iter()
+            .map(super::to_win32_rect)
+            .collect();
+        self.invalidate_rects(&rects);
+    }
+
+    /// Where the widgets with hover highlights are, in desktop pixels.
+    pub fn hover_zones(&self) -> Vec<Rect> {
+        let mut origin = POINT::default();
+        // SAFETY: `origin` is a valid place for the call to update.
+        if !unsafe { ClientToScreen(self.hwnd, &raw mut origin) }.as_bool() {
+            return Vec::new();
+        }
+        let shift = Point {
+            x: origin.x.saturating_neg(),
+            y: origin.y.saturating_neg(),
+        };
+        self.painter
+            .hover_rects()
+            .into_iter()
+            .map(|r| r.relative_to(shift))
+            .collect()
+    }
+
+    /// Asks Windows to repaint `rects` (client pixels).
+    fn invalidate_rects(&self, rects: &[RECT]) {
+        for rect in rects {
+            // SAFETY: plain handle and rectangle; failure only skips one
+            // frame.
+            let _ = unsafe {
+                InvalidateRect(Some(self.hwnd), Some(&raw const *rect), false)
             };
         }
     }

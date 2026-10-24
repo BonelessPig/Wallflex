@@ -9,20 +9,22 @@ use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC,
-    CreateDIBSection, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, ExcludeClipRect,
-    FillRect, GdiFlush, GetDC, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject,
-    SetBkMode, SetTextAlign, SetTextColor, TA_BASELINE, TA_CENTER, TA_LEFT,
-    TA_RIGHT, TEXT_ALIGN_OPTIONS, TRANSPARENT, TextOutW,
+    CreateDIBSection, CreateFontW, CreateRectRgn, CreateSolidBrush,
+    DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
+    ExcludeClipRect, FillRect, GdiFlush, GetDC, GetRegionData, GetUpdateRgn,
+    HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, HRGN, IntersectClipRect, NULLREGION,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, RGN_ERROR, RGNDATA, RGNDATAHEADER,
+    ReleaseDC, RestoreDC, SRCCOPY, SaveDC, SelectObject, SetBkMode,
+    SetTextAlign, SetTextColor, TA_BASELINE, TA_CENTER, TA_LEFT, TA_RIGHT,
+    TEXT_ALIGN_OPTIONS, TRANSPARENT, TextOutW,
 };
 use windows::core::w;
 
 use super::{struct_size, to_rect, to_win32_rect};
-use crate::canvas::Canvas;
+use crate::canvas::{Area, Canvas};
 use crate::color::Rgb;
 use crate::config::{Layout, Placement};
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::widgets::{
     Action, Align, Dashboard, Hit, Label, UNITS_PER_HEIGHT, Widget,
 };
@@ -36,6 +38,12 @@ const FONT_WEIGHT_NORMAL: i32 = 400;
 const MAX_FONTS: usize = 8;
 /// Bits per pixel of the widget buffers.
 const BITS_PER_PIXEL: u16 = 32;
+/// How far a label's glyphs reach above its baseline, and below it, as
+/// shares of its size: enough to tell whether it touches a repainted
+/// area.
+const LABEL_REACH: (f64, f64) = (1.0, 0.4);
+/// `SaveDC`'s "most recent" index for `RestoreDC`.
+const LAST_SAVED_DC: i32 = -1;
 
 /// Paints one surface.
 pub struct Painter {
@@ -124,35 +132,104 @@ impl Painter {
         rects
     }
 
-    /// Handles `WM_PAINT`: the widgets where they need repainting, the
-    /// background everywhere else.
+    /// The areas to repaint for one frame of a glide: each widget's
+    /// moving parts, in client pixels.
+    pub fn moving_rects(&self, dashboard: &Dashboard) -> Vec<RECT> {
+        self.rects_of(|widget| dashboard.moving_areas(widget))
+    }
+
+    /// The areas a quick reading (CPU and network) changes, in client
+    /// pixels.
+    pub fn quick_rects(&self) -> Vec<RECT> {
+        self.rects_of(Dashboard::quick_areas)
+    }
+
+    /// Where widgets with hover highlights (Discord) were last drawn, in
+    /// client pixels.
+    pub fn hover_rects(&self) -> Vec<Rect> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.placement.widget == Widget::Discord)
+            .filter_map(|slot| slot.last)
+            .collect()
+    }
+
+    /// `areas_of` each widget (in its units) as client pixels, where the
+    /// widget was last drawn.
+    fn rects_of(&self, areas_of: impl Fn(Widget) -> Vec<Area>) -> Vec<RECT> {
+        let mut rects = Vec::new();
+        for slot in &self.slots {
+            let Some(rect) = slot.last else {
+                continue;
+            };
+            for area in areas_of(slot.placement.widget) {
+                let px = |units: f64, round: fn(f64) -> f64| {
+                    round_px(round(units * self.scale))
+                };
+                let part = Rect {
+                    left: rect.left.saturating_add(px(area.x0, f64::floor)),
+                    top: rect.top.saturating_add(px(area.y0, f64::floor)),
+                    right: rect.left.saturating_add(px(area.x1, f64::ceil)),
+                    bottom: rect.top.saturating_add(px(area.y1, f64::ceil)),
+                };
+                rects.extend(part.intersection(rect).map(to_win32_rect));
+            }
+        }
+        rects
+    }
+
+    /// Handles `WM_PAINT`: the parts of the widgets that need it, the
+    /// background everywhere else. Only the areas Windows says changed
+    /// are redrawn, so a frame that moves the bars doesn't redraw the
+    /// text and graphs around them.
     pub fn paint(&mut self, hwnd: HWND, dashboard: &Dashboard) {
         let rects: Vec<Option<Rect>> = self
             .slots
             .iter()
             .map(|slot| self.slot_rect(slot.placement, dashboard))
             .collect();
+        let update = update_rects(hwnd);
         let mut ps = PAINTSTRUCT::default();
         // SAFETY: called from `hwnd`'s WM_PAINT handler with a valid
         // PAINTSTRUCT, and always paired with EndPaint below.
         let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };
         if !hdc.is_invalid() {
             let dirty = to_rect(ps.rcPaint);
+            let changed = if update.is_empty() {
+                vec![dirty]
+            } else {
+                update
+            };
             for (slot, rect) in self.slots.iter_mut().zip(&rects) {
-                if let Some(rect) = rect.filter(|r| r.intersects(dirty)) {
-                    let widget = WidgetJob {
+                if let Some(rect) = *rect {
+                    let parts: Vec<Rect> = if slot.last == Some(rect) {
+                        changed
+                            .iter()
+                            .filter_map(|c| c.intersection(rect))
+                            .collect()
+                    } else {
+                        // Moved or resized: all of it.
+                        rect.intersection(dirty)
+                            .map(|_| rect)
+                            .into_iter()
+                            .collect()
+                    };
+                    let job = WidgetJob {
                         widget: slot.placement.widget,
                         scale: self.scale,
                         background: self.background_color,
                     };
-                    slot.hits = draw_widget(
-                        hdc,
-                        rect,
+                    let target = Target { hdc, rect };
+                    if let Some(hits) = draw_widget(
+                        target,
+                        &parts,
                         &mut slot.buffer,
                         &mut self.fonts,
-                        widget,
+                        job,
                         dashboard,
-                    );
+                    ) {
+                        slot.hits = hits;
+                    }
                 }
                 slot.last = *rect;
             }
@@ -269,6 +346,7 @@ pub fn preview(
     let rendered = render(
         screen,
         (width, height),
+        &[],
         &mut buffer,
         &mut fonts,
         job,
@@ -302,51 +380,72 @@ struct WidgetJob {
     background: Rgb,
 }
 
-/// Renders a widget off-screen, then copies it to `rect` on `hdc` in one
-/// go. Returns its clickable areas.
-fn draw_widget(
+/// Where a widget goes: the window's paint DC and the widget's place.
+#[derive(Clone, Copy)]
+struct Target {
+    /// The window's DC.
     hdc: HDC,
+    /// The widget's rectangle, in client pixels.
     rect: Rect,
+}
+
+/// Renders `parts` of a widget (client pixels) off-screen, then copies
+/// them to the window. Returns its clickable areas, or `None` if nothing
+/// was drawn.
+fn draw_widget(
+    target: Target,
+    parts: &[Rect],
     buffer: &mut Option<DibBuffer>,
     fonts: &mut Fonts,
     job: WidgetJob,
     dashboard: &Dashboard,
-) -> Vec<Hit> {
-    let (width, height) = (rect.width(), rect.height());
-    let Some((source, hits)) =
-        render(hdc, (width, height), buffer, fonts, job, dashboard)
-    else {
-        return Vec::new();
+) -> Option<Vec<Hit>> {
+    let Target { hdc, rect } = target;
+    if parts.is_empty() {
+        return None;
+    }
+    let origin = Point {
+        x: rect.left,
+        y: rect.top,
     };
-    // SAFETY: both DCs are valid and the area is inside each. A failed
-    // copy only leaves the widget stale until the next paint.
-    let _ = unsafe {
-        BitBlt(
-            hdc,
-            rect.left,
-            rect.top,
-            width,
-            height,
-            Some(source),
-            0,
-            0,
-            SRCCOPY,
-        )
-    };
-    hits
+    let local: Vec<Rect> =
+        parts.iter().map(|p| p.relative_to(origin)).collect();
+    let size = (rect.width(), rect.height());
+    let (source, hits, drawn) =
+        render(hdc, size, &local, buffer, fonts, job, dashboard)?;
+    for part in drawn {
+        // SAFETY: both DCs are valid and the area is inside each. A
+        // failed copy only leaves that part stale until the next paint.
+        let _ = unsafe {
+            BitBlt(
+                hdc,
+                rect.left.saturating_add(part.left),
+                rect.top.saturating_add(part.top),
+                part.width(),
+                part.height(),
+                Some(source),
+                part.left,
+                part.top,
+                SRCCOPY,
+            )
+        };
+    }
+    Some(hits)
 }
 
 /// Renders a widget into `buffer` (recreated if the size changed):
-/// shapes from the canvas, then the text on top. Returns the buffer's DC
-/// and the clickable areas.
+/// shapes from the canvas, then the text on top, only inside `parts`
+/// (widget pixels; all of it when empty or the buffer is new). Returns
+/// the buffer's DC, the clickable areas and the parts drawn.
 fn render(
     hdc: HDC,
     (width, height): (i32, i32),
+    parts: &[Rect],
     buffer: &mut Option<DibBuffer>,
     fonts: &mut Fonts,
     job: WidgetJob,
     dashboard: &Dashboard,
-) -> Option<(HDC, Vec<Hit>)> {
+) -> Option<(HDC, Vec<Hit>, Vec<Rect>)> {
     let w = usize::try_from(width).ok()?;
     let h = usize::try_from(height).ok()?;
     let fits = buffer
@@ -357,20 +456,126 @@ fn render(
         *buffer = None;
         *buffer = DibBuffer::new(hdc, width, height);
     }
-    let buffer = buffer.as_mut()?;
-    let drawing = {
-        let mut canvas = Canvas::new(w, h, buffer.pixels())?;
-        canvas.fill(job.background);
-        dashboard.draw(job.widget, &mut canvas, job.scale, job.background)
+    let whole = Rect {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
     };
-    let dc = buffer.dc;
-    // SAFETY: `dc` is the buffer's DC, valid while the buffer lives. The
-    // result is the previous mode, not an error.
-    let _ = unsafe { SetBkMode(dc, TRANSPARENT) };
-    for label in &drawing.labels {
-        fonts.draw_label(dc, label);
+    let parts: Vec<Rect> = if fits && !parts.is_empty() {
+        parts.iter().filter_map(|p| p.intersection(whole)).collect()
+    } else {
+        vec![whole]
+    };
+    let buffer = buffer.as_mut()?;
+    let mut hits = Vec::new();
+    for part in &parts {
+        let drawing = {
+            let mut canvas = Canvas::new(w, h, buffer.pixels())?;
+            let span = |a: i32, b: i32| {
+                usize::try_from(a).unwrap_or(0)..usize::try_from(b).unwrap_or(0)
+            };
+            canvas.set_clip(
+                span(part.left, part.right),
+                span(part.top, part.bottom),
+            );
+            canvas.fill(job.background);
+            dashboard.draw(job.widget, &mut canvas, job.scale, job.background)
+        };
+        draw_labels(buffer.dc, fonts, &drawing.labels, *part);
+        hits = drawing.hits;
     }
-    Some((dc, drawing.hits))
+    Some((buffer.dc, hits, parts))
+}
+
+/// Draws the labels that touch `part` into `dc`, clipped to it.
+fn draw_labels(dc: HDC, fonts: &mut Fonts, labels: &[Label], part: Rect) {
+    // SAFETY: `dc` is a buffer's memory DC. Its state is saved and
+    // restored around the clip; the results are informational.
+    let saved = unsafe {
+        let saved = SaveDC(dc);
+        let _ =
+            IntersectClipRect(dc, part.left, part.top, part.right, part.bottom);
+        let _ = SetBkMode(dc, TRANSPARENT);
+        saved
+    };
+    let (top, bottom) = (f64::from(part.top), f64::from(part.bottom));
+    for label in labels {
+        let above = label.y - label.size * LABEL_REACH.0;
+        let below = label.y + label.size * LABEL_REACH.1;
+        if below >= top && above <= bottom {
+            fonts.draw_label(dc, label);
+        }
+    }
+    if saved != 0 {
+        // SAFETY: undoes the SaveDC above.
+        let _ = unsafe { RestoreDC(dc, LAST_SAVED_DC) };
+    }
+}
+
+/// The rectangles Windows has marked for repainting in `hwnd` (empty if
+/// it can't say). Call before `BeginPaint`, which clears them.
+fn update_rects(hwnd: HWND) -> Vec<Rect> {
+    // SAFETY: an empty region, deleted below.
+    let region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+    if region.is_invalid() {
+        return Vec::new();
+    }
+    let rects = region_rects(hwnd, region);
+    // SAFETY: created above and not selected anywhere.
+    let _ = unsafe { DeleteObject(region.into()) };
+    rects
+}
+
+/// Copies `hwnd`'s update region into `region` and lists its
+/// rectangles.
+fn region_rects(hwnd: HWND, region: HRGN) -> Vec<Rect> {
+    // SAFETY: valid window and region; doesn't erase anything.
+    let kind = unsafe { GetUpdateRgn(hwnd, region, false) };
+    if kind == NULLREGION || kind == RGN_ERROR {
+        return Vec::new();
+    }
+    // SAFETY: no buffer, so it only returns the size needed.
+    let size = unsafe { GetRegionData(region, 0, None) };
+    let Ok(len) = usize::try_from(size) else {
+        return Vec::new();
+    };
+    let header_size = std::mem::size_of::<RGNDATAHEADER>();
+    if len < header_size {
+        return Vec::new();
+    }
+    // Stored as u32s so the header and rectangles are aligned.
+    let words = len.div_ceil(std::mem::size_of::<u32>());
+    let mut data = vec![0_u32; words];
+    // SAFETY: `data` holds at least `size` bytes.
+    let written = unsafe {
+        GetRegionData(region, size, Some(data.as_mut_ptr().cast::<RGNDATA>()))
+    };
+    if written == 0 {
+        return Vec::new();
+    }
+    let base = data.as_ptr().cast::<u8>();
+    // SAFETY: Windows wrote a header at the start of the buffer.
+    let header = unsafe { base.cast::<RGNDATAHEADER>().read_unaligned() };
+    let start = usize::try_from(header.dwSize).unwrap_or(header_size);
+    let rect_size = std::mem::size_of::<RECT>();
+    let fits = len
+        .saturating_sub(start)
+        .checked_div(rect_size)
+        .unwrap_or(0);
+    let count = usize::try_from(header.nCount).unwrap_or(0).min(fits);
+    (0..count)
+        .filter_map(|index| {
+            let offset = index
+                .checked_mul(rect_size)
+                .and_then(|o| o.checked_add(start))?;
+            // SAFETY: `offset + rect_size` is within the `len` bytes
+            // written (checked above via `fits`).
+            let rect =
+                unsafe { base.add(offset).cast::<RECT>().read_unaligned() };
+            Some(to_rect(rect))
+        })
+        .collect()
 }
 
 /// Fonts by pixel size, created on first use.

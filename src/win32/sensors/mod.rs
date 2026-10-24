@@ -9,28 +9,36 @@ mod pdh;
 
 use windows::Win32::System::Performance::{PDH_FMT_DOUBLE, PDH_FMT_LARGE};
 use windows::Win32::System::SystemInformation::{
-    GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    GetSystemFirmwareTable, GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB,
 };
 
 use super::struct_size;
 use crate::sensors::{
     Cpu, Gpu, Memory, Snapshot, cpu_clock_ghz, gpu_usage_by_luid,
-    split_processors, vram_by_luid,
+    memory_modules, split_processors, vram_by_luid,
 };
 use pdh::Counter;
 
 /// Everything needed to take readings. Create once and call
-/// [`Sensors::sample`] about once a second from one thread; rates are
-/// measured between calls.
+/// [`Sensors::sample`] about once a second from one thread, with
+/// [`Sensors::sample_quick`] in between for faster CPU and network
+/// updates; rates are measured between calls.
 pub struct Sensors {
-    /// Performance counters, if PDH is available.
-    counters: Option<pdh::Query>,
+    /// Processor counters, if PDH is available.
+    cpu_counters: Option<pdh::Query>,
+    /// GPU counters, if PDH is available.
+    gpu_counters: Option<pdh::Query>,
+    /// The last full reading's GPUs, RAM and SSDs, reused by quick
+    /// readings.
+    last: Snapshot,
     /// GPU temperature, fan, power and VRAM size.
     gpus: gpu::GpuReader,
     /// Network byte counters.
     net: net::NetReader,
     /// SSD temperatures.
     disks: disk::DiskReader,
+    /// Memory sticks installed (read once; 0 when unknown).
+    modules: usize,
 }
 
 impl Sensors {
@@ -38,46 +46,64 @@ impl Sensors {
     /// missing values later.
     pub fn new() -> Self {
         Self {
-            counters: pdh::Query::open(),
+            cpu_counters: pdh::Query::open(&Counter::CPU),
+            gpu_counters: pdh::Query::open(&Counter::GPU),
+            last: Snapshot::default(),
             gpus: gpu::GpuReader::new(),
             net: net::NetReader::default(),
             disks: disk::DiskReader::default(),
+            modules: installed_modules(),
         }
     }
 
     /// Takes one reading of everything.
     pub fn sample(&mut self) -> Snapshot {
-        let counters = self
-            .counters
+        let gpu_counters = self
+            .gpu_counters
             .as_mut()
             .and_then(|query| query.collect().then_some(query));
-        let (cpu, engines, vram) = match counters {
-            Some(query) => {
-                let (total, per_core) = split_processors(
-                    query.array(Counter::CpuCores, PDH_FMT_DOUBLE),
-                );
-                let clock_ghz = query
-                    .value(Counter::CpuFrequency)
-                    .zip(query.value(Counter::CpuPerformance))
-                    .and_then(|(mhz, percent)| cpu_clock_ghz(mhz, percent));
-                let cpu = Cpu {
-                    total,
-                    per_core,
-                    clock_ghz,
-                };
-                let engines = query.array(Counter::GpuEngine, PDH_FMT_DOUBLE);
-                let vram = query.array(Counter::GpuMemory, PDH_FMT_LARGE);
-                (cpu, engines, vram)
-            }
-            None => (Cpu::default(), Vec::new(), Vec::new()),
+        let (engines, vram) = match gpu_counters {
+            Some(query) => (
+                query.array(Counter::GpuEngine, PDH_FMT_DOUBLE),
+                query.array(Counter::GpuMemory, PDH_FMT_LARGE),
+            ),
+            None => (Vec::new(), Vec::new()),
         };
+        self.last.memory = memory(self.modules);
+        self.last.gpus = self.gpus(&engines, &vram);
+        self.last.disks = self.disks.read();
+        self.sample_quick()
+    }
 
+    /// Takes a quick reading: the CPU and network now, the GPUs, RAM and
+    /// SSDs as of the last [`Sensors::sample`].
+    pub fn sample_quick(&mut self) -> Snapshot {
         Snapshot {
-            cpu,
-            memory: memory(),
+            cpu: self.cpu(),
             network: self.net.read(),
-            gpus: self.gpus(&engines, &vram),
-            disks: self.disks.read(),
+            ..self.last.clone()
+        }
+    }
+
+    /// Processor use and clock from the CPU counters.
+    fn cpu(&mut self) -> Cpu {
+        let Some(query) = self
+            .cpu_counters
+            .as_mut()
+            .and_then(|query| query.collect().then_some(query))
+        else {
+            return Cpu::default();
+        };
+        let (total, per_core) =
+            split_processors(query.array(Counter::CpuCores, PDH_FMT_DOUBLE));
+        let clock_ghz = query
+            .value(Counter::CpuFrequency)
+            .zip(query.value(Counter::CpuPerformance))
+            .and_then(|(mhz, percent)| cpu_clock_ghz(mhz, percent));
+        Cpu {
+            total,
+            per_core,
+            clock_ghz,
         }
     }
 
@@ -116,7 +142,7 @@ impl Sensors {
 }
 
 /// RAM in use: installed minus available, as Task Manager shows it.
-fn memory() -> Option<Memory> {
+fn memory(modules: usize) -> Option<Memory> {
     let mut status = MEMORYSTATUSEX {
         dwLength: struct_size::<MEMORYSTATUSEX>(),
         ..Default::default()
@@ -126,5 +152,29 @@ fn memory() -> Option<Memory> {
     Some(Memory {
         used_bytes: status.ullTotalPhys.saturating_sub(status.ullAvailPhys),
         total_bytes: status.ullTotalPhys,
+        modules,
     })
+}
+
+/// Memory sticks installed, from the SMBIOS table (no admin needed).
+/// 0 when Windows can't provide it.
+fn installed_modules() -> usize {
+    // SAFETY: no buffer, so it only returns the size needed.
+    let size = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
+    let Ok(size) = usize::try_from(size) else {
+        return 0;
+    };
+    if size == 0 {
+        return 0;
+    }
+    let mut table = vec![0_u8; size];
+    // SAFETY: `table` is a writable buffer of the size asked for.
+    let written =
+        unsafe { GetSystemFirmwareTable(RSMB, 0, Some(table.as_mut_slice())) };
+    match usize::try_from(written) {
+        Ok(written) if written > 0 && written <= size => {
+            memory_modules(table.get(..written).unwrap_or_default())
+        }
+        _ => 0,
+    }
 }

@@ -43,6 +43,9 @@ pub struct Canvas<'a> {
     height: usize,
     /// Rows top to bottom, `width` pixels each.
     pixels: &'a mut [u32],
+    /// Only these pixel columns and rows are drawn (the whole canvas
+    /// unless [`Canvas::set_clip`] narrows it).
+    clip: (std::ops::Range<usize>, std::ops::Range<usize>),
 }
 
 /// Half a pixel: the distance from a pixel's edge to its centre.
@@ -62,12 +65,43 @@ impl<'a> Canvas<'a> {
             width,
             height,
             pixels,
+            clip: (0..width, 0..height),
         })
     }
 
-    /// Fills the whole canvas with `color`.
+    /// Limits drawing to columns `x` and rows `y` (clamped to the
+    /// canvas), so a small change can be redrawn without touching the
+    /// rest.
+    pub fn set_clip(
+        &mut self,
+        x: std::ops::Range<usize>,
+        y: std::ops::Range<usize>,
+    ) {
+        let clamp = |r: std::ops::Range<usize>, limit: usize| {
+            let start = r.start.min(limit);
+            start..r.end.clamp(start, limit)
+        };
+        self.clip = (clamp(x, self.width), clamp(y, self.height));
+    }
+
+    /// Fills the canvas (inside the clip) with `color`.
     pub fn fill(&mut self, color: Rgb) {
-        self.pixels.fill(pack(color));
+        let value = pack(color);
+        let (cols, rows) = self.clip.clone();
+        if cols.len() == self.width && rows.len() == self.height {
+            self.pixels.fill(value);
+            return;
+        }
+        for y in rows {
+            let start = y.checked_mul(self.width);
+            let span = start.and_then(|s| {
+                let from = s.checked_add(cols.start)?;
+                Some(from..s.checked_add(cols.end)?)
+            });
+            if let Some(row) = span.and_then(|r| self.pixels.get_mut(r)) {
+                row.fill(value);
+            }
+        }
     }
 
     /// Fills `area`, smoothing fractional edges.
@@ -367,12 +401,12 @@ impl<'a> Canvas<'a> {
 
     /// Pixel columns that `x0..x1` touches, clipped to the canvas.
     fn span_x(&self, x0: f64, x1: f64) -> std::ops::Range<usize> {
-        clip_span(x0, x1, self.width)
+        within(clip_span(x0, x1, self.width), &self.clip.0)
     }
 
     /// Pixel rows that `y0..y1` touches, clipped to the canvas.
     fn span_y(&self, y0: f64, y1: f64) -> std::ops::Range<usize> {
-        clip_span(y0, y1, self.height)
+        within(clip_span(y0, y1, self.height), &self.clip.1)
     }
 
     /// Mixes `paint` into pixel (`x`, `y`) at `coverage` (0.0 to 1.0).
@@ -526,6 +560,15 @@ fn clip_span(start: f64, end: f64, limit: usize) -> std::ops::Range<usize> {
     first..last.max(first)
 }
 
+/// The part of `span` inside `clip` (empty if none).
+fn within(
+    span: std::ops::Range<usize>,
+    clip: &std::ops::Range<usize>,
+) -> std::ops::Range<usize> {
+    let start = span.start.max(clip.start);
+    start..span.end.min(clip.end).max(start)
+}
+
 /// A pixel index as `f64`.
 fn index_to_f64(index: usize) -> f64 {
     u32::try_from(index).map_or(f64::MAX, f64::from)
@@ -557,6 +600,29 @@ fn unit_to_u8(value: f64) -> u8 {
 mod tests {
     use super::{Area, Canvas, Paint, mix, unpack};
     use crate::color::Rgb;
+
+    #[test]
+    fn clip_limits_drawing() {
+        let mut pixels = vec![0_u32; 16];
+        let mut canvas = Canvas::new(4, 4, &mut pixels).unwrap();
+        canvas.set_clip(1..3, 1..2);
+        canvas.fill(WHITE);
+        let area = Area {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 4.0,
+            y1: 4.0,
+        };
+        canvas.fill_rect(
+            area,
+            Paint {
+                color: WHITE,
+                alpha: 1.0,
+            },
+        );
+        let lit: Vec<usize> = (0..16).filter(|&i| pixels[i] != 0).collect();
+        assert_eq!(lit, vec![5, 6]);
+    }
 
     const WHITE: Rgb = Rgb {
         r: 255,

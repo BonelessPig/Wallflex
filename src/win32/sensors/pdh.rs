@@ -35,14 +35,12 @@ pub enum Counter {
 }
 
 impl Counter {
-    /// Every counter, in the order they're added to the query.
-    const ALL: [Self; 5] = [
-        Self::CpuCores,
-        Self::CpuPerformance,
-        Self::CpuFrequency,
-        Self::GpuEngine,
-        Self::GpuMemory,
-    ];
+    /// The processor counters: cheap, read every update.
+    pub const CPU: [Self; 3] =
+        [Self::CpuCores, Self::CpuPerformance, Self::CpuFrequency];
+    /// The GPU counters: one instance per process per GPU engine, so
+    /// much dearer to collect; read once a second.
+    pub const GPU: [Self; 2] = [Self::GpuEngine, Self::GpuMemory];
 
     /// The counter's English path.
     fn path(self) -> PCWSTR {
@@ -60,7 +58,7 @@ impl Counter {
     }
 }
 
-/// One PDH query holding every counter, sampled once per reading. Rate
+/// One PDH query holding a group of counters, sampled together. Rate
 /// counters need two samples, so they read as missing the first time.
 pub struct Query {
     /// The query, closed on drop.
@@ -72,9 +70,9 @@ pub struct Query {
 }
 
 impl Query {
-    /// Opens the query and adds every counter that exists on this PC.
-    /// `None` if PDH itself is unavailable.
-    pub fn open() -> Option<Self> {
+    /// Opens a query and adds those of `counters` that exist on this
+    /// PC. `None` if PDH itself is unavailable.
+    pub fn open(counters: &[Counter]) -> Option<Self> {
         let mut handle = PDH_HQUERY::default();
         // SAFETY: `handle` is a valid place for the call to write to; no
         // data source means live counters.
@@ -89,7 +87,7 @@ impl Query {
             counters: Vec::new(),
             buffer: Vec::new(),
         };
-        for counter in Counter::ALL {
+        for &counter in counters {
             let mut added = PDH_HCOUNTER::default();
             // SAFETY: the query is open, the path is a constant and
             // `added` is a valid place to write to.

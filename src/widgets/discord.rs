@@ -11,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 use super::{Align, INK, Pen, QUIET, TRACK};
 use crate::canvas::{Area, Paint};
 use crate::color::Rgb;
-use crate::discord::model::{DiscordView, Member, Notification, Status, Voice};
+use crate::discord::model::{
+    DiscordView, Member, Notification, Status, Voice, clean_text,
+};
 use crate::discord::session::Command;
 use crate::image::Image;
 
@@ -57,8 +59,22 @@ const STREAMING: Rgb = rgb(0x4E, 0x3F, 0x73);
 const LIVE: Rgb = rgb(0xFF, 0x5A, 0x5F);
 /// Pictures kept; past this the cache starts again.
 const MAX_IMAGES: usize = 200;
-/// Room outside a picture for its speaking / muted ring.
-const RING_ROOM: f64 = 3.0;
+/// Room outside a picture for its speaking / muted ring (2.5 offset
+/// plus 2 wide, for full-size pictures).
+const RING_ROOM: f64 = 5.0;
+/// Room on each side of and under the widget so rings and badges at
+/// its edges aren't cut off. The content is still [`WIDTH`] wide.
+const BLEED: f64 = 5.0;
+/// The call view toggle's size (1.3vh), and its icon's design grid.
+const VIEW_ICON: f64 = 13.0;
+/// The icons' design grid (16 x 16, as the wallpaper's SVGs).
+const ICON_GRID: f64 = 16.0;
+/// Muted / deafened badge size (1.4vh), and on small pictures (1.1vh).
+const STATE_BADGE: (f64, f64) = (14.0, 11.0);
+/// How far the muted / deafened badge sticks out past the picture.
+const STATE_BADGE_OUT: f64 = 3.0;
+/// Points per half circle in the badge icons.
+const ICON_ARC_STEPS: u32 = 10;
 /// Size of the offline icon (2.4vh).
 const OFFLINE_ICON: f64 = 24.0;
 /// Approximate width of a character as a share of the text size, for
@@ -75,6 +91,14 @@ const SPEAKING: Rgb = rgb(0xB4, 0xF0, 0xCC);
 const MUTED: Rgb = rgb(0xFF, 0xDC, 0xB5);
 /// Ring: deafened.
 const DEAFENED: Rgb = rgb(0xFF, 0x9A, 0xA4);
+/// The muted badge's symbol (a darker shade of its ring).
+const MUTED_DARK: Rgb = rgb(0x7A, 0x4D, 0x2E);
+/// The deafened badge's symbol.
+const DEAFENED_DARK: Rgb = rgb(0x7D, 0x2F, 0x38);
+/// How much a deafened person's picture is dimmed.
+const DEAFENED_DIM: f64 = 0.5;
+/// A hovered notification's message (brighter than [`QUIET`]).
+const NOTE_HOVER: f64 = 0.8;
 /// Initials and badge backgrounds.
 const BLACK: Rgb = rgb(0, 0, 0);
 /// Picture colours behind the initials.
@@ -116,6 +140,37 @@ impl Page {
     }
 }
 
+/// How the VOICE page shows the people in your call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CallView {
+    /// A row per person with their name, the rest as small pictures.
+    #[default]
+    Names,
+    /// Just a row of pictures.
+    Avatars,
+}
+
+impl CallView {
+    /// The other view, which the toggle switches to.
+    fn other(self) -> Self {
+        match self {
+            Self::Names => Self::Avatars,
+            Self::Avatars => Self::Names,
+        }
+    }
+}
+
+/// Sample data for `--preview`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Demo {
+    /// A call, names view.
+    Names,
+    /// A call, avatars view.
+    Avatars,
+    /// The INBOX page.
+    Inbox,
+}
+
 /// What a click on the Discord widget does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -140,6 +195,8 @@ pub enum Action {
     PickServer(String),
     /// FRIENDS: move this friend to the top.
     PromoteFriend(String),
+    /// VOICE: switch between names and avatars.
+    CallView,
 }
 
 /// The widget's state: the session's view plus what the wallpaper kept
@@ -190,6 +247,10 @@ pub struct DiscordUi {
     server_sent: bool,
     /// The server last asked of the session.
     sent_server: Option<String>,
+    /// VOICE: names or just pictures.
+    call_view: CallView,
+    /// The control under the pointer, drawn highlighted.
+    hover: Option<Action>,
 }
 
 /// One row of the widget, top to bottom.
@@ -233,9 +294,9 @@ impl DiscordUi {
     }
 
     /// Sample data for `--preview`: a call of eight (one talking, one
-    /// muted, one deafened) and three notifications. `inbox` opens the
-    /// INBOX page instead of VOICE.
-    pub fn show_demo(&mut self, inbox: bool) {
+    /// muted, one deafened) and three notifications, on the page or
+    /// view `demo` asks for.
+    pub fn show_demo(&mut self, demo: Demo) {
         self.set_configured(true, false);
         let names = [
             "Sam", "Riley", "Jordan", "Avery", "Quinn", "Morgan", "Casey",
@@ -298,9 +359,13 @@ impl DiscordUi {
             last.speaking = true;
         }
         self.update(view);
-        if inbox {
-            self.page = Some(Page::Inbox);
-            self.open = Some(true);
+        match demo {
+            Demo::Names => {}
+            Demo::Avatars => self.call_view = CallView::Avatars,
+            Demo::Inbox => {
+                self.page = Some(Page::Inbox);
+                self.open = Some(true);
+            }
         }
     }
 
@@ -365,17 +430,19 @@ impl DiscordUi {
         if items.is_empty() {
             return (0.0, 0.0);
         }
-        let width = if matches!(items.first(), Some(Item::Offline)) {
-            OFFLINE_ICON
-        } else {
-            WIDTH
-        };
-        (width, Self::height(&items))
+        if matches!(items.first(), Some(Item::Offline)) {
+            return (OFFLINE_ICON, OFFLINE_ICON);
+        }
+        // Room on both sides and underneath for rings and badges.
+        (WIDTH + BLEED * 2.0, Self::height(&items) + BLEED)
     }
 
     /// Draws the widget.
     pub fn draw(&self, pen: &mut Pen<'_, '_>) {
         let items = self.items();
+        if !matches!(items.first(), Some(Item::Offline)) {
+            pen.origin.0 += BLEED;
+        }
         let mut y = 0.0;
         let mut previous = None;
         for item in &items {
@@ -427,6 +494,22 @@ impl DiscordUi {
         self.images.insert(url, image);
     }
 
+    /// Notes the control under the pointer (`None` when there isn't
+    /// one). Returns whether that changed, so the widget needs
+    /// repainting.
+    pub fn set_hover(&mut self, hover: Option<Action>) -> bool {
+        if self.hover == hover {
+            return false;
+        }
+        self.hover = hover;
+        true
+    }
+
+    /// Whether `action`'s control is under the pointer.
+    fn hovered(&self, action: &Action) -> bool {
+        self.hover.as_ref() == Some(action)
+    }
+
     /// Handles a click. Returns a command for the session, if needed.
     pub fn click(&mut self, action: &Action) -> Option<Command> {
         match action {
@@ -474,6 +557,7 @@ impl DiscordUi {
                 self.friend_top.insert(0, id.clone());
                 self.friend_top.truncate(MAX_FRIEND_TOP);
             }
+            Action::CallView => self.call_view = self.call_view.other(),
         }
         if self.is_open() && self.page() == Page::Inbox {
             self.mark_inbox_seen();
@@ -654,7 +738,13 @@ impl DiscordUi {
         }
         match self.page() {
             Page::Voice => {
-                voice_items(view.voice.as_ref(), &self.named, &mut items);
+                let voice = view.voice.as_ref();
+                match self.call_view {
+                    CallView::Names => {
+                        voice_items(voice, &self.named, &mut items);
+                    }
+                    CallView::Avatars => avatar_items(voice, &mut items),
+                }
             }
             Page::Server => server::items(self, view, &mut items),
             Page::Friends => friends::items(self, &mut items),
@@ -710,7 +800,10 @@ impl DiscordUi {
                 pen.text((0.0, y + BASELINE), TEXT, QUIET, Align::Left, text);
             }
             Item::Summary => self.draw_summary(pen, y),
-            Item::CallHead(voice) => draw_call_head(pen, voice, y),
+            Item::CallHead(voice) => {
+                let hover = self.hovered(&Action::CallView);
+                draw_call_head(pen, voice, (self.call_view.other(), hover), y);
+            }
             Item::Named(member) => {
                 let centre = (FACE_SMALL / 2.0, y + FACE_SMALL / 2.0);
                 let picture = self.images.get(&member.avatar);
@@ -744,7 +837,14 @@ impl DiscordUi {
             Item::Server(row) => server::draw(self, pen, row, y),
             Item::Friends(row) => friends::draw(self, pen, row, y),
             Item::Note(note) => {
-                draw_note(pen, note, y);
+                let action = note.channel_id.as_ref().map(|channel_id| {
+                    Action::OpenNote {
+                        channel_id: channel_id.clone(),
+                        message_id: note.message_id.clone(),
+                    }
+                });
+                let hover = action.as_ref().is_some_and(|a| self.hovered(a));
+                draw_note(pen, note, hover, y);
                 if let Some(channel_id) = &note.channel_id {
                     let area = Area {
                         x0: 0.0,
@@ -897,6 +997,17 @@ fn voice_items<'a>(
     }
 }
 
+/// The VOICE page's rows in the avatars view: the channel line and a
+/// row of pictures.
+fn avatar_items<'a>(voice: Option<&'a Voice>, items: &mut Vec<Item<'a>>) {
+    let Some(voice) = voice else {
+        items.push(Item::Dim("NOT IN VOICE"));
+        return;
+    };
+    items.push(Item::CallHead(voice));
+    items.push(Item::Avatars(avatar_order(&voice.members), false));
+}
+
 /// Join order, deafened last.
 fn avatar_order(members: &[Member]) -> Vec<&Member> {
     let mut ordered: Vec<&Member> = members.iter().collect();
@@ -914,26 +1025,49 @@ fn gap_between(previous: Option<&Item<'_>>, _item: &Item<'_>) -> f64 {
     }
 }
 
-/// The call's line: channel name in blue, server name dim on the right.
-fn draw_call_head(pen: &mut Pen<'_, '_>, voice: &Voice, y: f64) {
+/// The call's line: channel name in blue, server name dim, then the
+/// icon that switches to the `next` view.
+fn draw_call_head(
+    pen: &mut Pen<'_, '_>,
+    voice: &Voice,
+    (next, hover): (CallView, bool),
+    y: f64,
+) {
     let baseline = y + BASELINE;
-    let guild = fit(&voice.guild.to_uppercase(), WIDTH * 0.45, TEXT);
-    pen.text((WIDTH, baseline), TEXT, QUIET, Align::Right, &guild);
-    let room = WIDTH - text_width(&guild, TEXT) - GAP;
+    let icon_left = WIDTH - VIEW_ICON;
+    let alpha = if hover { 1.0 } else { QUIET };
+    let spot = (icon_left, y + (LINE - VIEW_ICON) / 2.0);
+    draw_view_icon(pen, next, spot, alpha);
+    pen.hit(
+        Area {
+            x0: icon_left - GAP / 2.0,
+            y0: y - GAP / 2.0,
+            x1: WIDTH + BLEED,
+            y1: y + LINE + GAP / 2.0,
+        },
+        Action::CallView,
+    );
+    let guild_right = icon_left - GAP;
+    let guild = fit(&voice.guild.to_uppercase(), WIDTH * 0.4, TEXT);
+    pen.text((guild_right, baseline), TEXT, QUIET, Align::Right, &guild);
+    let room = guild_right - text_width(&guild, TEXT) - GAP;
     let channel = fit(&voice.channel.to_uppercase(), room, TEXT);
     pen.text_in(BLUE, (0.0, baseline), TEXT, 1.0, Align::Left, &channel);
 }
 
-/// A notification: time and title, then the message.
-fn draw_note(pen: &mut Pen<'_, '_>, note: &Notification, y: f64) {
+/// A notification: time and title, then the message. Hovered, the
+/// title turns blue and the message brightens.
+fn draw_note(pen: &mut Pen<'_, '_>, note: &Notification, hover: bool, y: f64) {
     let baseline = y + BASELINE;
     pen.text((0.0, baseline), TEXT, QUIET, Align::Left, &note.clock);
     let x = text_width("00:00", TEXT) + GAP;
     let title = fit(&note.title.to_uppercase(), WIDTH - x, TEXT);
-    pen.text((x, baseline), TEXT, 1.0, Align::Left, &title);
+    let color = if hover { BLUE } else { INK };
+    pen.text_in(color, (x, baseline), TEXT, 1.0, Align::Left, &title);
     let body = fit(&note.body.to_uppercase(), WIDTH, TEXT);
     let second = y + LINE + NOTE_LINE_GAP + BASELINE;
-    pen.text((0.0, second), TEXT, QUIET, Align::Left, &body);
+    let alpha = if hover { NOTE_HOVER } else { QUIET };
+    pen.text((0.0, second), TEXT, alpha, Align::Left, &body);
 }
 
 /// The offline icon: a grey ring crossed out.
@@ -1042,16 +1176,143 @@ fn draw_face(
         let (width, offset) = if small { (1.5, 1.5) } else { (2.0, 2.5) };
         pen.ring(centre, r + offset + width / 2.0, width, ring, 1.0);
     }
+    if member.deaf {
+        let background = pen.background;
+        pen.circle(centre, r, background, DEAFENED_DIM);
+    }
     if member.deaf || member.mute {
-        let badge_r = r * 0.42;
-        let badge = (centre.0 + r * 0.72, centre.1 + r * 0.72);
-        pen.circle(badge, badge_r, BLACK, 1.0);
-        let d = badge_r * 0.55;
-        let slash = [(badge.0 - d, badge.1 - d), (badge.0 + d, badge.1 + d)];
-        let color = if member.deaf { DEAFENED } else { MUTED };
-        pen.line_width(&slash, 1.0, Paint { color, alpha: 1.0 });
+        draw_state_badge(pen, member.deaf, centre, r, small);
     }
     draw_badges(pen, member, centre, r);
+}
+
+/// The muted or deafened badge, bottom-left: the ring's colour with a
+/// crossed-out mic or headphones in a darker shade (the wallpaper's
+/// icons, on a 16 x 16 grid).
+fn draw_state_badge(
+    pen: &mut Pen<'_, '_>,
+    deaf: bool,
+    centre: (f64, f64),
+    r: f64,
+    small: bool,
+) {
+    let size = if small { STATE_BADGE.1 } else { STATE_BADGE.0 };
+    let half = size / 2.0;
+    let badge = (
+        centre.0 - r - STATE_BADGE_OUT + half,
+        centre.1 + r + STATE_BADGE_OUT - half,
+    );
+    let (fill, ink) = if deaf {
+        (DEAFENED, DEAFENED_DARK)
+    } else {
+        (MUTED, MUTED_DARK)
+    };
+    pen.circle(badge, half, fill, 1.0);
+    // The symbol fills 80% of the badge.
+    let k = size * 0.8 / ICON_GRID;
+    let at = |(u, v): (f64, f64)| {
+        (
+            badge.0 + (u - ICON_GRID / 2.0) * k,
+            badge.1 + (v - ICON_GRID / 2.0) * k,
+        )
+    };
+    let paint = Paint {
+        color: ink,
+        alpha: 1.0,
+    };
+    let width = 1.8 * k;
+    let strokes = if deaf {
+        headphones_strokes()
+    } else {
+        mic_strokes()
+    };
+    for stroke in strokes {
+        let points: Vec<(f64, f64)> = stroke.into_iter().map(at).collect();
+        pen.line_width(&points, width, paint);
+    }
+}
+
+/// A crossed-out microphone on the 16 x 16 grid.
+fn mic_strokes() -> Vec<Vec<(f64, f64)>> {
+    use std::f64::consts::PI;
+    // The capsule: the top half-circle, down the right, the bottom
+    // half-circle, back up.
+    let mut capsule = half_turn((8.0, 4.0), 2.5, PI, 2.0 * PI);
+    capsule.extend(half_turn((8.0, 7.0), 2.5, 0.0, PI));
+    if let Some(&first) = capsule.first() {
+        capsule.push(first);
+    }
+    vec![
+        capsule,
+        half_turn((8.0, 7.5), 5.0, PI, 0.0),
+        vec![(8.0, 12.5), (8.0, 14.5)],
+        vec![(2.0, 2.0), (14.0, 14.0)],
+    ]
+}
+
+/// Crossed-out headphones on the 16 x 16 grid.
+fn headphones_strokes() -> Vec<Vec<(f64, f64)>> {
+    use std::f64::consts::PI;
+    let mut band = vec![(2.5, 10.0)];
+    band.extend(half_turn((8.0, 8.0), 5.5, PI, 2.0 * PI));
+    band.push((13.5, 10.0));
+    let cup = |x: f64| {
+        vec![
+            (x, 9.5),
+            (x + 3.0, 9.5),
+            (x + 3.0, 14.5),
+            (x, 14.5),
+            (x, 9.5),
+        ]
+    };
+    vec![band, cup(1.5), cup(11.5), vec![(2.0, 2.0), (14.0, 14.0)]]
+}
+
+/// Points along a circle from angle `from` to `to` (radians, clockwise
+/// from 3 o'clock, as y points down).
+fn half_turn(
+    (cx, cy): (f64, f64),
+    radius: f64,
+    from: f64,
+    to: f64,
+) -> Vec<(f64, f64)> {
+    (0..=ICON_ARC_STEPS)
+        .map(|step| {
+            let t = from
+                + (to - from) * f64::from(step) / f64::from(ICON_ARC_STEPS);
+            (cx + radius * t.cos(), cy + radius * t.sin())
+        })
+        .collect()
+}
+
+/// The call view toggle: the view a click switches to, as the wallpaper
+/// drew it (three pictures, or two pictures with lines).
+fn draw_view_icon(
+    pen: &mut Pen<'_, '_>,
+    next: CallView,
+    (x, y): (f64, f64),
+    alpha: f64,
+) {
+    let k = VIEW_ICON / ICON_GRID;
+    let at = |(u, v): (f64, f64)| (x + u * k, y + v * k);
+    let paint = Paint { color: INK, alpha };
+    let width = 1.3 * k;
+    let circle = |pen: &mut Pen<'_, '_>, c: (f64, f64), radius: f64| {
+        pen.ring(at(c), radius * k, width, INK, alpha);
+    };
+    match next {
+        CallView::Avatars => {
+            for cx in [3.0, 8.0, 13.0] {
+                circle(pen, (cx, 8.0), 2.2);
+            }
+        }
+        CallView::Names => {
+            for cy in [4.0, 12.0] {
+                circle(pen, (3.0, cy), 1.6);
+                pen.line_width(&[at((6.5, cy)), at((14.5, cy))], width, paint);
+            }
+        }
+    }
 }
 
 /// The status dot (bottom-right), camera badge (top-right) and
@@ -1126,8 +1387,11 @@ fn text_width(text: &str, size: f64) -> f64 {
     count_f64(text.chars().count()) * size * CHAR_WIDTH
 }
 
-/// `text` cut to fit `width` at `size`, with an ellipsis if cut.
+/// `text` cleaned for drawing ([`clean_text`]) and cut to fit `width`
+/// at `size`, with an ellipsis if cut.
 fn fit(text: &str, width: f64, size: f64) -> String {
+    let cleaned = clean_text(text);
+    let text = cleaned.as_str();
     let max = (width / (size * CHAR_WIDTH)).floor();
     let max = if max.is_finite() && max >= 1.0 {
         text.chars().count().min(chars_in(max))
@@ -1159,7 +1423,7 @@ fn count_f64(count: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DiscordUi, MAX_NAMED, Page, fit};
+    use super::{Action, CallView, DiscordUi, Item, MAX_NAMED, Page, fit};
     use crate::discord::model::{
         DiscordView, Member, Notification, Status, Voice,
     };
@@ -1284,6 +1548,26 @@ mod tests {
             message_id: None,
         };
         assert!(matches!(ui.click(&open), Some(Command::Open { .. })));
+    }
+
+    #[test]
+    fn call_view_toggles() {
+        let mut ui = configured();
+        ui.update(call((1..=3).map(member).collect()));
+        assert_eq!(ui.call_view, CallView::Names);
+        assert!(ui.items().iter().any(|i| matches!(i, Item::Named(_))));
+        ui.click(&Action::CallView);
+        assert_eq!(ui.call_view, CallView::Avatars);
+        let items = ui.items();
+        assert!(!items.iter().any(|i| matches!(i, Item::Named(_))));
+        assert!(
+            items
+                .iter()
+                .any(|i| matches!(i, Item::Avatars(people, false)
+                    if people.len() == 3))
+        );
+        ui.click(&Action::CallView);
+        assert_eq!(ui.call_view, CallView::Names);
     }
 
     #[test]

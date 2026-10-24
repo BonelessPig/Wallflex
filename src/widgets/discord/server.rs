@@ -27,6 +27,8 @@ const SPEAKER: f64 = 10.0;
 const SMALL: f64 = 9.0;
 /// Opacity of a button that can't be used (0.2).
 const OFF: f64 = 0.2;
+/// A hovered server in the list (the wallpaper dimmed it to 0.75).
+const PICK_HOVER: f64 = 0.75;
 /// Icons are drawn on a 16-unit grid, like the wallpaper's SVGs.
 const GRID: f64 = 16.0;
 
@@ -231,7 +233,9 @@ pub fn draw(ui: &DiscordUi, pen: &mut Pen<'_, '_>, row: &Row<'_>, y: f64) {
             tag,
             current,
         } => draw_pick(ui, pen, guild, (tag, *current), y),
-        Row::Pager { page, pages } => draw_pager(pen, *page, *pages, y),
+        Row::Pager { page, pages } => {
+            draw_pager(ui, pen, (*page, *pages), y);
+        }
         Row::Channel(channel) => draw_channel(pen, channel, y),
         Row::People(people) => {
             let top = (INDENT, y + RING_ROOM);
@@ -298,14 +302,16 @@ fn draw_pick(
     let room = WIDTH - x - text_width(tag, SMALL) - GAP;
     let name = fit(&guild.name.to_uppercase(), room, TEXT);
     let color = if current { BLUE } else { INK };
-    pen.text_in(color, (x, baseline), TEXT, 1.0, Align::Left, &name);
+    let action = Action::PickServer(guild.id.clone());
+    let alpha = if ui.hovered(&action) { PICK_HOVER } else { 1.0 };
+    pen.text_in(color, (x, baseline), TEXT, alpha, Align::Left, &name);
     let area = Area {
         x0: 0.0,
         y0: y,
         x1: WIDTH,
         y1: y + ICON.0,
     };
-    pen.hit(area, Action::PickServer(guild.id.clone()));
+    pen.hit(area, action);
 }
 
 /// An occupied voice channel: speaker, name, head count.
@@ -389,22 +395,27 @@ fn draw_buttons(ui: &DiscordUi, pen: &mut Pen<'_, '_>, middle: f64) {
     let follow_on = ui.picked_server.is_none() && !ui.picker;
     let list_x = WIDTH - BUTTON.0;
     let follow_x = list_x - BUTTON.1 - BUTTON.0;
+    let follow = Action::ServerFollow;
+    let hover = ui.hovered(&follow);
     button(
         pen,
         (follow_x, top),
         &headphones(),
-        follow_on,
-        Action::ServerFollow,
+        (follow_on, hover),
+        follow,
     );
-    button(pen, (list_x, top), &list(), ui.picker, Action::ServerList);
+    let list_action = Action::ServerList;
+    let hover = ui.hovered(&list_action);
+    button(pen, (list_x, top), &list(), (ui.picker, hover), list_action);
 }
 
-/// One button: an icon, blue and underlined when on, and its hit area.
+/// One button: an icon, blue and underlined when on, brighter when
+/// hovered, and its hit area.
 fn button(
     pen: &mut Pen<'_, '_>,
     (x, y): (f64, f64),
     paths: &[Vec<(f64, f64)>],
-    on: bool,
+    (on, hover): (bool, bool),
     action: Action,
 ) {
     let paint = if on {
@@ -415,7 +426,7 @@ fn button(
     } else {
         Paint {
             color: INK,
-            alpha: QUIET,
+            alpha: if hover { 1.0 } else { QUIET },
         }
     };
     glyph(pen, (x, y), BUTTON.0, paths, paint);
@@ -445,14 +456,23 @@ fn button(
 }
 
 /// The arrows and "PAGE 2 / 7" under the server list.
-fn draw_pager(pen: &mut Pen<'_, '_>, page: usize, pages: usize, y: f64) {
+fn draw_pager(
+    ui: &DiscordUi,
+    pen: &mut Pen<'_, '_>,
+    (page, pages): (usize, usize),
+    y: f64,
+) {
     let top = y + (LINE - BUTTON.0) / 2.0;
     let arrow = |pen: &mut Pen<'_, '_>,
                  x: f64,
                  paths: &[Vec<(f64, f64)>],
                  usable: bool,
                  step: i8| {
-        let alpha = if usable { QUIET } else { OFF };
+        let alpha = match (usable, ui.hovered(&Action::PickerStep(step))) {
+            (false, _) => OFF,
+            (true, true) => 1.0,
+            (true, false) => QUIET,
+        };
         glyph(pen, (x, top), BUTTON.0, paths, Paint { color: INK, alpha });
         if usable {
             let area = Area {

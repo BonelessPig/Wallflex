@@ -133,14 +133,21 @@ fn preview(
         dashboard.update(sensors.sample());
         std::thread::sleep(SENSOR_WARMUP);
     }
+    dashboard.settle();
     let widget = match kind {
         PreviewWidget::Panel => Widget::Panel,
         PreviewWidget::Cpu => Widget::Cpu,
         PreviewWidget::Network => Widget::Network,
         PreviewWidget::Gpus => Widget::Gpus,
         PreviewWidget::Info => Widget::Info,
-        PreviewWidget::Discord | PreviewWidget::DiscordInbox => {
-            dashboard.show_discord_demo(kind == PreviewWidget::DiscordInbox);
+        PreviewWidget::Discord
+        | PreviewWidget::DiscordAvatars
+        | PreviewWidget::DiscordInbox => {
+            dashboard.show_discord_demo(match kind {
+                PreviewWidget::DiscordAvatars => widgets::Demo::Avatars,
+                PreviewWidget::DiscordInbox => widgets::Demo::Inbox,
+                _ => widgets::Demo::Names,
+            });
             fetch_preview_images(&mut dashboard);
             Widget::Discord
         }

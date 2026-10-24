@@ -8,7 +8,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use windows::Win32::Foundation::{
     HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
@@ -23,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PBT_APMRESUMEAUTOMATIC, PostMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SW_SHOWNORMAL, SetTimer, SetWindowsHookExW,
     TranslateMessage, UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CLOSE,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
     WS_POPUP, WindowFromPoint,
 };
@@ -40,6 +40,7 @@ use super::{class_name, monitors, struct_size};
 use crate::args::Options;
 use crate::config::{self, DiscordSettings, MonitorInfo, Settings};
 use crate::discord::session::Credentials;
+use crate::geometry::Rect;
 use crate::log;
 use crate::widgets::Dashboard;
 
@@ -62,8 +63,17 @@ const EXPLORER_SETTLE_MS: u32 = 2_000;
 /// Timer that takes a sensor reading, refreshes the widgets and checks
 /// the config file for changes.
 const SENSOR_TIMER: usize = 3;
-/// How often sensors are read, in milliseconds.
-const SENSOR_INTERVAL_MS: u32 = 1_000;
+/// How often sensors are read, in milliseconds: the CPU and network
+/// every time, everything else every [`FULL_READING_EVERY`] ticks.
+const SENSOR_INTERVAL_MS: u32 = 500;
+/// Sensor ticks per full reading (GPUs, RAM, SSDs, config check): once
+/// a second.
+const FULL_READING_EVERY: u32 = 2;
+/// Timer for the frames of a glide to a new reading; runs only while
+/// the bars and rings are moving.
+const FRAME_TIMER: usize = 4;
+/// Time between glide frames, in milliseconds (about 30 a second).
+const FRAME_INTERVAL_MS: u32 = 33;
 /// Health checks to skip after a failed attempt, so a desktop that won't
 /// split is asked again every 30 seconds rather than every 5.
 const RETRY_SKIP_TICKS: u32 = 5;
@@ -76,6 +86,9 @@ const WM_DESKTOP_CLICK: u32 = WM_APP + 2;
 const WM_IMAGES: u32 = WM_APP + 3;
 /// Sent by the tray icon when it's clicked.
 const WM_TRAY: u32 = WM_APP + 4;
+/// Posted by the mouse hook when the pointer moves over (or off) a
+/// widget with hover highlights.
+const WM_DESKTOP_HOVER: u32 = WM_APP + 5;
 /// The log's file name, next to the config.
 const LOG_FILE: &str = "wallflex.log";
 /// `ShellExecuteW` results above this mean success.
@@ -127,6 +140,10 @@ struct State {
     images: Option<ImageFetcher>,
     /// The tray icon.
     tray: Option<Tray>,
+    /// When the last glide frame (or the reading that started it) was.
+    last_frame: Option<Instant>,
+    /// Sensor ticks so far, to know which are full readings.
+    sensor_ticks: u32,
 }
 
 /// The config file and when it was last loaded.
@@ -190,6 +207,15 @@ thread_local! {
     static PRESSED_AT: Cell<Option<POINT>> = const { Cell::new(None) };
     /// The click waiting for `WM_DESKTOP_CLICK`.
     static CLICKED_AT: Cell<Option<POINT>> = const { Cell::new(None) };
+    /// Where widgets with hover highlights are (desktop pixels), so the
+    /// mouse hook only reacts near them.
+    static HOVER_ZONES: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+    /// The latest pointer position waiting for `WM_DESKTOP_HOVER`.
+    static HOVER_AT: Cell<Option<POINT>> = const { Cell::new(None) };
+    /// A `WM_DESKTOP_HOVER` is already on its way, so moves are batched.
+    static HOVER_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// Something is highlighted, so leaving a zone must clear it.
+    static HOVERING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Why Wallflex couldn't run.
@@ -346,7 +372,13 @@ pub(super) fn paint_surface(hwnd: HWND) -> bool {
             ..
         } = &mut *state;
         let found = surfaces.iter_mut().find(|s| s.hwnd() == hwnd);
-        found.map(|surface| surface.paint(dashboard)).is_some()
+        let painted = found.map(|surface| surface.paint(dashboard)).is_some();
+        if painted {
+            let zones =
+                surfaces.iter().flat_map(Surface::hover_zones).collect();
+            HOVER_ZONES.set(zones);
+        }
+        painted
     })
 }
 
@@ -462,6 +494,13 @@ unsafe extern "system" fn controller_proc(
             }
             return LRESULT(0);
         }
+        WM_DESKTOP_HOVER => {
+            HOVER_PENDING.set(false);
+            if let Some(point) = HOVER_AT.take() {
+                on_desktop_hover(point);
+            }
+            return LRESULT(0);
+        }
         WM_DESTROY => {
             drop(take_surfaces());
             stop_discord();
@@ -497,7 +536,14 @@ fn on_timer(hwnd: HWND, timer: usize) {
             rebuild();
         }
         HEALTH_TIMER => on_health_tick(hwnd),
-        SENSOR_TIMER if on_sensor_tick() => rebuild(),
+        SENSOR_TIMER => {
+            let reload = on_sensor_tick();
+            start_frames(hwnd);
+            if reload {
+                rebuild();
+            }
+        }
+        FRAME_TIMER => on_frame(hwnd),
         _ => {}
     }
 }
@@ -570,6 +616,54 @@ fn on_health_tick(hwnd: HWND) {
     }
 }
 
+/// Starts the glide frames if the last reading set the bars and rings
+/// moving.
+fn start_frames(hwnd: HWND) {
+    let moving = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return false;
+        };
+        state.last_frame = Some(Instant::now());
+        state.dashboard.is_moving()
+    });
+    if moving {
+        // SAFETY: our own window; no callback, so WM_TIMER is posted. A
+        // failure only means the bars jump instead of gliding.
+        let _ = unsafe {
+            SetTimer(Some(hwnd), FRAME_TIMER, FRAME_INTERVAL_MS, None)
+        };
+    }
+}
+
+/// One glide frame: moves the bars and rings on and repaints just them,
+/// stopping the frames once they've arrived.
+fn on_frame(hwnd: HWND) {
+    let moving = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return true;
+        };
+        let State {
+            dashboard,
+            surfaces,
+            last_frame,
+            ..
+        } = &mut *state;
+        let now = Instant::now();
+        let elapsed = last_frame
+            .map_or_else(Default::default, |last| now.duration_since(last));
+        *last_frame = Some(now);
+        let moving = dashboard.advance(elapsed);
+        for surface in surfaces.iter() {
+            surface.invalidate_moving(dashboard);
+        }
+        moving
+    });
+    if !moving {
+        // SAFETY: our own timer; failure only means it was already gone.
+        let _ = unsafe { KillTimer(Some(hwnd), FRAME_TIMER) };
+    }
+}
+
 /// Takes a sensor reading, repaints the widgets and checks the config
 /// file. Returns whether new settings were loaded (the surfaces need
 /// rebuilding).
@@ -584,13 +678,26 @@ fn on_sensor_tick() -> bool {
             surfaces,
             settings,
             config,
+            sensor_ticks,
             ..
         } = &mut *state;
+        let full = sensor_ticks.is_multiple_of(FULL_READING_EVERY);
+        *sensor_ticks = sensor_ticks.wrapping_add(1);
         if let Some(sensors) = sensors.as_mut() {
-            dashboard.update(sensors.sample());
-            for surface in surfaces.iter() {
-                surface.invalidate_widgets(dashboard);
+            if full {
+                dashboard.update(sensors.sample());
+                for surface in surfaces.iter() {
+                    surface.invalidate_widgets(dashboard);
+                }
+            } else {
+                dashboard.update(sensors.sample_quick());
+                for surface in surfaces.iter() {
+                    surface.invalidate_quick();
+                }
             }
+        }
+        if !full {
+            return false;
         }
         match config.as_mut().and_then(ConfigFile::reload_if_changed) {
             Some(new) => {
@@ -837,14 +944,20 @@ unsafe extern "system" fn mouse_hook(
     lparam: LPARAM,
 ) -> LRESULT {
     let message = u32::try_from(wparam.0).unwrap_or(0);
-    if code >= 0 && (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+    let watched =
+        matches!(message, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE);
+    if code >= 0 && watched {
         let info = std::ptr::with_exposed_provenance::<MSLLHOOKSTRUCT>(
             lparam.0.cast_unsigned(),
         );
         // SAFETY: for WH_MOUSE_LL, lParam points to an MSLLHOOKSTRUCT
         // that's valid for the duration of the call.
         if let Some(info) = unsafe { info.as_ref() } {
-            note_button(message, info.pt);
+            if message == WM_MOUSEMOVE {
+                note_move(info.pt);
+            } else {
+                note_button(message, info.pt);
+            }
         }
     }
     // SAFETY: passes the event on unchanged, as hooks must.
@@ -863,6 +976,50 @@ fn note_button(message: u32, point: POINT) {
             post_to_controller(WM_DESKTOP_CLICK);
         }
     }
+}
+
+/// A pointer move: over a widget with hover highlights (or just off
+/// one), hands the position to the controller, one message at a time.
+/// Anywhere else it does nothing, so moving the mouse costs nothing.
+fn note_move(point: POINT) {
+    let inside = HOVER_ZONES.with_borrow(|zones| {
+        zones.iter().any(|z| {
+            z.left <= point.x
+                && point.x < z.right
+                && z.top <= point.y
+                && point.y < z.bottom
+        })
+    });
+    if inside || HOVERING.get() {
+        HOVER_AT.set(Some(point));
+        if !HOVER_PENDING.replace(true) {
+            post_to_controller(WM_DESKTOP_HOVER);
+        }
+    }
+}
+
+/// The pointer moved over (or off) a widget: highlights the control
+/// under it, repainting only when that changes.
+fn on_desktop_hover(point: POINT) {
+    STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let State {
+            surfaces,
+            dashboard,
+            ..
+        } = &mut *state;
+        let over = surfaces.iter().find_map(|s| s.hit_test(point));
+        // Only the desktop itself counts, not a window above it.
+        let hover = over.filter(|_| desktop_under(point));
+        HOVERING.set(hover.is_some());
+        if dashboard.set_hover(hover) {
+            for surface in surfaces.iter() {
+                surface.invalidate_hoverable();
+            }
+        }
+    });
 }
 
 /// Posts `message` to the controller window.

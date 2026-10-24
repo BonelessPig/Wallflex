@@ -131,6 +131,7 @@ mod tests {
             memory: Some(Memory {
                 used_bytes: 1 << 30,
                 total_bytes: 4 << 30,
+                modules: 2,
             }),
             network: Some(Network {
                 down_kbps: 5_830.1,

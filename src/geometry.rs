@@ -42,6 +42,16 @@ impl Rect {
             && other.top < self.bottom
     }
 
+    /// The pixels both rectangles share, if any.
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        self.intersects(other).then(|| Self {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        })
+    }
+
     /// The same rectangle measured from `origin` instead of from the
     /// desktop's (0, 0). Used to turn a monitor's desktop position into a
     /// position inside a parent window whose top-left is at `origin`.

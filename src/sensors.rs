@@ -53,6 +53,69 @@ pub struct Memory {
     pub used_bytes: u64,
     /// Bytes installed and usable by Windows.
     pub total_bytes: u64,
+    /// Memory sticks installed; 0 when unknown.
+    pub modules: usize,
+}
+
+/// SMBIOS structure type of a memory slot ("Memory Device").
+const SMBIOS_MEMORY_DEVICE: u8 = 17;
+/// SMBIOS end-of-table structure type.
+const SMBIOS_END: u8 = 127;
+/// Bytes before the table in Windows' `RawSMBIOSData`: calling method,
+/// major and minor version, DMI revision, then the table length (u32).
+const RAW_SMBIOS_HEADER: usize = 8;
+/// Where the table length sits in that header.
+const RAW_SMBIOS_LENGTH_AT: usize = 4;
+/// Where a memory device's size (u16) sits in its structure.
+const MEMORY_DEVICE_SIZE_AT: usize = 0x0C;
+/// Smallest valid structure: type, length and handle.
+const SMBIOS_HEADER_LEN: usize = 4;
+
+/// Counts installed memory sticks in Windows' raw SMBIOS data (from
+/// `GetSystemFirmwareTable('RSMB')`): memory slots whose size isn't 0
+/// (empty). Malformed data stops the count where it goes wrong.
+pub fn memory_modules(raw: &[u8]) -> usize {
+    let length = raw
+        .get(RAW_SMBIOS_LENGTH_AT..RAW_SMBIOS_HEADER)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(u32::from_le_bytes)
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0);
+    let table = raw
+        .get(RAW_SMBIOS_HEADER..)
+        .map(|t| t.get(..length).unwrap_or(t))
+        .unwrap_or_default();
+    let mut count = 0_usize;
+    let mut at = 0_usize;
+    while let Some(&[kind, len]) = table.get(at..at.saturating_add(2)) {
+        let len = usize::from(len);
+        if len < SMBIOS_HEADER_LEN || kind == SMBIOS_END {
+            break;
+        }
+        if kind == SMBIOS_MEMORY_DEVICE && memory_device_installed(table, at) {
+            count = count.saturating_add(1);
+        }
+        // The formatted part, then strings ending in a double zero.
+        let strings = at.saturating_add(len);
+        let Some(end) = table
+            .get(strings..)
+            .and_then(|rest| rest.windows(2).position(|w| w == [0, 0]))
+        else {
+            break;
+        };
+        at = strings.saturating_add(end).saturating_add(2);
+    }
+    count
+}
+
+/// Whether the memory device structure at `at` has a stick in it (its
+/// size isn't 0).
+fn memory_device_installed(table: &[u8], at: usize) -> bool {
+    let from = at.saturating_add(MEMORY_DEVICE_SIZE_AT);
+    table
+        .get(from..from.saturating_add(2))
+        .and_then(|b| <[u8; 2]>::try_from(b).ok())
+        .is_some_and(|b| u16::from_le_bytes(b) != 0)
 }
 
 /// Network throughput, summed over the physical network adapters.
@@ -261,9 +324,51 @@ mod tests {
 
     use super::{
         composite_temperature, cpu_clock_ghz, gpu_usage_by_luid,
-        has_seek_penalty, luid_from_instance, luid_key, product_name,
-        rate_kbps, split_processors, vram_by_luid,
+        has_seek_penalty, luid_from_instance, luid_key, memory_modules,
+        product_name, rate_kbps, split_processors, vram_by_luid,
     };
+
+    /// A memory device structure (type 17) with `size`, and one string.
+    fn memory_device(size: u16) -> Vec<u8> {
+        let mut s = vec![17, 0x15, 0, 0];
+        s.resize(0x15, 0);
+        s[0x0C..0x0E].copy_from_slice(&size.to_le_bytes());
+        s.extend_from_slice(b"DIMM\0\0");
+        s
+    }
+
+    /// `RawSMBIOSData` around `table`.
+    fn raw(table: &[u8]) -> Vec<u8> {
+        let mut raw = vec![0, 3, 4, 0];
+        let len = u32::try_from(table.len()).unwrap();
+        raw.extend_from_slice(&len.to_le_bytes());
+        raw.extend_from_slice(table);
+        raw
+    }
+
+    #[test]
+    fn counts_installed_sticks() {
+        // A BIOS structure (no strings), two sticks, an empty slot, one
+        // more stick, then the end marker.
+        let mut table = vec![0, 4, 0, 0, 0, 0];
+        for size in [8_192, 8_192, 0, 0x7FFF] {
+            table.extend(memory_device(size));
+        }
+        table.extend_from_slice(&[127, 4, 0, 0, 0, 0]);
+        assert_eq!(memory_modules(&raw(&table)), 3);
+    }
+
+    #[test]
+    fn bad_smbios_data_counts_what_it_can() {
+        assert_eq!(memory_modules(&[]), 0);
+        let mut table = memory_device(4_096);
+        table.extend_from_slice(&[17, 2]); // too short to be a structure
+        assert_eq!(memory_modules(&raw(&table)), 1);
+        // Strings that never end.
+        let mut cut = memory_device(4_096);
+        cut.truncate(cut.len() - 2);
+        assert_eq!(memory_modules(&raw(&cut)), 1);
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

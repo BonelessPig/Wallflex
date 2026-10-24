@@ -7,10 +7,12 @@
 //! [`Canvas`]; text comes back as [`Label`]s for GDI to draw on top.
 
 mod discord;
+mod motion;
 
-pub use discord::Action;
+pub use discord::{Action, Demo};
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use crate::canvas::{Area, Canvas, Paint, mix};
 use crate::color::Rgb;
@@ -68,8 +70,8 @@ const CPU_FILL_INSET: f64 = 2.0;
 /// Windows numbers a core's two threads next to each other.
 const THREADS_PER_CORE: usize = 2;
 
-/// Network: samples kept, one per second.
-pub const NET_SPAN: usize = 60;
+/// Network: samples kept (a minute at two a second).
+pub const NET_SPAN: usize = 120;
 /// Network: plot top, inside the graph.
 const NET_TOP: f64 = 2.0;
 /// Network: plot height.
@@ -224,14 +226,45 @@ pub enum Widget {
     Gpus,
     /// One GPU's ring chart (0 = the first GPU, in PCI slot order).
     Gpu(usize),
-    /// RAM use and SSD temperatures on one line.
+    /// RAM use with a bar, and SSD temperatures.
     Info,
     /// Discord: your call, notifications and more.
     Discord,
 }
 
-/// Height of the RAM/SSD line.
-const INFO_H: f64 = HEAD_SIZE * 1.4;
+/// Room around a moving part, so its smoothed edges repaint too.
+const MOVING_MARGIN: f64 = 1.0;
+/// Top of the RAM bar, under the RAM text.
+const RAM_BAR_TOP: f64 = HEAD_SIZE * 1.4;
+/// Thickness of the RAM bar.
+const RAM_BAR_H: f64 = 3.0;
+/// Gap between the RAM bar's sections, one per stick (0.3vh).
+const RAM_BAR_GAP: f64 = 3.0;
+/// Height of the RAM/SSD row, bar included.
+const INFO_H: f64 = RAM_BAR_TOP + RAM_BAR_H;
+/// The RAM bar's section colours, one per stick, as the wallpaper's.
+const STICK_COLORS: [Rgb; 4] = [
+    Rgb {
+        r: 0xA8,
+        g: 0xE6,
+        b: 0xFF,
+    },
+    Rgb {
+        r: 0xCD,
+        g: 0xBD,
+        b: 0xFF,
+    },
+    Rgb {
+        r: 0xFF,
+        g: 0xD3,
+        b: 0xA1,
+    },
+    Rgb {
+        r: 0xB4,
+        g: 0xF0,
+        b: 0xCC,
+    },
+];
 /// Height of one GPU ring chart, names included.
 const GPU_CHART_H: f64 = RING_NAME_ROOM + RING_SIZE;
 
@@ -262,11 +295,14 @@ pub struct Dashboard {
     net: VecDeque<Network>,
     /// The Discord widget's state.
     discord: discord::DiscordUi,
+    /// The bars' and rings' glide to the latest reading.
+    motion: motion::Motion,
 }
 
 impl Dashboard {
     /// Takes in a new reading.
     pub fn update(&mut self, snapshot: Snapshot) {
+        let before = self.shown();
         if let Some(network) = snapshot.network {
             if self.net.len() >= NET_SPAN {
                 let _oldest = self.net.pop_front();
@@ -274,6 +310,109 @@ impl Dashboard {
             self.net.push_back(network);
         }
         self.snapshot = snapshot;
+        if before == self.target() {
+            self.motion.settle();
+        } else {
+            self.motion.restart(before);
+        }
+    }
+
+    /// Moves the bars and rings on by `elapsed`. Returns whether they're
+    /// still moving (repaint the [`Dashboard::moving_areas`] until not).
+    pub fn advance(&mut self, elapsed: Duration) -> bool {
+        self.motion.advance(elapsed)
+    }
+
+    /// Whether the bars and rings are gliding to a new reading.
+    pub fn is_moving(&self) -> bool {
+        self.motion.is_moving()
+    }
+
+    /// Jumps straight to the latest reading (for `--preview`).
+    pub fn settle(&mut self) {
+        self.motion.settle();
+    }
+
+    /// The bars' and rings' values in the latest reading.
+    fn target(&self) -> motion::Levels {
+        let rings = self
+            .snapshot
+            .gpus
+            .iter()
+            .flat_map(|gpu| {
+                Ring::ALL
+                    .iter()
+                    .map(|&ring| ring_reading(gpu, ring).0.unwrap_or(0.0))
+            })
+            .collect();
+        let ram = self
+            .snapshot
+            .memory
+            .filter(|m| m.total_bytes > 0)
+            .map_or(0.0, |m| {
+                u64_to_f64(m.used_bytes) / u64_to_f64(m.total_bytes)
+            });
+        motion::Levels {
+            cores: self.snapshot.cpu.per_core.clone(),
+            rings,
+            ram,
+        }
+    }
+
+    /// The bars' and rings' values to draw now.
+    fn shown(&self) -> motion::Levels {
+        self.motion.shown(&self.target())
+    }
+
+    /// The parts of `widget` a quick reading (CPU and network only)
+    /// changes, in its own units.
+    pub fn quick_areas(widget: Widget) -> Vec<Area> {
+        let (cpu, net) = (cpu_block_area(), net_block_area());
+        match widget {
+            Widget::Panel => vec![
+                cpu,
+                Area {
+                    x0: net.x0 + COLUMN_W + COLUMN_GAP,
+                    x1: net.x1 + COLUMN_W + COLUMN_GAP,
+                    ..net
+                },
+            ],
+            Widget::Cpu => vec![cpu],
+            Widget::Network => vec![net],
+            Widget::Gpus | Widget::Gpu(_) | Widget::Info | Widget::Discord => {
+                Vec::new()
+            }
+        }
+    }
+
+    /// Where `widget` has parts that glide, in its own units: the CPU
+    /// columns, the GPU rings and the RAM bar. Repainting just these is
+    /// enough while [`Dashboard::is_moving`].
+    pub fn moving_areas(&self, widget: Widget) -> Vec<Area> {
+        let gpus = self.snapshot.gpus.len();
+        let mut areas = Vec::new();
+        match widget {
+            Widget::Panel => {
+                areas.push(cpu_columns_area());
+                let top = Self::panel_gpus_top();
+                areas.extend(
+                    (0..gpus).map(|i| shift(ring_area(gpu_grid_spot(i)), top)),
+                );
+                areas.push(shift(ram_bar_area(), self.panel_info_top()));
+            }
+            Widget::Cpu => areas.push(cpu_columns_area()),
+            Widget::Network | Widget::Discord => {}
+            Widget::Gpus => {
+                areas.extend((0..gpus).map(|i| ring_area(gpu_grid_spot(i))));
+            }
+            Widget::Gpu(index) => {
+                if index < gpus {
+                    areas.push(ring_area((0.0, RING_NAME_ROOM)));
+                }
+            }
+            Widget::Info => areas.push(ram_bar_area()),
+        }
+        areas
     }
 
     /// A widget's size in design units. (0, 0) when it has nothing to
@@ -318,10 +457,17 @@ impl Dashboard {
             Widget::Panel => self.draw_panel(&mut pen),
             Widget::Cpu => self.draw_cpu(&mut pen),
             Widget::Network => self.draw_net(&mut pen),
-            Widget::Gpus => Self::draw_gpus(&mut pen, &self.snapshot.gpus),
+            Widget::Gpus => self.draw_gpus(&mut pen),
             Widget::Gpu(index) => {
                 if let Some(gpu) = self.snapshot.gpus.get(index) {
-                    draw_ring_chart(&mut pen, (0.0, RING_NAME_ROOM), gpu);
+                    let levels = self.shown();
+                    let rings = gpu_rings(&levels.rings, index);
+                    draw_ring_chart(
+                        &mut pen,
+                        (0.0, RING_NAME_ROOM),
+                        gpu,
+                        rings,
+                    );
                 }
             }
             Widget::Info => self.draw_info(&mut pen),
@@ -331,6 +477,12 @@ impl Dashboard {
             labels: pen.labels,
             hits: pen.hits,
         }
+    }
+
+    /// Notes the control under the pointer, for hover highlights.
+    /// Returns whether the Discord widget needs repainting.
+    pub fn set_hover(&mut self, hover: Option<Action>) -> bool {
+        self.discord.set_hover(hover)
     }
 
     /// Handles a click on a widget. Returns a command for the Discord
@@ -372,8 +524,8 @@ impl Dashboard {
     }
 
     /// Fills the Discord widget with sample data, for `--preview`.
-    pub fn show_discord_demo(&mut self, inbox: bool) {
-        self.discord.show_demo(inbox);
+    pub fn show_discord_demo(&mut self, demo: Demo) {
+        self.discord.show_demo(demo);
     }
 
     /// Takes in a new view from the Discord session.
@@ -388,7 +540,7 @@ impl Dashboard {
         pen.origin = (COLUMN_W + COLUMN_GAP, 0.0);
         self.draw_net(pen);
         pen.origin = (0.0, Self::panel_gpus_top());
-        Self::draw_gpus(pen, &self.snapshot.gpus);
+        self.draw_gpus(pen);
         pen.origin = (0.0, self.panel_info_top());
         self.draw_info(pen);
         pen.origin = (0.0, 0.0);
@@ -445,13 +597,14 @@ impl Dashboard {
             &meta,
         );
 
+        let levels = self.shown();
         let core_n = count_to_f64(cores);
         let core_w = (COLUMN_W - CPU_CORE_GAP * (core_n - 1.0)) / core_n;
         let per_core_n = count_to_f64(per_core);
         let col_w = (core_w - CPU_PAIR_GAP * (per_core_n - 1.0)) / per_core_n;
-        let col_h = CPU_COLS_H - CPU_LABEL_GAP - CPU_LABEL_SIZE * 1.2;
+        let col_h = cpu_column_height();
 
-        for (core, loads) in (1_u32..).zip(cpu.per_core.chunks(per_core)) {
+        for (core, loads) in (1_u32..).zip(levels.cores.chunks(per_core)) {
             let core_x = (f64::from(core) - 1.0) * (core_w + CPU_CORE_GAP);
             for (thread, load) in (0_u32..).zip(loads) {
                 let x = core_x + f64::from(thread) * (col_w + CPU_PAIR_GAP);
@@ -608,50 +761,63 @@ impl Dashboard {
     }
 
     /// One ring chart per GPU, two per row.
-    fn draw_gpus(pen: &mut Pen<'_, '_>, gpus: &[Gpu]) {
-        for (row, pair) in (0_u32..).zip(gpus.chunks(RINGS_PER_ROW)) {
-            let top = f64::from(row) * (GPU_CHART_H + ROW_GAP) + RING_NAME_ROOM;
-            for (column, gpu) in (0_u32..).zip(pair) {
-                let left = f64::from(column) * (COLUMN_W + COLUMN_GAP);
-                draw_ring_chart(pen, (left, top), gpu);
-            }
+    fn draw_gpus(&self, pen: &mut Pen<'_, '_>) {
+        let levels = self.shown();
+        for (index, gpu) in self.snapshot.gpus.iter().enumerate() {
+            let rings = gpu_rings(&levels.rings, index);
+            draw_ring_chart(pen, gpu_grid_spot(index), gpu, rings);
         }
     }
 
     /// RAM use and SSD temperatures, on one line.
     fn draw_info(&self, pen: &mut Pen<'_, '_>) {
-        let mut parts = Vec::new();
         if let Some(memory) = self.snapshot.memory.filter(|m| m.total_bytes > 0)
         {
             let used = u64_to_f64(memory.used_bytes);
             let total = u64_to_f64(memory.total_bytes);
-            parts.push(format!(
+            let text = format!(
                 "RAM {:.0}%  {:.1}/{:.1} GB",
                 used / total * PERCENT_MAX,
                 used / BYTES_PER_GB,
                 total / BYTES_PER_GB
-            ));
+            );
+            let at = (0.0, HEAD_BASELINE);
+            pen.text(at, HEAD_SIZE, QUIET, Align::Left, &text);
+            draw_ram_bar(pen, self.shown().ram, memory.modules);
         }
-        for disk in &self.snapshot.disks {
-            parts.push(format!("SSD{} {} °C", disk.disk, disk.temp_c));
-        }
-        let text = parts.join("     ");
-        pen.text((0.0, HEAD_BASELINE), HEAD_SIZE, QUIET, Align::Left, &text);
+        let disks: Vec<String> = self
+            .snapshot
+            .disks
+            .iter()
+            .map(|disk| format!("SSD{} {} °C", disk.disk, disk.temp_c))
+            .collect();
+        let text = disks.join("     ");
+        let at = (COLUMN_W + COLUMN_GAP, HEAD_BASELINE);
+        pen.text(at, HEAD_SIZE, QUIET, Align::Left, &text);
     }
 }
 
 /// Draws one GPU's rings, names and legend with its top-left at
 /// `origin`.
-fn draw_ring_chart(pen: &mut Pen<'_, '_>, (left, top): (f64, f64), gpu: &Gpu) {
+/// One GPU's chart: rings filled to `rings` (its five fractions, in
+/// ring order; missing ones draw empty), its name and the legend.
+fn draw_ring_chart(
+    pen: &mut Pen<'_, '_>,
+    (left, top): (f64, f64),
+    gpu: &Gpu,
+    rings: &[f64],
+) {
     let to_units = RING_SIZE / RING_VIEW;
     let centre = (left + RING_SIZE / 2.0, top + RING_SIZE / 2.0);
-    for (index, ring) in (0_u32..).zip(Ring::ALL) {
+    for ((index, ring), fraction) in (0_u32..)
+        .zip(Ring::ALL)
+        .zip(rings.iter().copied().chain(std::iter::repeat(0.0)))
+    {
         let radius = (RING_OUTER_R - f64::from(index) * RING_GAP) * to_units;
-        let (fraction, _) = ring_reading(gpu, ring);
         pen.arc(
             centre,
             radius,
-            fraction.unwrap_or(0.0),
+            fraction,
             Paint {
                 color: ring.color(),
                 alpha: 1.0,
@@ -804,6 +970,90 @@ pub fn format_rate(kbps: f64) -> String {
 /// Width of the panel: two widget columns and the gap.
 const PANEL_W: f64 = COLUMN_W * 2.0 + COLUMN_GAP;
 
+/// Where GPU `index`'s chart goes (top-left of its rings) when the
+/// charts are laid out two per row.
+fn gpu_grid_spot(index: usize) -> (f64, f64) {
+    let row = count_to_f64(index / RINGS_PER_ROW);
+    let column = count_to_f64(index % RINGS_PER_ROW);
+    (
+        column * (COLUMN_W + COLUMN_GAP),
+        row * (GPU_CHART_H + ROW_GAP) + RING_NAME_ROOM,
+    )
+}
+
+/// GPU `index`'s five ring fractions out of everyone's.
+fn gpu_rings(all: &[f64], index: usize) -> &[f64] {
+    let count = Ring::ALL.len();
+    let start = index.saturating_mul(count);
+    all.get(start..start.saturating_add(count))
+        .unwrap_or_default()
+}
+
+/// The rings' square for a chart whose rings start at `(left, top)`,
+/// with a unit to spare for smoothing.
+fn ring_area((left, top): (f64, f64)) -> Area {
+    Area {
+        x0: left - MOVING_MARGIN,
+        y0: top - MOVING_MARGIN,
+        x1: left + RING_SIZE + MOVING_MARGIN,
+        y1: top + RING_SIZE + MOVING_MARGIN,
+    }
+}
+
+/// The CPU widget's columns.
+fn cpu_columns_area() -> Area {
+    Area {
+        x0: -MOVING_MARGIN,
+        y0: BODY_TOP - MOVING_MARGIN,
+        x1: COLUMN_W + MOVING_MARGIN,
+        y1: BODY_TOP + cpu_column_height() + MOVING_MARGIN,
+    }
+}
+
+/// The whole CPU widget (heading, columns, labels).
+fn cpu_block_area() -> Area {
+    Area {
+        x0: -MOVING_MARGIN,
+        y0: -MOVING_MARGIN,
+        x1: COLUMN_W + MOVING_MARGIN,
+        y1: BODY_TOP + CPU_COLS_H + MOVING_MARGIN,
+    }
+}
+
+/// The whole network widget (heading, graph, labels).
+fn net_block_area() -> Area {
+    Area {
+        x0: -MOVING_MARGIN,
+        y0: -MOVING_MARGIN,
+        x1: COLUMN_W + MOVING_MARGIN,
+        y1: BODY_TOP + NET_GRAPH_H + MOVING_MARGIN,
+    }
+}
+
+/// The RAM bar, in the info row.
+fn ram_bar_area() -> Area {
+    Area {
+        x0: -MOVING_MARGIN,
+        y0: RAM_BAR_TOP - MOVING_MARGIN,
+        x1: COLUMN_W + MOVING_MARGIN,
+        y1: RAM_BAR_TOP + RAM_BAR_H + MOVING_MARGIN,
+    }
+}
+
+/// `area` moved down by `dy`.
+fn shift(area: Area, dy: f64) -> Area {
+    Area {
+        y0: area.y0 + dy,
+        y1: area.y1 + dy,
+        ..area
+    }
+}
+
+/// Height of a CPU column (the area above the core labels).
+fn cpu_column_height() -> f64 {
+    CPU_COLS_H - CPU_LABEL_GAP - CPU_LABEL_SIZE * 1.2
+}
+
 /// Size of `count` GPU charts laid out two per row.
 fn gpus_size(count: usize) -> (f64, f64) {
     if count == 0 {
@@ -815,6 +1065,47 @@ fn gpus_size(count: usize) -> (f64, f64) {
         columns * COLUMN_W + (columns - 1.0) * COLUMN_GAP,
         rows * GPU_CHART_H + (rows - 1.0) * ROW_GAP,
     )
+}
+
+/// The RAM bar under the RAM text, a column wide: a dim track filled to
+/// `fraction` (0 to 1), split into a section per stick in the
+/// wallpaper's colours (one section when the count is unknown).
+fn draw_ram_bar(pen: &mut Pen<'_, '_>, fraction: f64, modules: usize) {
+    let sections = modules.max(1);
+    let count = count_to_f64(sections);
+    let section_w = (COLUMN_W - RAM_BAR_GAP * (count - 1.0)) / count;
+    let filled = fraction.clamp(0.0, 1.0) * COLUMN_W;
+    let colors = STICK_COLORS.iter().cycle();
+    for (index, color) in (0_u32..).zip(colors).take(sections) {
+        let x0 = f64::from(index) * (section_w + RAM_BAR_GAP);
+        let area = Area {
+            x0,
+            y0: RAM_BAR_TOP,
+            x1: x0 + section_w,
+            y1: RAM_BAR_TOP + RAM_BAR_H,
+        };
+        pen.fill(
+            area,
+            Paint {
+                color: INK,
+                alpha: TRACK,
+            },
+        );
+        let fill_to = filled.min(area.x1);
+        if fill_to > x0 {
+            let fill = Area {
+                x1: fill_to,
+                ..area
+            };
+            pen.fill(
+                fill,
+                Paint {
+                    color: *color,
+                    alpha: 1.0,
+                },
+            );
+        }
+    }
 }
 
 /// A small count as `f64`.
@@ -1147,7 +1438,9 @@ mod tests {
     #[test]
     fn keeps_a_minute_of_network_history() {
         let mut dashboard = Dashboard::default();
-        for i in 0..100_u32 {
+        let extra = 40_u32;
+        let total = u32::try_from(NET_SPAN).unwrap() + extra;
+        for i in 0..total {
             dashboard.update(Snapshot {
                 network: Some(Network {
                     down_kbps: f64::from(i),
@@ -1157,7 +1450,8 @@ mod tests {
             });
         }
         assert_eq!(dashboard.net.len(), NET_SPAN);
-        assert_eq!(dashboard.net.front().map(|n| n.down_kbps), Some(40.0));
+        let oldest = Some(f64::from(extra));
+        assert_eq!(dashboard.net.front().map(|n| n.down_kbps), oldest);
     }
 
     #[test]
