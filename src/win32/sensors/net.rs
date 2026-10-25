@@ -74,11 +74,12 @@ fn totals() -> Option<(u64, u64, u64)> {
         return None;
     }
     let table = IfTable(raw);
-    // SAFETY: the table is valid until `table` drops, and `NumEntries`
-    // rows are stored one after another starting at `Table`.
+    // SAFETY: `raw` was returned by `GetIfTable2` and checked non-null
+    // above; it remains valid until `table` drops. `NumEntries` rows are
+    // stored contiguously starting at `Table`.
     let rows: &[MIB_IF_ROW2] = unsafe {
-        let count = usize::try_from((*table.0).NumEntries).ok()?;
-        std::slice::from_raw_parts((&raw const (*table.0).Table).cast(), count)
+        let count = usize::try_from((*raw).NumEntries).ok()?;
+        std::slice::from_raw_parts((&raw const (*raw).Table).cast(), count)
     };
 
     let mut received = 0_u64;
