@@ -1,8 +1,8 @@
 //! How smoothly Wallflex animates. The config's `performance` mode sets
 //! the most it may do; the [`Governor`] picks the [`Level`] it runs at
-//! from moment to moment: smooth while the PC is idle, stepping down
-//! when the PC gets busy or Wallflex itself goes over its CPU budget,
-//! and back up once things have been calm for a while.
+//! from moment to moment: the mode's top level until the PC's CPU or
+//! RAM is 90% used, then Light, and back up once things have been calm
+//! for a while.
 
 use std::time::Duration;
 
@@ -57,14 +57,6 @@ impl Level {
         match mode {
             Mode::Smooth => Self::Smooth,
             Mode::Light => Self::Light,
-        }
-    }
-
-    /// One step lighter (Light stays Light).
-    fn lower(self) -> Self {
-        match self {
-            Self::Smooth => Self::Normal,
-            Self::Normal | Self::Light => Self::Light,
         }
     }
 
@@ -172,24 +164,12 @@ impl Level {
     }
 }
 
-/// Whole-PC CPU use (%) at which animations drop straight to Light.
-/// Below it the PC caps nothing; only Wallflex's own CPU budget can
-/// hold it at Normal.
-const BUSY: f64 = 80.0;
-/// Wallflex's CPU budget, as a share of the whole CPU (%). Over it for
-/// [`OVER_BUDGET_SECONDS`] in a row, it steps down a level.
-pub const CPU_BUDGET: f64 = 2.0;
-/// Seconds over budget before stepping down.
-const OVER_BUDGET_SECONDS: u32 = 3;
-/// Wallflex must be under this (% of the whole CPU) to step back up, so
-/// it doesn't bounce off the budget.
-const HEADROOM: f64 = 1.0;
-/// Calm seconds before stepping back up a level.
+/// Whole-PC CPU or RAM use (%) at which animations drop straight to
+/// Light. Below it nothing is throttled.
+const BUSY: f64 = 90.0;
+/// Calm seconds (CPU and RAM both under [`BUSY`]) before stepping back
+/// up a level.
 const CALM_SECONDS: u32 = 10;
-/// Seconds after starting (or a mode change) when Wallflex's own CPU
-/// isn't held against the budget: signing in, downloading pictures and
-/// building the surfaces cost a burst that isn't the steady state.
-const WARMUP_SECONDS: u32 = 10;
 
 /// Picks the level from moment to moment. Call [`Governor::tick`] once
 /// a second.
@@ -199,27 +179,17 @@ pub struct Governor {
     mode: Mode,
     /// The level now.
     level: Level,
-    /// The most the CPU budget allows, lowered when over budget.
-    budget_cap: Level,
-    /// Seconds in a row over budget.
-    over: u32,
-    /// Seconds in a row a higher level would have been allowed.
+    /// Seconds in a row the PC has had room.
     calm: u32,
-    /// Warm-up seconds left.
-    warmup: u32,
 }
 
 impl Governor {
     /// A governor for `mode`, starting at its top level.
     pub fn new(mode: Mode) -> Self {
-        let top = Level::top(mode);
         Self {
             mode,
-            level: top,
-            budget_cap: Level::Smooth,
-            over: 0,
+            level: Level::top(mode),
             calm: 0,
-            warmup: WARMUP_SECONDS,
         }
     }
 
@@ -238,46 +208,25 @@ impl Governor {
         Some(self.level)
     }
 
-    /// One second's check: `system` is the whole PC's CPU use (%, if
-    /// known) and `own` Wallflex's share of the whole CPU (%). Returns
-    /// the new level if it changed.
-    pub fn tick(&mut self, system: Option<f64>, own: f64) -> Option<Level> {
-        let warming_up = self.warmup > 0;
-        self.warmup = self.warmup.saturating_sub(1);
-        self.over = if own > CPU_BUDGET && !warming_up {
-            self.over.saturating_add(1)
-        } else {
-            0
-        };
-        if self.over >= OVER_BUDGET_SECONDS {
-            self.budget_cap = self.level.lower();
-            self.over = 0;
-        }
-        let load_cap = match system {
-            Some(busy) if busy >= BUSY => Level::Light,
-            _ => Level::Smooth,
-        };
-        let wanted = Level::top(self.mode).min(load_cap).min(self.budget_cap);
+    /// One second's check: `cpu` and `ram` are the whole PC's CPU and
+    /// RAM use (%, if known). Returns the new level if it changed.
+    pub fn tick(
+        &mut self,
+        cpu: Option<f64>,
+        ram: Option<f64>,
+    ) -> Option<Level> {
+        let busy = [cpu, ram].into_iter().flatten().any(|use_| use_ >= BUSY);
+        let top = Level::top(self.mode);
         let before = self.level;
-        if wanted < self.level {
-            // Step down at once.
-            self.level = wanted;
+        if busy {
+            self.level = Level::Light;
             self.calm = 0;
-        } else if wanted > self.level || self.budget_cap < Level::top(self.mode)
-        {
-            // Step up only after a calm spell, one level at a time, and
-            // only with room under the budget.
-            self.calm = if own < HEADROOM {
-                self.calm.saturating_add(1)
-            } else {
-                0
-            };
+        } else if self.level < top {
+            // Step up only after a calm spell, one level at a time.
+            self.calm = self.calm.saturating_add(1);
             if self.calm >= CALM_SECONDS {
                 self.calm = 0;
-                self.budget_cap = self.budget_cap.higher();
-                let allowed =
-                    Level::top(self.mode).min(load_cap).min(self.budget_cap);
-                self.level = self.level.higher().min(allowed);
+                self.level = self.level.higher().min(top);
             }
         } else {
             self.calm = 0;
@@ -288,68 +237,53 @@ impl Governor {
 
 #[cfg(test)]
 mod tests {
-    use super::{CALM_SECONDS, Governor, Level, Mode, OVER_BUDGET_SECONDS};
+    use super::{CALM_SECONDS, Governor, Level, Mode};
 
     #[test]
     fn light_mode_stays_light() {
         let mut governor = Governor::new(Mode::Light);
         assert_eq!(governor.level(), Level::Light);
         for _ in 0..100 {
-            assert_eq!(governor.tick(Some(1.0), 0.1), None);
+            assert_eq!(governor.tick(Some(1.0), Some(40.0)), None);
         }
         assert!(governor.level().glide().is_none());
     }
 
     #[test]
-    fn a_busy_pc_steps_down_and_calm_steps_up() {
+    fn a_busy_cpu_steps_down_and_calm_steps_up() {
         let mut governor = Governor::new(Mode::Smooth);
         // Busy but under the limit: stays smooth.
-        assert_eq!(governor.tick(Some(79.0), 0.5), None);
-        // Over it: straight to Light.
-        assert_eq!(governor.tick(Some(85.0), 0.5), Some(Level::Light));
+        for _ in 0..100 {
+            assert_eq!(governor.tick(Some(89.0), Some(50.0)), None);
+        }
+        // At it: straight to Light.
+        assert_eq!(governor.tick(Some(90.0), Some(50.0)), Some(Level::Light));
         // Calm again: one level per calm spell.
         let mut changes = Vec::new();
         for _ in 0..CALM_SECONDS * 2 {
-            changes.extend(governor.tick(Some(5.0), 0.5));
+            changes.extend(governor.tick(Some(5.0), Some(50.0)));
         }
         assert_eq!(changes, vec![Level::Normal, Level::Smooth]);
     }
 
     #[test]
-    fn startup_bursts_dont_count() {
+    fn full_ram_steps_down() {
         let mut governor = Governor::new(Mode::Smooth);
-        for _ in 0..super::WARMUP_SECONDS {
-            assert_eq!(governor.tick(Some(5.0), 5.0), None);
+        assert_eq!(governor.tick(Some(5.0), Some(89.9)), None);
+        assert_eq!(governor.tick(Some(5.0), Some(95.0)), Some(Level::Light));
+        // Still full: stays down however long it lasts.
+        for _ in 0..CALM_SECONDS * 3 {
+            assert_eq!(governor.tick(Some(5.0), Some(95.0)), None);
         }
-        for _ in 1..OVER_BUDGET_SECONDS {
-            assert_eq!(governor.tick(Some(5.0), 5.0), None);
-        }
-        assert_eq!(governor.tick(Some(5.0), 5.0), Some(Level::Normal));
     }
 
     #[test]
-    fn going_over_budget_steps_down() {
+    fn unknown_readings_dont_throttle() {
         let mut governor = Governor::new(Mode::Smooth);
-        governor.warmup = 0;
-        for _ in 1..OVER_BUDGET_SECONDS {
-            assert_eq!(governor.tick(Some(5.0), 2.5), None);
+        for _ in 0..100 {
+            assert_eq!(governor.tick(None, None), None);
         }
-        assert_eq!(governor.tick(Some(5.0), 2.5), Some(Level::Normal));
-        // Still over: down again.
-        for _ in 1..OVER_BUDGET_SECONDS {
-            let _ = governor.tick(Some(5.0), 2.5);
-        }
-        assert_eq!(governor.tick(Some(5.0), 2.5), Some(Level::Light));
-        // Under budget but without headroom: stays put.
-        for _ in 0..CALM_SECONDS * 2 {
-            assert_eq!(governor.tick(Some(5.0), 1.5), None);
-        }
-        // With headroom it climbs back.
-        let mut changes = Vec::new();
-        for _ in 0..CALM_SECONDS * 2 {
-            changes.extend(governor.tick(Some(5.0), 0.3));
-        }
-        assert_eq!(changes, vec![Level::Normal, Level::Smooth]);
+        assert_eq!(governor.level(), Level::Smooth);
     }
 
     #[test]

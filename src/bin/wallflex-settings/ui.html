@@ -1097,11 +1097,11 @@ function paneGeneral() {
       () => model.image, (v) => { model.image = v; },
       () => model.image_fit, (v) => { model.image_fit = v; }, FITS),
     el("h2", {}, "Performance"),
-    perf("smooth", "Smooth", "Glides and the visualizer at up to 60 frames a second while the PC "
-      + "has room, easing off when it gets busy."),
+    perf("smooth", "Smooth", "Glides and the visualizer at up to 60 frames a second until the "
+      + "PC's CPU or RAM is 90% used, then light."),
     perf("light", "Light", "No glides, readings once a second, a slower visualizer: "
       + "as light as it gets."),
-    el("p", {}, "Either way Wallflex keeps itself under 2% CPU and 120 MB of memory."),
+    el("p", {}, "Either way Wallflex keeps itself under 120 MB of memory."),
     el("h2", {}, "Settings file"),
     el("p", {}, el("code", {}, filePath)),
     el("p", {}, "Saved changes show about a second later while Wallflex is running."),

@@ -859,20 +859,22 @@ fn apply_performance_settings() {
 }
 
 /// Once a second: lets the governor step the level up or down for the
-/// PC's load and Wallflex's own CPU use.
+/// PC's CPU and RAM use.
 fn check_pace(hwnd: HWND) {
     let changed = STATE.with(|state| {
         let mut state = state.try_borrow_mut().ok()?;
         let own = state.cpu_meter.sample();
-        let system = state.dashboard.cpu_total();
-        let level = state.governor.as_mut()?.tick(system, own)?;
-        Some((level, system, own))
+        let cpu = state.dashboard.cpu_total();
+        let ram = state.dashboard.ram_percent();
+        let level = state.governor.as_mut()?.tick(cpu, ram)?;
+        Some((level, cpu, ram, own))
     });
-    if let Some((level, system, own)) = changed {
+    if let Some((level, cpu, ram, own)) = changed {
         log!(
-            "performance: now {} (PC {:.0}% busy, Wallflex {own:.2}%)",
+            "performance: now {} (CPU {:.0}%, RAM {:.0}%, Wallflex {own:.2}%)",
             level.name(),
-            system.unwrap_or(0.0)
+            cpu.unwrap_or(0.0),
+            ram.unwrap_or(0.0)
         );
         apply_level(hwnd, level);
     }

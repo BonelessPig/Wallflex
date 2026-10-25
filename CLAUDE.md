@@ -66,11 +66,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 - `src/pace.rs`: performance. The config's `performance` ("smooth"
   default, or "light") caps a `Level` (Smooth: 0.4 s glides and
   visualizer at ~64 fps; Normal: 0.3 s / ~32 fps; Light: no glides,
-  sensors once a second, visualizer ~16 fps). The `Governor` drops
-  straight to Light at once when the PC is 80% busy, steps down a level
-  when Wallflex is over 2% CPU for 3 s (`win32/usage.rs` measures it
-  by cycle count, not the tick-sampled process times),
-  and climbs back one level per 10 calm seconds. Timer intervals sit
+  sensors once a second, visualizer ~16 fps). The `Governor`
+  throttles nothing until the PC's CPU or RAM is 90% used, then drops
+  straight to Light, and climbs back one level per 10 calm seconds.
+  Wallflex's own CPU (`win32/usage.rs`, by cycle count, not the
+  tick-sampled process times) is only logged. Timer intervals sit
   just under whole 15.625 ms system ticks (15, 31, 62 ms), since a
   timer fires on the first tick after it's due. Over 120 MB private,
   pictures are dropped and the working set trimmed (health tick).

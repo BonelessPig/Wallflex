@@ -69,9 +69,9 @@ file). Save it and the change shows about a second later.
   the monitors it's used on (`image = ""` for none), so each monitor
   can have a different picture.
 - `performance`: `"smooth"` (the default) for smooth animations until
-  your PC is 80% busy (then it switches to light), or `"light"` for no
-  animations and the least work. Either way Wallflex stays under 2% CPU
-  and 120 MB of memory. In light, a full-screen game or video pauses
+  your PC's CPU or RAM is 90% used (then it switches to light), or
+  `"light"` for no animations and the least work. Either way Wallflex
+  stays under 120 MB of memory. In light, a full-screen game or video pauses
   the widgets it hides, and Wallflex sleeps while all of them are
   hidden.
 - `[[layout]]`: which widgets go on which monitor. `monitor` can be

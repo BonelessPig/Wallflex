@@ -7,7 +7,8 @@
 
 Lightweight desktop widgets for Windows, drawn behind the desktop icons.
 No Wallpaper Engine, no browser engine, no admin rights. It keeps itself
-under 2% CPU and 120 MB of memory (typically 20 to 40 MB).
+under 120 MB of memory (typically 20 to 40 MB) and eases off when your
+PC is nearly full.
 
 ![The performance panel, the Discord widget and the music visualizer](docs/screenshot.png)
 
@@ -85,9 +86,9 @@ The file sets:
   the area the taskbar leaves free, plus an overall size per layout.
 
 `performance = "smooth"` (the default) animates at up to 60 frames a
-second until the PC is 80% busy, then drops to light;
+second until the PC's CPU or RAM is 90% used, then drops to light;
 `performance = "light"` turns the glides off and reads sensors once a
-second. Either way Wallflex holds itself under 2% CPU and 120 MB. In
+second. Either way Wallflex holds itself under 120 MB. In
 light mode, monitors hidden by a full-screen game or video stop
 drawing, and with every widget hidden Wallflex sleeps until one shows
 again.

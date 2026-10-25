@@ -647,6 +647,13 @@ impl Dashboard {
         self.snapshot.cpu.total
     }
 
+    /// The whole PC's RAM in use (%), if known.
+    pub fn ram_percent(&self) -> Option<f64> {
+        self.snapshot.memory.filter(|m| m.total_bytes > 0).map(|m| {
+            u64_to_f64(m.used_bytes) * PERCENT_MAX / u64_to_f64(m.total_bytes)
+        })
+    }
+
     /// Drops downloaded pictures (to free memory); they're fetched again
     /// when needed.
     pub fn clear_images(&mut self) {

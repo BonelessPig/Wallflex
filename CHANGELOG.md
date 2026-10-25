@@ -8,6 +8,13 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Changed
+
+- Smooth mode no longer steps down to normal or light on its own: it
+  stays smooth until the PC's CPU or RAM is 90% used (was CPU at 80%,
+  or Wallflex itself over 2% CPU), then drops to light and climbs back
+  once the PC has had room for a while.
+
 ## [0.3.0] - 2026-10-24
 
 ### Added
