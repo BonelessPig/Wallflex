@@ -19,12 +19,16 @@ use windows::core::{PCWSTR, w};
 
 use super::app;
 use super::desktop::{DesktopHost, Layout};
+use super::layer::{LayerWindow, PictureWindow};
 use super::monitors::Monitor;
-use super::paint::Painter;
+use super::paint::{Painter, Place};
 use super::struct_size;
+use super::wallpaper::Picture;
+use crate::backdrop::{self, Backdrop, Background, Mapping, Wallpaper};
 use crate::color::Rgb;
 use crate::config::Layout as ConfigLayout;
 use crate::geometry::{Point, Rect};
+use crate::log;
 use crate::widgets::{Action, Dashboard};
 
 /// Window class for surfaces.
@@ -38,6 +42,8 @@ pub struct Surface {
     hwnd: HWND,
     /// Paints the window.
     painter: Painter,
+    /// The picture behind the widgets, in a window of its own.
+    picture: Option<PictureWindow>,
     /// The monitor it covers, in desktop pixels.
     monitor: crate::geometry::Rect,
     /// Hidden behind a full-screen window: its buffers are freed and it
@@ -91,6 +97,19 @@ impl Surface {
         self.hwnd
     }
 
+    /// Whether `hwnd` is one of this surface's windows: its own, its
+    /// picture's or a widget's.
+    pub fn owns(&self, hwnd: HWND) -> bool {
+        self.windows().any(|own| own == hwnd)
+    }
+
+    /// The surface's windows, back to front.
+    fn windows(&self) -> impl Iterator<Item = HWND> {
+        std::iter::once(self.hwnd)
+            .chain(self.picture.as_ref().map(PictureWindow::hwnd))
+            .chain(self.painter.layers().map(LayerWindow::hwnd))
+    }
+
     /// Whether the window still exists inside `host`. Explorer
     /// restarting destroys it.
     pub fn is_attached(&self, host: &DesktopHost) -> bool {
@@ -101,7 +120,8 @@ impl Surface {
         }
     }
 
-    /// Moves the window back just below the icons.
+    /// Moves the window back just below the icons, with its picture and
+    /// widgets' windows (if any) in front of it.
     ///
     /// # Errors
     ///
@@ -111,23 +131,27 @@ impl Surface {
         host: &DesktopHost,
     ) -> windows::core::Result<()> {
         // In the raised layout the icons share our parent, so go directly
-        // behind them; in the classic one we're alone in the layer.
+        // behind them; in the classic one we're alone in the layer. Each
+        // window placed goes in front of the ones placed before it.
         let after = match host.layout {
             Layout::Raised => host.icons,
             Layout::Classic => HWND_TOP,
         };
-        // SAFETY: plain handles and flags; size and position are kept.
-        unsafe {
-            SetWindowPos(
-                self.hwnd,
-                Some(after),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            )
+        for hwnd in self.windows() {
+            // SAFETY: plain handles and flags; size and position are kept.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(after),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            }?;
         }
+        Ok(())
     }
 
     /// Asks Windows to repaint the whole window.
@@ -263,28 +287,19 @@ pub fn register_class(instance: HINSTANCE) -> windows::core::Result<()> {
 }
 
 /// Creates a surface covering `monitor` (desktop coordinates) inside
-/// `host`, just below the icons.
+/// `host`, just below the icons, showing `backdrop` behind `layout`'s
+/// widgets.
 ///
 /// # Errors
 ///
-/// When the window or its painter can't be created or placed.
+/// When the windows or the painter can't be created or placed.
 pub fn create(
     host: &DesktopHost,
     monitor: &Monitor,
     instance: HINSTANCE,
-    background: Rgb,
+    backdrop: &Backdrop,
     layout: Option<&ConfigLayout>,
 ) -> windows::core::Result<Surface> {
-    // The painter works in the surface's own coordinates: (0, 0) is the
-    // monitor's top-left.
-    let corner = Point {
-        x: monitor.rect.left,
-        y: monitor.rect.top,
-    };
-    let bounds = monitor.rect.relative_to(corner);
-    let work = monitor.work.relative_to(corner);
-    let painter = Painter::new(background, bounds, work, layout)?;
-
     let mut origin = POINT::default();
     // SAFETY: `origin` is a valid place for the call to write to.
     if !unsafe { ClientToScreen(host.parent, &raw mut origin) }.as_bool() {
@@ -295,10 +310,27 @@ pub fn create(
         y: origin.y,
     });
 
+    // The painter works in the surface's own coordinates: (0, 0) is the
+    // monitor's top-left.
+    let corner = Point {
+        x: monitor.rect.left,
+        y: monitor.rect.top,
+    };
+    let place = Place {
+        bounds: monitor.rect.relative_to(corner),
+        work: monitor.work.relative_to(corner),
+        origin: Point {
+            x: area.left,
+            y: area.top,
+        },
+    };
+    let painter = Painter::new(backdrop, place, layout)?;
+
     // The raised layout needs a layered window to composite between
     // Explorer's own children (this is also why the manifest declares
-    // Windows 8+).
-    let layered = host.layout == Layout::Raised;
+    // Windows 8+), and so does a background that lets the wallpaper
+    // through.
+    let layered = host.layout == Layout::Raised || backdrop.layered();
     let ex_style = if layered {
         WS_EX_NOACTIVATE | WS_EX_LAYERED
     } else {
@@ -324,24 +356,92 @@ pub fn create(
         )
     }?;
     // From here on, dropping `surface` destroys the window.
-    let surface = Surface {
+    let mut surface = Surface {
         hwnd,
         painter,
+        picture: None,
         monitor: monitor.rect,
         resting: false,
     };
 
     if layered {
+        // A transparent surface is fully see-through (its children would
+        // be too, which is why the picture and widgets are its siblings).
+        let alpha = match backdrop.background {
+            Background::Transparent => 0,
+            Background::Color(_) => OPAQUE,
+        };
         // SAFETY: our own layered window; plain values.
         unsafe {
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), OPAQUE, LWA_ALPHA)
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
         }?;
+    }
+    // The picture file stays open until it's painted, below.
+    let mut pending = None;
+    if backdrop.layered() {
+        if let Some(image) = &backdrop.image {
+            match prepare_picture((host.parent, instance), image, area) {
+                Ok((window, picture, mapping)) => {
+                    surface.picture = Some(window);
+                    pending = Some((picture, mapping));
+                }
+                Err(error) => {
+                    log!("can't show {}: {error}", image.path.display());
+                }
+            }
+        }
+        let layers = (0..surface.painter.widget_count())
+            .map(|_| LayerWindow::create(host.parent, instance))
+            .collect::<windows::core::Result<Vec<_>>>()?;
+        surface.painter.attach_layers(layers);
     }
     surface.place_below_icons(host)?;
     // SAFETY: our own window. The result is the previous visibility, not
     // an error, so it's deliberately ignored.
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
+    if let (Some(window), Some((picture, mapping))) =
+        (&surface.picture, pending)
+    {
+        let matte = match backdrop.background {
+            Background::Color(color) => color,
+            Background::Transparent => Rgb::BLACK,
+        };
+        if let Err(error) = window.show(|dc| picture.paint(dc, mapping, matte))
+        {
+            log!("can't draw the picture: {error}");
+        }
+    }
     Ok(surface)
+}
+
+/// Opens `image` and makes a (hidden, unpainted) window for it, fitted
+/// to a monitor at `area` (parent client pixels). Returns the window,
+/// the open picture and where it goes in the window.
+fn prepare_picture(
+    (parent, instance): (HWND, HINSTANCE),
+    image: &Wallpaper,
+    area: Rect,
+) -> Result<(PictureWindow, Picture, Mapping), String> {
+    let picture = Picture::open(&image.path)?;
+    let monitor = (area.width(), area.height());
+    let mapping = backdrop::map(image.fit, picture.size(), monitor)
+        .ok_or("the picture is empty")?;
+    let corner = Point {
+        x: mapping.dest.left,
+        y: mapping.dest.top,
+    };
+    // The window covers just the picture, so it draws at (0, 0).
+    let local = Mapping {
+        dest: mapping.dest.relative_to(corner),
+        ..mapping
+    };
+    let monitor_corner = Point {
+        x: area.left,
+        y: area.top,
+    };
+    let rect = mapping.dest.moved_by(monitor_corner);
+    let window = PictureWindow::create(parent, instance, rect)?;
+    Ok((window, picture, local))
 }
 
 /// Window procedure for surfaces.

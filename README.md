@@ -14,8 +14,9 @@ under 2% CPU and 120 MB of memory (typically 20 to 40 MB).
 **[Download the latest release](https://github.com/BonelessPig/Wallflex/releases/latest)**
 and see [docs/SETUP.md](docs/SETUP.md) to get started.
 
-Wallflex paints a solid background on every monitor, between the
-wallpaper and the icons, with widgets placed by a layout per monitor:
+Wallflex draws between the wallpaper and the icons on every monitor: a
+solid colour, a picture of your own, or nothing (so your Windows
+wallpaper shows through), with widgets placed by a layout per monitor:
 
 - **CPU threads:** a column per thread, grouped by real core, with the
   clock.
@@ -76,7 +77,8 @@ open; the installer lets you leave it out.
 
 The file sets:
 
-- the background colour;
+- the background: a colour, transparent, or a picture (fill, fit,
+  stretch or centre), for all monitors or per layout;
 - a layout per monitor (all monitors, the primary one, a resolution such
   as `3440x1440`, or a name such as `DISPLAY2`);
 - each widget's corner or edge and its distance from it, measured from

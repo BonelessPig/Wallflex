@@ -10,6 +10,7 @@ mod desktop;
 mod discord;
 mod http;
 pub mod images;
+mod layer;
 mod media;
 pub mod monitors;
 mod mouse;
@@ -19,6 +20,7 @@ mod startup;
 mod surface;
 mod tray;
 mod usage;
+mod wallpaper;
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;

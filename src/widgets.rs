@@ -217,8 +217,11 @@ pub struct Label {
     pub y: f64,
     /// Font size (em height), in pixels.
     pub size: f64,
-    /// Colour, already mixed with the background for its opacity.
+    /// Colour, already mixed with the background for its opacity. On a
+    /// see-through widget (drawn on black) that makes it premultiplied.
     pub color: Rgb,
+    /// Opacity, 0.0 to 1.0.
+    pub alpha: f64,
     /// Alignment.
     pub align: Align,
     /// The text.
@@ -1912,6 +1915,7 @@ impl Pen<'_, '_> {
             y,
             size: size * self.scale,
             color: mix(color, self.background, alpha),
+            alpha,
             align,
             text: text.to_owned(),
             clip: None,
@@ -1938,6 +1942,7 @@ impl Pen<'_, '_> {
             y,
             size: size * self.scale,
             color: mix(INK, self.background, alpha),
+            alpha,
             align: Align::Left,
             text: text.to_owned(),
             clip: Some(clip),
@@ -1962,6 +1967,7 @@ impl Pen<'_, '_> {
             y,
             size: size * self.scale,
             color: mix(INK, self.background, alpha),
+            alpha,
             align,
             text: text.to_owned(),
             clip: None,

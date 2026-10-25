@@ -4,8 +4,19 @@
 # layout looks the same on any resolution: 64 units is about 69 pixels
 # on a 1080p monitor and 138 on a 4K one.
 
-# Background colour, as "#RRGGBB".
+# What's behind the widgets: a colour as "#RRGGBB", or "transparent" to
+# let the Windows wallpaper show through around them.
 background = "#000000"
+
+# A picture to show behind the widgets on every monitor (a layout can
+# pick its own, or image = "" for none). JPEG, PNG, BMP, GIF or TIFF.
+# Use single quotes so backslashes stay as they are; a path without a
+# drive letter is looked for next to this file. image_fit is "fill"
+# (covers the monitor, cropping), "fit" (the whole picture, with bars
+# of background), "stretch" or "center" (actual size).
+#
+# image = 'C:\Users\you\Pictures\wallpaper.jpg'
+# image_fit = "fill"
 
 # "smooth": glides and the visualizer at up to 60 frames a second until
 # the PC is 80% busy, then light. "light": no glides, readings once a
@@ -50,11 +61,16 @@ anchor = "bottom-right"
 x = 64
 y = 64
 
-# Example: different widgets on two monitors. Put layouts like these
-# above the "*" one (or delete it), since the first match wins.
+# A layout can also set its own background, image and image_fit, which
+# beat the ones at the top for the monitors it's used on.
+#
+# Example: different widgets and pictures on two monitors. Put layouts
+# like these above the "*" one (or delete it), since the first match
+# wins.
 #
 # [[layout]]
 # monitor = "3440x1440"
+# image = 'C:\Users\you\Pictures\wide.jpg'
 #
 # [[layout.widget]]
 # kind = "panel"
@@ -64,6 +80,8 @@ y = 64
 #
 # [[layout]]
 # monitor = "primary"
+# background = "transparent"
+# image = ""
 #
 # [[layout.widget]]
 # kind = "cpu"

@@ -9,6 +9,7 @@
 
 mod args;
 mod audio;
+mod backdrop;
 mod bmp;
 mod canvas;
 mod color;
@@ -137,7 +138,9 @@ fn load_settings(path: Option<&str>) -> Result<config::Settings, String> {
         .ok_or("can't find the settings folder (%APPDATA%)")?;
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("can't read {}: {e}", path.display()))?;
-    config::parse(&text).map_err(|e| e.to_string())
+    let settings = config::parse(&text).map_err(|e| e.to_string())?;
+    let folder = path.parent().unwrap_or_else(|| std::path::Path::new(""));
+    Ok(settings.with_base_dir(folder))
 }
 
 /// `--check`: says whether the settings file is valid, and if not why.
@@ -209,9 +212,14 @@ fn preview(height: u32, path: &str, options: &Options) -> ExitCode {
         std::thread::sleep(SENSOR_WARMUP);
     }
     dashboard.settle();
+    // A transparent background previews on black, as it'd look over a
+    // dark wallpaper.
     let background = options
         .background
-        .or(settings.map(|s| s.background))
+        .or(settings.and_then(|s| match s.background {
+            backdrop::Background::Color(color) => Some(color),
+            backdrop::Background::Transparent => None,
+        }))
         .unwrap_or(color::Rgb::BLACK);
     let kind = options.widget;
     let widget = match kind {

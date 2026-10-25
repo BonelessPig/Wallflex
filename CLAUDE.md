@@ -100,8 +100,17 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   starts it with `--config` when it sits next to `wallflex.exe`, else
   opens the file. Test with `--no-open --config <scratch file>` and
   curl (copy the token from its output).
+- `src/backdrop.rs`: what's behind the widgets: `Background` (a colour
+  or `Transparent`), an optional picture (`Wallpaper`: path + `Fit`:
+  fill, fit, stretch, center) and `map`, the integer maths that fits a
+  picture to a monitor. `Backdrop::layered` is true unless it's a plain
+  colour.
 - `src/config.rs`: parses and validates `config.toml` (serde + toml)
-  into `Settings`: background, and layouts matched to monitors by
+  into `Settings`: background (`"#RRGGBB"` or `"transparent"`),
+  `image` / `image_fit` (each layout may override all three;
+  `image = ""` turns the picture off; `backdrop_for` resolves them;
+  relative picture paths are made relative to the config's folder by
+  `with_base_dir`), and layouts matched to monitors by
   `*` / `primary` / resolution / `DISPLAYn` (first match wins), each
   placing widgets by `Anchor` + offset in design units. `Anchor::place`
   positions within the work area and clamps to the monitor.
@@ -146,6 +155,26 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     per engine) is the expensive one. Health check every 5 s; rebuilds
     on config change, Explorer restart (`TaskbarCreated`), display change
     and resume. A bad config is logged and the old settings kept.
+  - Layered backdrops (transparent or a picture) don't draw the
+    widgets into the surface. `layer.rs`: each widget gets its own
+    per-pixel-alpha window (`UpdateLayeredWindowIndirect`, from the
+    widget's DIB, only the changed rectangle), inside a widget-sized
+    colour-keyed *frame* that's a child of the desktop host. The canvas
+    keeps premultiplied alpha (`Canvas::clear`), and `paint.rs` draws
+    labels white on black into a small mask (greyscale font quality)
+    and blends them in. The surface is then alpha 0 (transparent) or
+    the colour, painted once; a picture gets its own window
+    (`PictureWindow`), sized to where the picture goes and painted once
+    after it's shown, by `wallpaper.rs` (WIC, scaled and drawn in 1 MB
+    bands, so no monitor-sized copy is ever held). Z-order: icons,
+    widget frames, picture, surface. What was learned the hard way
+    (24H2, Raised): per-pixel-alpha children of `Progman` never show
+    (the call succeeds) but do inside a colour-keyed child; Windows
+    only takes per-pixel pixels from a buffer the size of the whole
+    window; a colour-keyed window costs a copy of its pixels in our
+    working set (66 MB for both monitors), so never key a monitor-sized
+    one; a parent at alpha 0 hides its children; a layered window only
+    keeps GDI painting done while it's visible.
   - `surface.rs`: one window per monitor. `paint.rs`: GDI background
     plus the layout's widgets, each with its own persistent DIB section:
     the canvas draws straight into it, GDI adds the text (Bahnschrift,
@@ -347,6 +376,12 @@ silence 0.40% (no frames, audio thread asleep); panel + a test build
 feeding fake music every frame 0.34-0.58%, so the bars cost about 0.1%
 or less. Memory +3.5 MB working set, +1 MB private (Windows audio DLLs,
 3 more threads). Not yet watched live with real music.
+
+Transparent and picture backgrounds (24 Oct 2026, release build, 45 s,
+panel + visualizer on the 4K monitor, music playing): colour 32.2 MB
+working set, 12.3 MB private, 0.60% CPU; transparent 37 MB, 12.1 MB
+private, 0.38% CPU (noisy; no worse). A picture adds almost nothing
+once painted (peak private while decoding stayed under 13 MB).
 
 Smoother smooth mode (24 Oct 2026): CPU and network four times a
 second, CPU glides lasting until the next reading, ring/RAM glides a

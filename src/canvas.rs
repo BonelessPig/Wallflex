@@ -34,8 +34,10 @@ pub struct Area {
     pub y1: f64,
 }
 
-/// Draws into a pixel buffer. Each `u32` is `0x00RRGGBB`, the layout of
-/// a 32-bit GDI DIB.
+/// Draws into a pixel buffer. Each `u32` is premultiplied `0xAARRGGBB`,
+/// the layout of a 32-bit GDI DIB and of a layered window's pixels.
+/// After [`Canvas::fill`] everything stays opaque; after
+/// [`Canvas::clear`] what isn't drawn on stays see-through.
 pub struct Canvas<'a> {
     /// Width in pixels.
     width: usize,
@@ -86,7 +88,16 @@ impl<'a> Canvas<'a> {
 
     /// Fills the canvas (inside the clip) with `color`.
     pub fn fill(&mut self, color: Rgb) {
-        let value = pack(color);
+        self.fill_with(pack(color));
+    }
+
+    /// Makes the canvas (inside the clip) fully see-through.
+    pub fn clear(&mut self) {
+        self.fill_with(TRANSPARENT);
+    }
+
+    /// Sets every pixel inside the clip to `value`.
+    fn fill_with(&mut self, value: u32) {
         let (cols, rows) = self.clip.clone();
         if cols.len() == self.width && rows.len() == self.height {
             self.pixels.fill(value);
@@ -490,6 +501,14 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Lays a premultiplied (r, g, b, a) colour, each 0.0 to 1.0, over
+    /// pixel (`x`, `y`) at `coverage`, if that pixel is inside the clip.
+    pub fn cover(&mut self, x: usize, y: usize, rgba: [f64; 4], coverage: f64) {
+        if self.clip.0.contains(&x) && self.clip.1.contains(&y) {
+            self.blend_premultiplied(x, y, rgba, unit(coverage));
+        }
+    }
+
     /// Mixes a premultiplied (r, g, b, a) colour into pixel (`x`, `y`) at
     /// `coverage`.
     fn blend_premultiplied(
@@ -504,17 +523,7 @@ impl<'a> Canvas<'a> {
         let Some(pixel) = index.and_then(|i| self.pixels.get_mut(i)) else {
             return;
         };
-        let [red, green, blue, alpha] = rgba;
-        let keep = 1.0 - alpha * coverage;
-        let old = unpack(*pixel);
-        let channel = |src: f64, dst: u8| {
-            unit_to_u8(src * coverage + f64::from(dst) / 255.0 * keep)
-        };
-        *pixel = pack(Rgb {
-            r: channel(red, old.r),
-            g: channel(green, old.g),
-            b: channel(blue, old.b),
-        });
+        *pixel = over(*pixel, rgba, coverage);
     }
 
     /// Pixel columns that `x0..x1` touches, clipped to the canvas.
@@ -536,7 +545,10 @@ impl<'a> Canvas<'a> {
         let index =
             y.checked_mul(self.width).and_then(|row| row.checked_add(x));
         if let Some(pixel) = index.and_then(|i| self.pixels.get_mut(i)) {
-            *pixel = pack(mix(paint.color, unpack(*pixel), amount));
+            let channel = |c: u8| f64::from(c) / 255.0;
+            let Rgb { r, g, b } = paint.color;
+            let solid = [channel(r), channel(g), channel(b), 1.0];
+            *pixel = over(*pixel, solid, amount);
         }
     }
 }
@@ -554,12 +566,34 @@ pub fn mix(top: Rgb, bottom: Rgb, amount: f64) -> Rgb {
     }
 }
 
-/// A colour as a DIB pixel.
+/// A fully see-through pixel.
+const TRANSPARENT: u32 = 0;
+/// A fully opaque pixel's alpha.
+const OPAQUE: u8 = 255;
+
+/// A colour as an opaque DIB pixel.
 fn pack(color: Rgb) -> u32 {
-    u32::from_le_bytes([color.b, color.g, color.r, 0])
+    u32::from_le_bytes([color.b, color.g, color.r, OPAQUE])
 }
 
-/// A DIB pixel as a colour.
+/// A premultiplied (r, g, b, a) colour, each 0..=1, laid over `pixel`
+/// at `coverage`.
+fn over(pixel: u32, [red, green, blue, alpha]: [f64; 4], coverage: f64) -> u32 {
+    let keep = 1.0 - alpha * coverage;
+    let [old_b, old_g, old_r, old_a] = pixel.to_le_bytes();
+    let channel = |src: f64, dst: u8| {
+        unit_to_u8(src * coverage + f64::from(dst) / 255.0 * keep)
+    };
+    u32::from_le_bytes([
+        channel(blue, old_b),
+        channel(green, old_g),
+        channel(red, old_r),
+        channel(alpha, old_a),
+    ])
+}
+
+/// A DIB pixel as a colour, ignoring its alpha.
+#[cfg(test)]
 fn unpack(pixel: u32) -> Rgb {
     let [b, g, r, _] = pixel.to_le_bytes();
     Rgb { r, g, b }
@@ -816,6 +850,46 @@ mod tests {
     fn pixel(canvas: &Canvas<'_>, x: usize, y: usize) -> u8 {
         let row = canvas.pixels.chunks_exact(canvas.width).nth(y).unwrap();
         unpack(row[x]).r
+    }
+
+    #[test]
+    fn cleared_canvas_keeps_coverage_as_alpha() {
+        let mut buffer = vec![0; 3];
+        let mut canvas = Canvas::new(3, 1, &mut buffer).unwrap();
+        canvas.fill(WHITE);
+        canvas.clear();
+        let area = Area {
+            x0: 0.5,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 1.0,
+        };
+        canvas.fill_rect(area, SOLID);
+        // Half covered: half the colour and half opaque (premultiplied).
+        assert_eq!(buffer[0], 0x8080_8080);
+        assert_eq!(buffer[1], 0xFFFF_FFFF);
+        assert_eq!(buffer[2], 0);
+    }
+
+    #[test]
+    fn filled_canvas_stays_opaque() {
+        let mut buffer = vec![0; 1];
+        let mut canvas = Canvas::new(1, 1, &mut buffer).unwrap();
+        canvas.fill(Rgb::BLACK);
+        let paint = Paint {
+            color: WHITE,
+            alpha: 0.5,
+        };
+        canvas.fill_rect(
+            Area {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            },
+            paint,
+        );
+        assert_eq!(buffer[0], 0xFF80_8080);
     }
 
     #[test]

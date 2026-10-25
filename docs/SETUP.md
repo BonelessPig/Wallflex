@@ -57,7 +57,17 @@ Or edit the file by hand. The first run writes
 comments inside it (`config.example.toml` in the zip is the same
 file). Save it and the change shows about a second later.
 
-- `background`: the colour behind the widgets, such as `"#101418"`.
+- `background`: the colour behind the widgets, such as `"#101418"`,
+  or `"transparent"` to keep your Windows wallpaper and just add the
+  widgets on top.
+- `image`: a picture to show behind the widgets, such as
+  `'C:\Users\you\Pictures\wallpaper.jpg'` (single quotes, so the
+  backslashes work). `image_fit` says how it fits the monitor:
+  `"fill"` (the default: covers it, cropping the edges), `"fit"` (the
+  whole picture, with bars of background), `"stretch"` or `"center"`.
+  A layout can set its own `background`, `image` and `image_fit` for
+  the monitors it's used on (`image = ""` for none), so each monitor
+  can have a different picture.
 - `performance`: `"smooth"` (the default) for smooth animations until
   your PC is 80% busy (then it switches to light), or `"light"` for no
   animations and the least work. Either way Wallflex stays under 2% CPU
