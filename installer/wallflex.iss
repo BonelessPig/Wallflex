@@ -163,8 +163,8 @@ begin
   end;
 end;
 
-{ Offers to delete the settings, Discord sign-in and log. Kept by
-  default, and always kept by a silent uninstall. }
+{ Offers to delete the settings, picture library, Discord sign-in and
+  log. Kept by default, and always kept by a silent uninstall. }
 procedure OfferToRemoveSettings();
 var
   Settings: String;
@@ -174,8 +174,8 @@ begin
   begin
     Exit;
   end;
-  if MsgBox('Also delete your Wallflex settings, Discord sign-in and ' +
-    'log?' + #13#10#13#10 + Settings, mbConfirmation,
+  if MsgBox('Also delete your Wallflex settings, imported pictures, ' +
+    'Discord sign-in and log?' + #13#10#13#10 + Settings, mbConfirmation,
     MB_YESNO or MB_DEFBUTTON2) = IDYES then
   begin
     if not DelTree(Settings, True, True, True) then

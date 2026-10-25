@@ -204,6 +204,58 @@ nav button.on { color: var(--text); border-bottom-color: var(--accent); }
 .add { display: flex; gap: 6px; margin-top: 8px; }
 .add select { flex: 1; }
 code { font-family: Consolas, monospace; font-size: 12px; }
+.picrow { display: flex; gap: 6px; }
+.picrow input { flex: 1; }
+dialog#library {
+  width: min(920px, calc(100vw - 32px)); height: min(680px, calc(100vh - 32px));
+  padding: 0; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); color: var(--text);
+}
+dialog#library[open] { display: flex; flex-direction: column; }
+dialog#library::backdrop { background: rgba(0, 0, 0, .55); }
+.lib-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+}
+.lib-head h2 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
+.lib-body { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
+.lib-body.drop { outline: 2px dashed var(--select); outline-offset: -8px; }
+.lib-foot {
+  display: flex; gap: 12px; align-items: center; padding: 8px 16px;
+  border-top: 1px solid var(--line); font-size: 12px; color: var(--muted);
+}
+.lib-foot code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-status { margin-left: auto; color: var(--text); text-align: right; }
+.lib-status.bad { color: var(--bad); }
+.lib-group h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 14px 0 8px; }
+.lib-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.tile { position: relative; }
+.tile .thumb {
+  width: 100%; padding: 0; overflow: hidden; display: flex; flex-direction: column;
+  background: var(--bg); text-align: left;
+}
+.tile .thumb img {
+  width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+  background: var(--raised); image-orientation: none;
+}
+.tile .thumb span {
+  padding: 4px 8px; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tile.on .thumb { border-color: var(--select); box-shadow: 0 0 0 1px var(--select); }
+.tile.fresh .thumb { border-color: var(--accent); }
+.tile .del {
+  position: absolute; top: 4px; right: 4px; opacity: 0;
+  background: rgba(0, 0, 0, .6); color: #fff; border: none;
+}
+.tile:hover .del, .tile .del:focus-visible { opacity: 1; }
+.lib-empty {
+  display: grid; place-items: center; height: 100%;
+  color: var(--muted); text-align: center;
+}
 .spin { display: inline-block; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 900px) {
@@ -245,6 +297,7 @@ code { font-family: Consolas, monospace; font-size: 12px; }
     <div id="pane"></div>
   </aside>
 </main>
+<dialog id="library"></dialog>
 <script>
 "use strict";
 
@@ -867,6 +920,254 @@ function startDrag(e, el, mon, li, wi, rect, ms) {
   el.addEventListener("pointercancel", up);
 }
 
+// ---- Picture library (library.rs): a Pictures folder next to the settings ----
+
+/** Picture extensions the library takes (library.rs PICTURE_TYPES). */
+const PICTURE_EXTS = ["jpg", "jpeg", "png", "bmp", "gif", "tif", "tiff", "webp"];
+/** Biggest picture to import, in bytes (library.rs MAX_BYTES). */
+const IMPORT_MAX_BYTES = 128 * 1024 * 1024;
+/** Folders an imported picture may sit in, deepest (library.rs MAX_DEPTH). */
+const IMPORT_MAX_DEPTH = 4;
+
+/** The library as last listed: { folder, pictures: [{ name, path, bytes }] }. */
+let library = { folder: "", pictures: [] };
+/** The picture box the library was opened for: { get, set }. */
+let pickTarget = null;
+/** Thumbnails by library name, kept so re-drawing doesn't reload them. */
+const thumbs = new Map();
+/** Settings paths imported since the library was opened, to highlight. */
+let freshPictures = new Set();
+/** Whether an import is running. */
+let importing = false;
+
+function isPicture(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  return name.includes(".") && PICTURE_EXTS.includes(ext);
+}
+
+/** A path as settings would name it, for comparing (case, slashes, ".\"). */
+function pathKey(path) {
+  let p = String(path).trim().replace(/\//g, "\\").replace(/^\.\\/, "").toLowerCase();
+  const folder = library.folder.toLowerCase();
+  if (folder && p.startsWith(folder + "\\")) p = "pictures" + p.slice(folder.length);
+  return p;
+}
+
+/** Every picture path the settings use now. */
+function picturesInUse() {
+  const used = new Set();
+  if (model.image.trim()) used.add(pathKey(model.image));
+  for (const l of model.layouts) {
+    if (l.imageMode === "file" && l.image.trim()) used.add(pathKey(l.image));
+  }
+  return used;
+}
+
+async function loadLibrary() {
+  const res = await api("/api/library");
+  if (!res.ok) throw new Error(await res.text());
+  library = await res.json();
+}
+
+/** Opens the library to pick a picture for the box with `get` and `set`. */
+async function openLibrary(get, set) {
+  pickTarget = { get, set };
+  freshPictures = new Set();
+  const dlg = $("library");
+  renderLibrary();
+  libraryStatus("Loading…");
+  if (!dlg.open) dlg.showModal();
+  try {
+    await loadLibrary();
+    renderLibrary();
+  } catch (e) {
+    libraryStatus("Couldn't list the pictures: " + e.message, true);
+  }
+}
+
+function libraryStatus(text, bad = false) {
+  const s = $("libstatus");
+  if (!s) return;
+  s.textContent = text;
+  s.classList.toggle("bad", bad);
+}
+
+/** The thumbnail for library picture `name`, made once. */
+function thumbFor(name) {
+  let img = thumbs.get(name);
+  if (!img) {
+    img = el("img", { alt: "", loading: "lazy", decoding: "async",
+      src: `/api/library/file?t=${encodeURIComponent(token)}&n=${encodeURIComponent(name)}` });
+    thumbs.set(name, img);
+  }
+  return img;
+}
+
+function renderLibrary() {
+  const dlg = $("library");
+  dlg.textContent = "";
+  const accept = PICTURE_EXTS.map((e) => "." + e).join(",");
+  const filesIn = el("input", { type: "file", multiple: true, accept, hidden: true,
+    onchange: (e) => importPictures([...e.target.files].map((f) => ({ file: f, name: f.name }))) });
+  const folderIn = el("input", { type: "file", multiple: true, hidden: true,
+    webkitdirectory: true,
+    onchange: (e) => importPictures([...e.target.files]
+      .map((f) => ({ file: f, name: f.webkitRelativePath || f.name }))) });
+  const body = el("div", { class: "lib-body" }, libraryGroups());
+  body.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    body.classList.add("drop");
+  });
+  body.addEventListener("dragleave", () => body.classList.remove("drop"));
+  body.addEventListener("drop", (e) => {
+    e.preventDefault();
+    body.classList.remove("drop");
+    droppedFiles(e.dataTransfer).then(importPictures)
+      .catch((err) => libraryStatus("Couldn't read what was dropped: " + err.message, true));
+  });
+  dlg.append(
+    el("div", { class: "lib-head" },
+      el("h2", {}, "Picture library"),
+      filesIn, folderIn,
+      el("button", { class: "primary", disabled: importing,
+        onclick: () => filesIn.click() }, "Import files…"),
+      el("button", { disabled: importing, onclick: () => folderIn.click() }, "Import folder…"),
+      el("button", { title: "Open the library folder in File Explorer", onclick: async () => {
+        const r = await (await api("/api/library/open", "")).json();
+        if (!r.ok) libraryStatus(r.error, true);
+      } }, "Open folder"),
+      el("button", { class: "icon", title: "Close (Esc)", onclick: () => dlg.close() }, "✕")),
+    body,
+    el("div", { class: "lib-foot" },
+      el("span", {}, "Imports are copied here; the originals stay put:"),
+      el("code", { title: library.folder }, library.folder || "…"),
+      el("span", { class: "lib-status", id: "libstatus" })));
+}
+
+/** The pictures, grouped by folder, or a hint when there are none. */
+function libraryGroups() {
+  if (!library.pictures.length) {
+    return el("div", { class: "lib-empty" },
+      el("div", {}, "No pictures yet.", el("br"),
+        "Import files or a whole folder, or drop them here."));
+  }
+  const current = pickTarget ? pathKey(pickTarget.get()) : "";
+  const used = picturesInUse();
+  const groups = new Map();
+  for (const p of library.pictures) {
+    const cut = p.name.lastIndexOf("\\");
+    const folder = cut < 0 ? "" : p.name.slice(0, cut);
+    if (!groups.has(folder)) groups.set(folder, []);
+    groups.get(folder).push(p);
+  }
+  const titled = groups.size > 1 || !groups.has("");
+  return [...groups].map(([folder, pics]) => el("div", { class: "lib-group" },
+    titled ? el("h3", {}, folder || "Pictures") : el("div", { style: "height: 12px" }),
+    el("div", { class: "lib-grid" }, pics.map((p) => {
+      const key = pathKey(p.path);
+      const base = p.name.slice(p.name.lastIndexOf("\\") + 1);
+      const mb = (p.bytes / (1024 * 1024)).toFixed(1);
+      return el("div", { class: "tile" + (key === current ? " on" : "")
+          + (freshPictures.has(key) ? " fresh" : "") },
+        el("button", { class: "thumb", title: `${p.name} · ${mb} MB`
+            + (used.has(key) ? " · in use" : ""),
+          onclick: () => choosePicture(p.path) },
+          thumbFor(p.name), el("span", {}, base)),
+        el("button", { class: "icon del", title: "Delete from the library",
+          onclick: () => deletePicture(p, used.has(key)) }, "✕"));
+    }))));
+}
+
+function choosePicture(path) {
+  if (pickTarget) pickTarget.set(path);
+  $("library").close();
+  changed();
+}
+
+async function deletePicture(p, inUse) {
+  const ask = `Delete ${p.name} from the library?`
+    + (inUse ? "\n\nYour settings use it, so pick another picture before saving." : "");
+  if (!confirm(ask)) return;
+  const r = await (await api("/api/library/delete", p.name)).json();
+  thumbs.delete(p.name);
+  await loadLibrary().catch(() => {});
+  renderLibrary();
+  if (!r.ok) libraryStatus(r.error, true);
+}
+
+/** Every file dropped, folders opened up: [{ file, name }], name with its folders. */
+async function droppedFiles(dt) {
+  // The entries must be taken before the first await, while the drop lasts.
+  const queue = [...dt.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  const out = [];
+  while (queue.length) {
+    const entry = queue.shift();
+    if (entry.isFile) {
+      const file = await new Promise((ok, bad) => entry.file(ok, bad));
+      out.push({ file, name: entry.fullPath.replace(/^\/+/, "") });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      // readEntries hands them over in batches until an empty one.
+      for (;;) {
+        const batch = await new Promise((ok, bad) => reader.readEntries(ok, bad));
+        if (!batch.length) break;
+        queue.push(...batch);
+      }
+    }
+  }
+  return out;
+}
+
+/** `name` with at most IMPORT_MAX_DEPTH folders, keeping the outermost. */
+function withinDepth(name) {
+  const parts = name.split(/[\\/]/).filter(Boolean);
+  const file = parts.pop();
+  return [...parts.slice(0, IMPORT_MAX_DEPTH), file].join("/");
+}
+
+/** Copies pictures into the library, one at a time: [{ file, name }]. */
+async function importPictures(items) {
+  if (importing) return;
+  const pics = items.filter((i) => isPicture(i.name));
+  const others = items.length - pics.length;
+  if (!pics.length) {
+    if (items.length) libraryStatus("None of those are pictures.", true);
+    return;
+  }
+  importing = true;
+  renderLibrary();
+  let added = 0, already = 0;
+  const failed = [];
+  for (const [i, { file, name }] of pics.entries()) {
+    libraryStatus(`Importing ${i + 1} of ${pics.length}: ${file.name}…`);
+    if (file.size > IMPORT_MAX_BYTES) {
+      failed.push(`${file.name} is over 128 MB`);
+      continue;
+    }
+    try {
+      const res = await api("/api/library/import", file,
+        { "X-Wallflex-Name": encodeURIComponent(withinDepth(name)) });
+      const r = res.ok ? await res.json() : { ok: false, error: await res.text() };
+      if (!r.ok) failed.push(r.error);
+      else {
+        freshPictures.add(pathKey(r.path));
+        if (r.existed) already++; else added++;
+      }
+    } catch (e) {
+      failed.push(`${file.name}: ${e.message}`);
+    }
+  }
+  importing = false;
+  await loadLibrary().catch(() => {});
+  renderLibrary();
+  const plural = (n, what) => `${n} ${what}${n === 1 ? "" : "s"}`;
+  const said = [`Imported ${plural(added, "picture")}.`];
+  if (already) said.push(`${plural(already, "picture")} already there.`);
+  if (others) said.push(`Skipped ${plural(others, "file")} that aren't pictures.`);
+  if (failed.length) said.push(`${failed.length} failed: ${failed.slice(0, 3).join("; ")}`);
+  libraryStatus(said.join(" "), failed.length > 0);
+}
+
 // ---- Side panel ----
 
 function el(tag, props = {}, ...children) {
@@ -980,10 +1281,13 @@ function paneLayouts() {
 function pictureFields(label, get, set, getFit, setFit, fits) {
   return [
     el("div", { class: "field" }, el("label", {}, label),
-      el("input", { type: "text", value: get(), spellcheck: false,
-        placeholder: "C:\\Users\\you\\Pictures\\wallpaper.jpg",
-        // Explorer's "Copy as path" adds quotes.
-        onchange: (e) => { set(e.target.value.trim().replace(/^"(.*)"$/, "$1")); changed(); } })),
+      el("div", { class: "picrow" },
+        el("input", { type: "text", value: get(), spellcheck: false,
+          placeholder: "Browse, or paste a full path",
+          // Explorer's "Copy as path" adds quotes.
+          onchange: (e) => { set(e.target.value.trim().replace(/^"(.*)"$/, "$1")); changed(); } }),
+        el("button", { title: "Pick from your picture library, or import pictures into it",
+          onclick: () => openLibrary(get, set) }, "Browse…"))),
     el("div", { class: "row" }, el("label", {}, "Fit"),
       el("select", { class: "grow", onchange: (e) => { setFit(e.target.value); changed(); } },
         fits.map(([v, t]) => el("option", { value: v, selected: v === getFit() }, t)))),
@@ -1010,7 +1314,7 @@ function layoutBackdrop(l) {
     changed();
   } }, [["inherit", "Same as General"], ["none", "None"], ["file", "Its own"]]
     .map(([v, t]) => el("option", { value: v, selected: v === l.imageMode }, t)));
-  const own = l.imageMode === "file" ? pictureFields("Picture file (full path)",
+  const own = l.imageMode === "file" ? pictureFields("Picture file",
     () => l.image, (v) => { l.image = v; },
     () => l.image_fit ?? "", (v) => { l.image_fit = v || null; },
     [["", "Same as General"], ...FITS]) : [];
@@ -1322,8 +1626,9 @@ function paneGeneral() {
     bg(true, "Transparent", "The Windows wallpaper shows through around the widgets."),
     el("h2", {}, "Picture"),
     el("p", {}, "Shown on every monitor, over the background, unless a layout picks "
-      + "its own or none. JPEG, PNG, BMP, GIF or TIFF."),
-    ...pictureFields("Picture file (full path; empty for none)",
+      + "its own or none. JPEG, PNG, BMP, GIF or TIFF. Browse… imports pictures into "
+      + "your library and picks from it."),
+    ...pictureFields("Picture file (empty for none)",
       () => model.image, (v) => { model.image = v; },
       () => model.image_fit, (v) => { model.image_fit = v; }, FITS),
     el("h2", {}, "Performance"),
@@ -1549,6 +1854,10 @@ async function load() {
 for (const b of $("tabs").children) {
   b.addEventListener("click", () => { tab = b.dataset.tab; renderPane(); });
 }
+$("library").addEventListener("click", (e) => {
+  // Only the backdrop is the dialog itself; its content fills it.
+  if (e.target === $("library")) $("library").close();
+});
 $("save").addEventListener("click", save);
 $("revert").addEventListener("click", revert);
 addEventListener("resize", () => { if (model) renderDesk(); });
@@ -1563,7 +1872,7 @@ addEventListener("keydown", (e) => {
   const dir = arrows[e.key];
   const tag = document.activeElement?.tagName;
   const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(tag);
-  if (!dir || !model || selected.widget < 0 || typing) return;
+  if (!dir || !model || selected.widget < 0 || typing || $("library").open) return;
   const w = model.layouts[selected.layout]?.widgets[selected.widget];
   if (!w) return;
   e.preventDefault();

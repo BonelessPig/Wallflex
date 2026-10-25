@@ -52,6 +52,13 @@ everything below. Press **Save** (or Ctrl+S) and the desktop updates
 about a second later. Your previous file is kept as
 `config.toml.bak`. Saving rewrites the file without your own comments.
 
+For a background picture, press **Browse…** next to the picture box.
+**Import files…** or **Import folder…** (or dragging pictures onto the
+window) copies them into your picture library,
+`%APPDATA%\Wallflex\Pictures`; your originals stay where they are.
+Then click a picture to use it. **Open folder** shows the library in
+File Explorer, where you can also add, rename or remove pictures.
+
 Or edit the file by hand. The first run writes
 `%APPDATA%\Wallflex\config.toml`. Every option is explained in
 comments inside it (`config.example.toml` in the zip is the same
@@ -62,7 +69,9 @@ file). Save it and the change shows about a second later.
   widgets on top.
 - `image`: a picture to show behind the widgets, such as
   `'C:\Users\you\Pictures\wallpaper.jpg'` (single quotes, so the
-  backslashes work). `image_fit` says how it fits the monitor:
+  backslashes work). A relative path such as `'Pictures\sky.jpg'` is
+  inside the settings folder: that's how library pictures are named.
+  `image_fit` says how it fits the monitor:
   `"fill"` (the default: covers it, cropping the edges), `"fit"` (the
   whole picture, with bars of background), `"stretch"`, `"center"` or
   `"span"` (one picture across every monitor using it).
@@ -143,7 +152,7 @@ and its sign-in token in `discord-token.json` beside it.
 
 If you used the setup: **Settings > Apps > Installed apps > Wallflex >
 Uninstall**. It closes Wallflex, stops it starting with Windows, and
-asks whether to delete your settings too.
+asks whether to delete your settings (and imported pictures) too.
 
 If you unzipped it:
 

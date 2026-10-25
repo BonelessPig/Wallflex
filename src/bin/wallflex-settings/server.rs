@@ -16,7 +16,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 
-use crate::http::{Request, Response, read_request};
+use crate::http::{
+    MAX_BODY_BYTES, Request, Response, percent_decode, read_request,
+};
+use crate::library::{self, picture_type};
 
 /// The page.
 const PAGE: &str = include_str!("ui.html");
@@ -46,21 +49,15 @@ const STAMP_HEADER: &str = "x-wallflex-stamp";
 const PREVIEW_PREFIX: &str = "/api/preview/";
 /// Preview picture extension.
 const PREVIEW_EXT: &str = ".bmp";
-/// Picture files the page may load for its preview, by extension (lower
-/// case), with their types: only pictures, so the page can't be used to
-/// read other files.
-const PICTURE_TYPES: [(&str, &str); 8] = [
-    ("jpg", "image/jpeg"),
-    ("jpeg", "image/jpeg"),
-    ("png", "image/png"),
-    ("bmp", "image/bmp"),
-    ("gif", "image/gif"),
-    ("tif", "image/tiff"),
-    ("tiff", "image/tiff"),
-    ("webp", "image/webp"),
-];
-/// The biggest picture the page may load.
-const PICTURE_MAX_BYTES: u64 = 128 * 1024 * 1024;
+/// Where the page sends a picture to import; the only address that
+/// takes a body bigger than [`MAX_BODY_BYTES`].
+const IMPORT_PATH: &str = "/api/library/import";
+/// Where the page loads library pictures from (`<img>` can't send the
+/// token header, so it's in the address).
+const LIBRARY_FILE_PATH: &str = "/api/library/file";
+/// The header naming an imported picture (percent-encoded), relative to
+/// the library.
+const NAME_HEADER: &str = "x-wallflex-name";
 
 /// The running server.
 pub struct Server {
@@ -194,12 +191,25 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn serve(shared: &Shared, mut stream: TcpStream) {
     // Without the timeout a stalled connection just keeps its thread.
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
-    let response = match read_request(&mut stream) {
+    let response = match read_request(&mut stream, |r| body_limit(shared, r)) {
         Ok(request) => route(shared, &request),
         Err(error) => Response::text(400, &error.to_string()),
     };
     // The page retries or reports it; nothing to do here.
     let _ = response.write_to(&mut stream);
+}
+
+/// The biggest body `request` may have: a picture for an import that
+/// carries the token, else [`MAX_BODY_BYTES`], so nobody without the
+/// token can make this app hold a big body.
+fn body_limit(shared: &Shared, request: &Request) -> usize {
+    let import = request.path == IMPORT_PATH
+        && request.header(TOKEN_HEADER) == Some(shared.token.as_str());
+    if import {
+        library::MAX_BYTES
+    } else {
+        MAX_BODY_BYTES
+    }
 }
 
 /// Picks the handler for a request, after the security checks.
@@ -217,9 +227,10 @@ fn route(shared: &Shared, request: &Request) -> Response {
             body: PAGE.as_bytes().to_vec(),
         };
     }
-    // The goodbye comes from `navigator.sendBeacon`, which can't add
-    // headers, so its token is in the address.
-    let token = if path == "/api/bye" {
+    // The goodbye comes from `navigator.sendBeacon` and library pictures
+    // from `<img>`, which can't add headers, so their token is in the
+    // address.
+    let token = if path == "/api/bye" || path == LIBRARY_FILE_PATH {
         request.param("t")
     } else {
         request.header(TOKEN_HEADER)
@@ -239,6 +250,22 @@ fn route(shared: &Shared, request: &Request) -> Response {
         ("POST", "/api/preview") => Response::json(200, &shared.preview(&body)),
         ("POST", "/api/ping") => Response::json(200, &json!({})),
         ("POST", "/api/picture") => shared.picture(body.trim()),
+        ("GET", "/api/library") => Response::json(200, &shared.library()),
+        ("GET", LIBRARY_FILE_PATH) => {
+            let name = request.param("n").and_then(percent_decode);
+            shared.library_file(name.as_deref().unwrap_or_default())
+        }
+        ("POST", IMPORT_PATH) => {
+            let name = request.header(NAME_HEADER).and_then(percent_decode);
+            let name = name.unwrap_or_default();
+            Response::json(200, &shared.import(&name, &request.body))
+        }
+        ("POST", "/api/library/delete") => {
+            Response::json(200, &shared.delete(body.trim()))
+        }
+        ("POST", "/api/library/open") => {
+            Response::json(200, &shared.open_library())
+        }
         ("POST", "/api/bye") => {
             shared.bye.store(true, Ordering::Relaxed);
             Response::json(200, &json!({}))
@@ -456,24 +483,83 @@ impl Shared {
     fn picture(&self, path: &str) -> Response {
         let path = Path::new(path);
         let full = if path.is_relative() {
-            self.config.parent().unwrap_or(Path::new("")).join(path)
+            self.config_dir().join(path)
         } else {
             path.to_path_buf()
         };
-        let Some(content_type) = picture_type(&full) else {
-            return Response::text(400, "not a picture file");
-        };
-        let size = std::fs::metadata(&full).map(|m| m.len());
-        if size.is_ok_and(|bytes| bytes > PICTURE_MAX_BYTES) {
-            return Response::text(400, "picture too big to preview");
+        send_picture(&full)
+    }
+
+    /// The settings file's folder.
+    fn config_dir(&self) -> &Path {
+        self.config.parent().unwrap_or(Path::new(""))
+    }
+
+    /// The picture library's folder.
+    fn library_dir(&self) -> PathBuf {
+        self.config_dir().join(library::FOLDER)
+    }
+
+    /// The library's folder and pictures. Each picture has its `name`
+    /// in the library and the `path` settings use for it.
+    fn library(&self) -> Value {
+        let pictures: Vec<Value> = library::list(&self.library_dir())
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "path": settings_path(&entry.name),
+                    "name": entry.name,
+                    "bytes": entry.bytes,
+                })
+            })
+            .collect();
+        json!({
+            "folder": self.library_dir().display().to_string(),
+            "pictures": pictures,
+        })
+    }
+
+    /// A library picture, by its name in the library.
+    fn library_file(&self, name: &str) -> Response {
+        match library::resolve(&self.library_dir(), name) {
+            Some(path) => send_picture(&path),
+            None => Response::text(400, "not a library picture"),
         }
-        match std::fs::read(&full) {
-            Ok(body) => Response {
-                status: 200,
-                content_type,
-                body,
-            },
-            Err(error) => Response::text(404, &error.to_string()),
+    }
+
+    /// Copies an uploaded picture into the library as `name`.
+    fn import(&self, name: &str, bytes: &[u8]) -> Value {
+        match library::import(&self.library_dir(), name, bytes) {
+            Ok(done) => json!({
+                "ok": true,
+                "path": settings_path(&done.name),
+                "name": done.name,
+                "existed": done.existed,
+            }),
+            Err(error) => json!({ "ok": false, "error": error }),
+        }
+    }
+
+    /// Deletes the library picture `name`.
+    fn delete(&self, name: &str) -> Value {
+        match library::delete(&self.library_dir(), name) {
+            Ok(()) => json!({ "ok": true }),
+            Err(error) => json!({ "ok": false, "error": error }),
+        }
+    }
+
+    /// Opens the library in Explorer, making it first if need be.
+    fn open_library(&self) -> Value {
+        let folder = self.library_dir();
+        let opened = std::fs::create_dir_all(&folder)
+            .and_then(|()| Command::new("explorer.exe").arg(&folder).spawn());
+        match opened {
+            // Explorer runs on its own; there's nothing to wait for.
+            Ok(_) => json!({ "ok": true }),
+            Err(error) => json!({
+                "ok": false,
+                "error": format!("can't open {}: {error}", folder.display()),
+            }),
         }
     }
 
@@ -494,14 +580,30 @@ impl Shared {
     }
 }
 
-/// The content type of a picture file, by its extension; `None` for
-/// anything that isn't a picture.
-fn picture_type(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    PICTURE_TYPES
-        .iter()
-        .find(|(known, _)| *known == ext)
-        .map(|&(_, content_type)| content_type)
+/// The path settings use for the library picture `name`: relative to
+/// the settings file's folder, where Wallflex looks for it.
+fn settings_path(name: &str) -> String {
+    format!("{}\\{name}", library::FOLDER)
+}
+
+/// The picture file at `path`, if it is one and isn't too big.
+fn send_picture(path: &Path) -> Response {
+    let Some(content_type) = picture_type(path) else {
+        return Response::text(400, "not a picture file");
+    };
+    let limit = u64::try_from(library::MAX_BYTES).unwrap_or(u64::MAX);
+    let size = std::fs::metadata(path).map(|m| m.len());
+    if size.is_ok_and(|bytes| bytes > limit) {
+        return Response::text(400, "picture too big to preview");
+    }
+    match std::fs::read(path) {
+        Ok(body) => Response {
+            status: 200,
+            content_type,
+            body,
+        },
+        Err(error) => Response::text(404, &error.to_string()),
+    }
 }
 
 /// The widget names of the pictures in a preview folder.
@@ -555,18 +657,7 @@ fn write_config(path: &Path, text: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use super::{new_token, picture_type, preview_name, stamp, write_config};
-
-    #[test]
-    fn serves_only_pictures() {
-        let jpeg = Path::new(r"C:\pictures\sky.JPG");
-        assert_eq!(picture_type(jpeg), Some("image/jpeg"));
-        assert_eq!(picture_type(Path::new("sky.webp")), Some("image/webp"));
-        assert_eq!(picture_type(Path::new(r"C:\a\config.toml")), None);
-        assert_eq!(picture_type(Path::new(r"C:\a\noext")), None);
-    }
+    use super::{new_token, preview_name, stamp, write_config};
 
     #[test]
     fn accepts_only_plain_preview_names() {

@@ -6,12 +6,15 @@ use std::io::{Read, Write};
 
 /// Largest header block accepted, in bytes.
 const MAX_HEADER_BYTES: usize = 16 * 1024;
-/// Largest body accepted, in bytes (a config file is a few KB).
-const MAX_BODY_BYTES: usize = 1024 * 1024;
+/// Largest body accepted by default, in bytes (a config file is a few
+/// KB).
+pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// Bytes read from the socket at a time.
 const CHUNK_BYTES: usize = 4096;
 /// Where the headers end.
 const HEADER_END: &[u8] = b"\r\n\r\n";
+/// Percent escapes are hexadecimal.
+const HEX_RADIX: u32 = 16;
 
 /// One request.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -75,13 +78,17 @@ impl From<std::io::Error> for HttpError {
     }
 }
 
-/// Reads one request from `stream`.
+/// Reads one request from `stream`. `max_body` gives the largest body
+/// allowed, in bytes, judged from the request line and headers.
 ///
 /// # Errors
 ///
 /// An [`HttpError`] if the connection fails or the request is bad or
 /// too large.
-pub fn read_request<R: Read>(stream: &mut R) -> Result<Request, HttpError> {
+pub fn read_request<R: Read>(
+    stream: &mut R,
+    max_body: impl Fn(&Request) -> usize,
+) -> Result<Request, HttpError> {
     let mut data = Vec::new();
     let mut chunk = [0_u8; CHUNK_BYTES];
     let header_len = loop {
@@ -108,7 +115,7 @@ pub fn read_request<R: Read>(stream: &mut R) -> Result<Request, HttpError> {
             .map_err(|_| HttpError::Malformed("content-length"))?,
         None => 0,
     };
-    if length > MAX_BODY_BYTES {
+    if length > max_body(&request) {
         return Err(HttpError::TooLarge);
     }
     let body_start = header_len.saturating_add(HEADER_END.len());
@@ -150,6 +157,26 @@ fn parse_head(head: &str) -> Result<Request, HttpError> {
         headers,
         body: Vec::new(),
     })
+}
+
+/// Decodes `%XX` escapes (as `encodeURIComponent` writes them). `None`
+/// if an escape is broken or the result isn't UTF-8.
+pub fn percent_decode(text: &str) -> Option<String> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut bytes = text.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let pair = [bytes.next()?, bytes.next()?];
+            if !pair.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            let hex = std::str::from_utf8(&pair).ok()?;
+            out.push(u8::from_str_radix(hex, HEX_RADIX).ok()?);
+        } else {
+            out.push(byte);
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Where `needle` first starts in `haystack`.
@@ -230,7 +257,12 @@ fn reason(status: u16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Response, read_request};
+    use super::{MAX_BODY_BYTES, Request, Response, percent_decode};
+
+    /// Reads with the default body limit.
+    fn read_request(raw: &mut &[u8]) -> Result<Request, super::HttpError> {
+        super::read_request(raw, |_| MAX_BODY_BYTES)
+    }
 
     #[test]
     fn reads_a_post_with_a_body() {
@@ -262,6 +294,26 @@ mod tests {
         assert!(read_request(&mut &short[..]).is_err());
         let huge = b"POST / HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n";
         assert!(read_request(&mut &huge[..]).is_err());
+    }
+
+    #[test]
+    fn body_limit_can_depend_on_the_request() {
+        let raw = b"POST /big HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc";
+        let small = |r: &Request| if r.path == "/big" { 3 } else { 0 };
+        assert!(super::read_request(&mut &raw[..], small).is_ok());
+        let tiny = |_: &Request| 2;
+        assert!(super::read_request(&mut &raw[..], tiny).is_err());
+    }
+
+    #[test]
+    fn decodes_percent_escapes() {
+        assert_eq!(percent_decode("a%20b%2Fc").as_deref(), Some("a b/c"));
+        assert_eq!(percent_decode("%C3%A9t%C3%A9").as_deref(), Some("été"));
+        assert_eq!(percent_decode("plain").as_deref(), Some("plain"));
+        assert_eq!(percent_decode("%2"), None);
+        assert_eq!(percent_decode("%zz"), None);
+        assert_eq!(percent_decode("%+1"), None);
+        assert_eq!(percent_decode("%FF"), None);
     }
 
     #[test]

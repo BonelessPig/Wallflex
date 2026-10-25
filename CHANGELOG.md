@@ -8,6 +8,16 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Added
+
+- A picture library in the settings app: **Browse…** next to a picture
+  box opens a gallery of the pictures in `%APPDATA%\Wallflex\Pictures`,
+  grouped by folder, to pick from. **Import files…**, **Import
+  folder…** or dragging pictures in copies them there (the originals
+  stay put, and the same picture isn't copied twice). Pictures can be
+  deleted from the gallery, and **Open folder** shows the library in
+  File Explorer.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

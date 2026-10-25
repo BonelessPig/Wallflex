@@ -98,7 +98,17 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   by which third the widget's centre is in. It writes TOML itself
   (the user's comments are not kept). `POST /api/picture` (body: the
   path) returns a picture file so the page can draw it on the
-  monitors; only picture extensions, up to 128 MB. "Real size" draws
+  monitors; only picture extensions, up to 128 MB. `library.rs` is the
+  picture library, `Pictures\` next to the config (settings store the
+  relative `Pictures\<name>`, which wallflex already resolves). The
+  page's "Browse..." gallery lists it (`GET /api/library`), loads
+  thumbnails (`GET /api/library/file?t=&n=`: token in the address,
+  since `<img>` can't send headers), imports by upload (`POST
+  /api/library/import`, name percent-encoded in `X-Wallflex-Name`; the
+  only route allowed a body over 1 MB, and only with the token) and
+  deletes. `library::resolve` checks every name (plain parts, at most
+  4 folders deep, a picture extension) so nothing outside is touched;
+  a taken name gets ` (2)`, an identical file is reused. "Real size" draws
   each monitor shrunk by its pitch about its shared edges (from
   `--info`'s `mm`), so a span lines up there as on the desk. `window.rs` opens Edge with
   `--app=`, else the default browser. The tray's "Open settings"
