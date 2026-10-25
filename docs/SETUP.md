@@ -64,10 +64,19 @@ file). Save it and the change shows about a second later.
   `'C:\Users\you\Pictures\wallpaper.jpg'` (single quotes, so the
   backslashes work). `image_fit` says how it fits the monitor:
   `"fill"` (the default: covers it, cropping the edges), `"fit"` (the
-  whole picture, with bars of background), `"stretch"` or `"center"`.
+  whole picture, with bars of background), `"stretch"`, `"center"` or
+  `"span"` (one picture across every monitor using it).
   A layout can set its own `background`, `image` and `image_fit` for
   the monitors it's used on (`image = ""` for none), so each monitor
   can have a different picture.
+- A spanned picture is drawn the same physical size on every monitor
+  (Wallflex reads each screen's size from the monitor), so it carries
+  on across the gap between them. To line it up exactly, a layout can
+  set `image_zoom` (bigger or smaller on its monitor) and
+  `image_offset = [x, y]` (moved right and down, in pixels). In the
+  settings app these are **Zoom** and **Shift** under each layout;
+  Alt+drag a monitor to move its picture, and tick **Real size** under
+  the monitors to see them at their physical sizes.
 - `performance`: `"smooth"` (the default) for smooth animations until
   your PC's CPU or RAM is 90% used (then it switches to light), or
   `"light"` for no animations and the least work. Either way Wallflex

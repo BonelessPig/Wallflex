@@ -26,6 +26,8 @@ const NET_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 10..=300;
 const DEFAULT_OFFSET: f64 = 64.0;
 /// Smallest and largest `size` accepted.
 const SIZE_RANGE: (f64, f64) = (0.25, 4.0);
+/// Smallest and largest `image_zoom` accepted.
+const ZOOM_RANGE: (f64, f64) = (0.1, 10.0);
 
 /// Validated settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +84,10 @@ pub struct Layout {
     pub image: ImageChoice,
     /// How its picture is fitted, if it changes the top-level setting.
     pub image_fit: Option<Fit>,
+    /// How much bigger its picture is drawn, if set (else automatic).
+    pub image_zoom: Option<f64>,
+    /// How far its picture is moved (right, down), in pixels.
+    pub image_offset: (f64, f64),
 }
 
 /// A layout's `image`.
@@ -280,7 +286,12 @@ impl Settings {
         let fit = layout.and_then(|l| l.image_fit).unwrap_or(self.image_fit);
         Backdrop {
             background,
-            image: path.map(|path| Wallpaper { path, fit }),
+            image: path.map(|path| Wallpaper {
+                path,
+                fit,
+                zoom: layout.and_then(|l| l.image_zoom),
+                offset: layout.map_or((0.0, 0.0), |l| l.image_offset),
+            }),
         }
     }
 
@@ -323,6 +334,8 @@ impl Default for Settings {
                 background: None,
                 image: ImageChoice::Inherit,
                 image_fit: None,
+                image_zoom: None,
+                image_offset: (0.0, 0.0),
             }],
             discord: None,
             performance: Mode::Smooth,
@@ -425,6 +438,10 @@ struct RawLayout {
     image: Option<String>,
     /// How the picture is fitted.
     image_fit: Option<String>,
+    /// How much bigger the picture is drawn.
+    image_zoom: Option<f64>,
+    /// How far the picture is moved, `[x, y]` in pixels.
+    image_offset: Option<Vec<f64>>,
     /// `[[layout.widget]]` tables.
     #[serde(default)]
     widget: Vec<RawWidget>,
@@ -621,6 +638,24 @@ fn parse_layout(raw: RawLayout) -> Result<Layout, String> {
         Some(path) => ImageChoice::Path(PathBuf::from(path)),
     };
     let image_fit = raw.image_fit.as_deref().map(parse_fit).transpose()?;
+    let image_zoom = raw
+        .image_zoom
+        .map(|zoom| {
+            let (low, high) = ZOOM_RANGE;
+            if (low..=high).contains(&zoom) {
+                Ok(zoom)
+            } else {
+                Err(format!("image_zoom {zoom} is outside {low} to {high}"))
+            }
+        })
+        .transpose()?;
+    let image_offset = match raw.image_offset.as_deref() {
+        None => (0.0, 0.0),
+        Some(&[x, y]) if x.is_finite() && y.is_finite() => (x, y),
+        Some(_) => {
+            return Err("image_offset must be [x, y], two numbers".into());
+        }
+    };
     Ok(Layout {
         monitor,
         size,
@@ -628,6 +663,8 @@ fn parse_layout(raw: RawLayout) -> Result<Layout, String> {
         background,
         image,
         image_fit,
+        image_zoom,
+        image_offset,
     })
 }
 
@@ -650,10 +687,11 @@ fn parse_fit(text: &str) -> Result<Fit, String> {
         "fit" => Fit::Contain,
         "stretch" => Fit::Stretch,
         "center" | "centre" => Fit::Center,
+        "span" => Fit::Span,
         other => {
             return Err(format!(
-                "image_fit: '{other}' isn't \"fill\", \"fit\", \"stretch\" \
-                 or \"center\""
+                "image_fit: '{other}' isn't \"fill\", \"fit\", \"stretch\", \
+                 \"center\" or \"span\""
             ));
         }
     })
@@ -820,6 +858,8 @@ mod tests {
                 background: None,
                 image: ImageChoice::Inherit,
                 image_fit: None,
+                image_zoom: None,
+                image_offset: (0.0, 0.0),
             }
         );
         assert_eq!(
@@ -839,6 +879,8 @@ mod tests {
             background = "#FFFFFF"
             image = 'C:\walls\city.png'
             image_fit = "centre"
+            image_zoom = 1.25
+            image_offset = [10, -4.5]
             [[layout]]
             monitor = "primary"
             image = ""
@@ -866,6 +908,8 @@ mod tests {
             Some(Wallpaper {
                 path: r"C:\walls\city.png".into(),
                 fit: Fit::Center,
+                zoom: Some(1.25),
+                offset: (10.0, -4.5),
             })
         );
         let off = settings.backdrop_for(Some(primary));
@@ -874,6 +918,8 @@ mod tests {
         let inherited = Some(Wallpaper {
             path: sky,
             fit: Fit::Contain,
+            zoom: None,
+            offset: (0.0, 0.0),
         });
         assert_eq!(settings.backdrop_for(Some(rest)).image, inherited);
         assert_eq!(settings.backdrop_for(None).image, inherited);
@@ -884,6 +930,10 @@ mod tests {
         let error = |text: &str| parse(text).unwrap_err().0;
         assert!(error("background = \"red\"").contains("background"));
         assert!(error("image_fit = \"tile\"").contains("image_fit"));
+        assert_eq!(parse("image_fit = \"span\"").unwrap().image_fit, Fit::Span);
+        let layout = |extra: &str| error(&format!("[[layout]]\n{extra}"));
+        assert!(layout("image_zoom = 20").contains("image_zoom"));
+        assert!(layout("image_offset = [1]").contains("image_offset"));
         assert!(
             error(
                 "[[layout]]

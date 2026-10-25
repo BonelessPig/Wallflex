@@ -15,6 +15,7 @@ mod canvas;
 mod color;
 mod config;
 mod discord;
+mod edid;
 mod geometry;
 #[cfg(test)]
 mod icon;
@@ -172,6 +173,7 @@ fn info() -> serde_json::Value {
                 "rect": rect(m.rect),
                 "work": rect(m.work),
                 "primary": m.primary,
+                "mm": m.size_mm.map(|(w, h)| [w, h]),
             })
         })
         .collect();

@@ -96,16 +96,30 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   closes (5 min of silence otherwise). `ui.html` mirrors
   `Anchor::place` and monitor matching in JS; drags re-pick the anchor
   by which third the widget's centre is in. It writes TOML itself
-  (the user's comments are not kept). `window.rs` opens Edge with
+  (the user's comments are not kept). `POST /api/picture` (body: the
+  path) returns a picture file so the page can draw it on the
+  monitors; only picture extensions, up to 128 MB. "Real size" draws
+  each monitor shrunk by its pitch about its shared edges (from
+  `--info`'s `mm`), so a span lines up there as on the desk. `window.rs` opens Edge with
   `--app=`, else the default browser. The tray's "Open settings"
   starts it with `--config` when it sits next to `wallflex.exe`, else
   opens the file. Test with `--no-open --config <scratch file>` and
   curl (copy the token from its output).
 - `src/backdrop.rs`: what's behind the widgets: `Background` (a colour
-  or `Transparent`), an optional picture (`Wallpaper`: path + `Fit`:
-  fill, fit, stretch, center) and `map`, the integer maths that fits a
-  picture to a monitor. `Backdrop::layered` is true unless it's a plain
-  colour.
+  or `Transparent`), an optional picture (`Wallpaper`: path, `Fit`
+  (fill, fit, stretch, center, span), zoom, offset), and the placing:
+  `views` gives each monitor a `View` (the picture fitted to a canvas:
+  the monitor, or for span the box around every monitor sharing the
+  picture; then zoomed about an anchor and shifted), and `map` turns a
+  view into a `Mapping` (scaled size, source and dest rectangles).
+  Span anchors are the middle of the edges a monitor shares with the
+  others, so zoom keeps the seam lined up; the default span zoom is
+  coarsest pitch / own pitch, so the picture is the same physical size
+  everywhere. `ui.html` mirrors all of this in JS (`pictureViews`,
+  `placePicture`); keep them in step. `Backdrop::layered` is true
+  unless it's a plain colour.
+- `src/edid.rs`: a monitor's size in mm from its EDID (first detailed
+  timing, else the basic cm size) and the registry key it's under.
 - `src/config.rs`: parses and validates `config.toml` (serde + toml)
   into `Settings`: background (`"#RRGGBB"` or `"transparent"`),
   `image` / `image_fit` (each layout may override all three;
@@ -186,7 +200,9 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     the moving parts. `app.rs` runs a 33 ms frame timer only while a
     glide is under way.
     Scale = monitor height / 1000 (at least 1 px per unit) x layout size.
-  - `monitors.rs`: each monitor's rectangle, work area, name and primary
+  - `monitors.rs`: each monitor's rectangle, work area, name, size in
+    mm (EDID from the registry, via `EnumDisplayDevicesW` with
+    `EDD_GET_DEVICE_INTERFACE_NAME`) and primary
     flag.
   - `discord/`: the session thread plus a pipe-reader thread
     (overlapped I/O on `\\.\pipe\discord-ipc-N`), the bot thread plus a

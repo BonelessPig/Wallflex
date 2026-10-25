@@ -41,7 +41,8 @@ use super::tray::{self, Choice, Tray};
 use super::usage::{self, CpuMeter};
 use super::{class_name, monitors, struct_size};
 use crate::args::Options;
-use crate::backdrop::{Backdrop, Background};
+use crate::backdrop::{self, Backdrop, Background, Screen};
+use crate::color::Rgb;
 use crate::config::{self, DiscordSettings, MonitorInfo, Settings};
 use crate::discord::session::Credentials;
 use crate::geometry::Rect;
@@ -1257,37 +1258,7 @@ fn rebuild() {
         }
     };
 
-    let mut surfaces = Vec::new();
-    for monitor in monitors::list() {
-        let info = MonitorInfo {
-            name: &monitor.name,
-            width: monitor.rect.width(),
-            height: monitor.rect.height(),
-            primary: monitor.primary,
-        };
-        let layout = settings.layout_for(&info);
-        let short_name = monitor.name.trim_start_matches(r"\\.\");
-        let widgets = layout.map_or(0, |l| l.widgets.len());
-        log!(
-            "{short_name} ({}x{}): {widgets} widget(s)",
-            info.width,
-            info.height
-        );
-        let backdrop = match color {
-            Some(color) => Backdrop {
-                background: Background::Color(color),
-                image: None,
-            },
-            None => settings.backdrop_for(layout),
-        };
-        if let Some(image) = &backdrop.image {
-            log!("{short_name}: picture {}", image.path.display());
-        }
-        match surface::create(&host, &monitor, instance, &backdrop, layout) {
-            Ok(surface) => surfaces.push(surface),
-            Err(error) => log!("no surface for {short_name}: {error}"),
-        }
-    }
+    let surfaces = make_surfaces(&host, instance, &settings, color);
     log!(
         "drawing on {} monitor(s), {:?} layout",
         surfaces.len(),
@@ -1303,6 +1274,83 @@ fn rebuild() {
             state.skip_ticks = 0;
         }
     });
+}
+
+/// Creates a surface on every monitor, each with the layout and
+/// backdrop the settings give it (`color`, from `--color`, beats the
+/// settings' backdrop).
+fn make_surfaces(
+    host: &DesktopHost,
+    instance: HINSTANCE,
+    settings: &Settings,
+    color: Option<Rgb>,
+) -> Vec<Surface> {
+    let monitors = monitors::list();
+    let layouts: Vec<_> = monitors
+        .iter()
+        .map(|monitor| {
+            settings.layout_for(&MonitorInfo {
+                name: &monitor.name,
+                width: monitor.rect.width(),
+                height: monitor.rect.height(),
+                primary: monitor.primary,
+            })
+        })
+        .collect();
+    let backdrops: Vec<Backdrop> = layouts
+        .iter()
+        .map(|&layout| match color {
+            Some(color) => Backdrop {
+                background: Background::Color(color),
+                image: None,
+            },
+            None => settings.backdrop_for(layout),
+        })
+        .collect();
+    // Placed together: a spanned picture depends on every monitor.
+    let screens: Vec<Screen<'_>> = monitors
+        .iter()
+        .zip(&backdrops)
+        .map(|(monitor, backdrop)| Screen {
+            rect: monitor.rect,
+            image: backdrop.image.as_ref(),
+            pitch: monitor.pitch(),
+        })
+        .collect();
+    let views = backdrop::views(&screens);
+    let mut surfaces = Vec::new();
+    for (((monitor, layout), backdrop), view) in
+        monitors.iter().zip(layouts).zip(&backdrops).zip(views)
+    {
+        let short_name = monitor.name.trim_start_matches(r"\\.\");
+        let widgets = layout.map_or(0, |l| l.widgets.len());
+        log!(
+            "{short_name} ({}x{}): {widgets} widget(s)",
+            monitor.rect.width(),
+            monitor.rect.height()
+        );
+        if let (Some(image), Some(view)) = (&backdrop.image, view) {
+            log!(
+                "{short_name}: picture {} ({:?}, zoom {:.3})",
+                image.path.display(),
+                view.fit,
+                view.zoom
+            );
+        }
+        let picture = backdrop.image.as_ref().zip(view);
+        let made = surface::create(
+            host,
+            monitor,
+            instance,
+            (backdrop, picture.map(|(image, view)| (&*image.path, view))),
+            layout,
+        );
+        match made {
+            Ok(surface) => surfaces.push(surface),
+            Err(error) => log!("no surface for {short_name}: {error}"),
+        }
+    }
+    surfaces
 }
 
 /// After a failed attempt, waits a few health checks before retrying.

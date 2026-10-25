@@ -1,6 +1,8 @@
 //! A surface: one window per monitor, between the wallpaper and the
 //! desktop icons.
 
+use std::path::Path;
+
 use windows::Win32::Foundation::{
     COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
@@ -24,7 +26,7 @@ use super::monitors::Monitor;
 use super::paint::{Painter, Place};
 use super::struct_size;
 use super::wallpaper::Picture;
-use crate::backdrop::{self, Backdrop, Background, Mapping, Wallpaper};
+use crate::backdrop::{self, Backdrop, Background, Mapping, View};
 use crate::color::Rgb;
 use crate::config::Layout as ConfigLayout;
 use crate::geometry::{Point, Rect};
@@ -294,7 +296,8 @@ pub fn register_class(instance: HINSTANCE) -> windows::core::Result<()> {
 
 /// Creates a surface covering `monitor` (desktop coordinates) inside
 /// `host`, just below the icons, showing `backdrop` behind `layout`'s
-/// widgets.
+/// widgets, with its picture (the file, and how it's placed here), if
+/// any.
 ///
 /// # Errors
 ///
@@ -303,7 +306,7 @@ pub fn create(
     host: &DesktopHost,
     monitor: &Monitor,
     instance: HINSTANCE,
-    backdrop: &Backdrop,
+    (backdrop, picture): (&Backdrop, Option<(&Path, View)>),
     layout: Option<&ConfigLayout>,
 ) -> windows::core::Result<Surface> {
     let mut origin = POINT::default();
@@ -385,14 +388,17 @@ pub fn create(
     // The picture file stays open until it's painted, below.
     let mut pending = None;
     if backdrop.layered() {
-        if let Some(image) = &backdrop.image {
-            match prepare_picture((host.parent, instance), image, area) {
-                Ok((window, picture, mapping)) => {
+        if let Some((path, view)) = picture {
+            let place = (monitor.rect, area);
+            match prepare_picture((host.parent, instance), path, view, place) {
+                Ok(Some((window, picture, mapping))) => {
                     surface.picture = Some(window);
                     pending = Some((picture, mapping));
                 }
+                // None of it reaches this monitor.
+                Ok(None) => {}
                 Err(error) => {
-                    log!("can't show {}: {error}", image.path.display());
+                    log!("can't show {}: {error}", path.display());
                 }
             }
         }
@@ -420,18 +426,24 @@ pub fn create(
     Ok(surface)
 }
 
-/// Opens `image` and makes a (hidden, unpainted) window for it, fitted
-/// to a monitor at `area` (parent client pixels). Returns the window,
-/// the open picture and where it goes in the window.
+/// What [`prepare_picture`] gives: the window, the open picture and
+/// where it goes in the window.
+type Prepared = (PictureWindow, Picture, Mapping);
+
+/// Opens the picture at `path` and makes a (hidden, unpainted) window
+/// for its part on a monitor at `monitor` (desktop pixels) and `area`
+/// (parent client pixels), placed by `view`. `None` if none of it
+/// reaches this monitor.
 fn prepare_picture(
     (parent, instance): (HWND, HINSTANCE),
-    image: &Wallpaper,
-    area: Rect,
-) -> Result<(PictureWindow, Picture, Mapping), String> {
-    let picture = Picture::open(&image.path)?;
-    let monitor = (area.width(), area.height());
-    let mapping = backdrop::map(image.fit, picture.size(), monitor)
-        .ok_or("the picture is empty")?;
+    path: &Path,
+    view: View,
+    (monitor, area): (Rect, Rect),
+) -> Result<Option<Prepared>, String> {
+    let picture = Picture::open(path)?;
+    let Some(mapping) = backdrop::map(&view, picture.size(), monitor) else {
+        return Ok(None);
+    };
     let corner = Point {
         x: mapping.dest.left,
         y: mapping.dest.top,
@@ -447,7 +459,7 @@ fn prepare_picture(
     };
     let rect = mapping.dest.moved_by(monitor_corner);
     let window = PictureWindow::create(parent, instance, rect)?;
-    Ok((window, picture, local))
+    Ok(Some((window, picture, local)))
 }
 
 /// Window procedure for surfaces.

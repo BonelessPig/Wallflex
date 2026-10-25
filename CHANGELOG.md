@@ -8,6 +8,19 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Added
+
+- `image_fit = "span"` stretches one picture across every monitor that
+  uses it, drawn the same physical size on each (from the size the
+  monitor reports), so it carries on across the gap between screens.
+- Per layout, `image_zoom` and `image_offset = [x, y]` zoom and move
+  its monitor's picture, to line a spanned picture up exactly (or to
+  frame any picture).
+- The settings app shows the picture itself on each monitor, has
+  **Zoom** and **Shift** per layout, moves a picture with Alt+drag,
+  and can draw the monitors at their real sizes.
+- `wallflex --info` gives each monitor's size in millimetres.
+
 ### Changed
 
 - Smooth mode no longer steps down to normal or light on its own: it

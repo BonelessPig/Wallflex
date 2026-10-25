@@ -46,6 +46,21 @@ const STAMP_HEADER: &str = "x-wallflex-stamp";
 const PREVIEW_PREFIX: &str = "/api/preview/";
 /// Preview picture extension.
 const PREVIEW_EXT: &str = ".bmp";
+/// Picture files the page may load for its preview, by extension (lower
+/// case), with their types: only pictures, so the page can't be used to
+/// read other files.
+const PICTURE_TYPES: [(&str, &str); 8] = [
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("png", "image/png"),
+    ("bmp", "image/bmp"),
+    ("gif", "image/gif"),
+    ("tif", "image/tiff"),
+    ("tiff", "image/tiff"),
+    ("webp", "image/webp"),
+];
+/// The biggest picture the page may load.
+const PICTURE_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 /// The running server.
 pub struct Server {
@@ -223,6 +238,7 @@ fn route(shared: &Shared, request: &Request) -> Response {
         }
         ("POST", "/api/preview") => Response::json(200, &shared.preview(&body)),
         ("POST", "/api/ping") => Response::json(200, &json!({})),
+        ("POST", "/api/picture") => shared.picture(body.trim()),
         ("POST", "/api/bye") => {
             shared.bye.store(true, Ordering::Relaxed);
             Response::json(200, &json!({}))
@@ -434,6 +450,33 @@ impl Shared {
         }
     }
 
+    /// The picture file at `path` (relative paths are next to the
+    /// settings file, as wallflex reads them), for the page to show on
+    /// its monitors.
+    fn picture(&self, path: &str) -> Response {
+        let path = Path::new(path);
+        let full = if path.is_relative() {
+            self.config.parent().unwrap_or(Path::new("")).join(path)
+        } else {
+            path.to_path_buf()
+        };
+        let Some(content_type) = picture_type(&full) else {
+            return Response::text(400, "not a picture file");
+        };
+        let size = std::fs::metadata(&full).map(|m| m.len());
+        if size.is_ok_and(|bytes| bytes > PICTURE_MAX_BYTES) {
+            return Response::text(400, "picture too big to preview");
+        }
+        match std::fs::read(&full) {
+            Ok(body) => Response {
+                status: 200,
+                content_type,
+                body,
+            },
+            Err(error) => Response::text(404, &error.to_string()),
+        }
+    }
+
     /// One preview picture.
     fn preview_image(&self, name: &str) -> Response {
         let file = self
@@ -449,6 +492,16 @@ impl Shared {
             Err(_) => Response::text(404, "no such preview"),
         }
     }
+}
+
+/// The content type of a picture file, by its extension; `None` for
+/// anything that isn't a picture.
+fn picture_type(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    PICTURE_TYPES
+        .iter()
+        .find(|(known, _)| *known == ext)
+        .map(|&(_, content_type)| content_type)
 }
 
 /// The widget names of the pictures in a preview folder.
@@ -502,7 +555,18 @@ fn write_config(path: &Path, text: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{new_token, preview_name, stamp, write_config};
+    use std::path::Path;
+
+    use super::{new_token, picture_type, preview_name, stamp, write_config};
+
+    #[test]
+    fn serves_only_pictures() {
+        let jpeg = Path::new(r"C:\pictures\sky.JPG");
+        assert_eq!(picture_type(jpeg), Some("image/jpeg"));
+        assert_eq!(picture_type(Path::new("sky.webp")), Some("image/webp"));
+        assert_eq!(picture_type(Path::new(r"C:\a\config.toml")), None);
+        assert_eq!(picture_type(Path::new(r"C:\a\noext")), None);
+    }
 
     #[test]
     fn accepts_only_plain_preview_names() {

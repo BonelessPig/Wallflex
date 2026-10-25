@@ -79,7 +79,8 @@ open; the installer lets you leave it out.
 The file sets:
 
 - the background: a colour, transparent, or a picture (fill, fit,
-  stretch or centre), for all monitors or per layout;
+  stretch, centre, or one spanned across monitors at the same physical
+  size), for all monitors or per layout;
 - a layout per monitor (all monitors, the primary one, a resolution such
   as `3440x1440`, or a name such as `DISPLAY2`);
 - each widget's corner or edge and its distance from it, measured from
