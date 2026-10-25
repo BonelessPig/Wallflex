@@ -8,8 +8,6 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-24
-
 ### Added
 
 - `background = "transparent"` keeps your Windows wallpaper and draws
@@ -19,6 +17,10 @@ patch number (0.x.**y**) for fixes only.
   `"center"`. Set it once for every monitor, or per layout for a
   different picture (or none) on each. The settings app has both under
   **General**, and per layout.
+
+## [0.2.0] - 2026-10-24
+
+### Added
 
 - An installer, `wallflex-<version>-setup.exe`: installs for your
   account only (no admin), adds a Start menu entry and optionally
