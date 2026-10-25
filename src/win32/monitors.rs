@@ -1,16 +1,27 @@
 //! Monitor enumeration.
 
-use windows::Win32::Foundation::{LPARAM, RECT};
+use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
+    DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICEW, EnumDisplayDevicesW,
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
-use windows::core::BOOL;
+use windows::Win32::System::Registry::{
+    HKEY_LOCAL_MACHINE, RRF_RT_REG_BINARY, RegGetValueW,
+};
+use windows::Win32::UI::WindowsAndMessaging::EDD_GET_DEVICE_INTERFACE_NAME;
+use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
 use super::{struct_size, to_rect};
+use crate::edid;
 use crate::geometry::Rect;
 
 /// `MONITORINFO.dwFlags` bit for the primary monitor.
 const MONITORINFOF_PRIMARY: u32 = 1;
+/// Screens to look through on one display (mirrored screens share
+/// one).
+const MAX_SCREENS_PER_DISPLAY: u32 = 8;
+/// Room for an EDID with all its extension blocks.
+const EDID_MAX: usize = 32 * 1024;
 
 /// One monitor, in desktop coordinates (physical pixels). The primary
 /// monitor's top-left is (0, 0); others can be negative.
@@ -24,6 +35,18 @@ pub struct Monitor {
     pub name: String,
     /// Whether it's the primary monitor.
     pub primary: bool,
+    /// The screen's width and height in millimetres, if the monitor
+    /// says.
+    pub size_mm: Option<(u32, u32)>,
+}
+
+impl Monitor {
+    /// Millimetres per pixel across, if the size is known.
+    pub fn pitch(&self) -> Option<f64> {
+        let (width_mm, _) = self.size_mm?;
+        let pixels = self.rect.width();
+        (pixels > 0).then(|| f64::from(width_mm) / f64::from(pixels))
+    }
 }
 
 /// Every monitor.
@@ -80,5 +103,61 @@ fn details(monitor: HMONITOR) -> Option<Monitor> {
         work: to_rect(info.monitorInfo.rcWork),
         name: String::from_utf16_lossy(device.get(..end).unwrap_or_default()),
         primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+        size_mm: physical_size(device),
     })
+}
+
+/// The size in millimetres of the (first active) screen on the display
+/// named `device` (null-terminated `\\.\DISPLAYn`), from its EDID.
+fn physical_size(device: &[u16]) -> Option<(u32, u32)> {
+    let mut screen = DISPLAY_DEVICEW {
+        cb: struct_size::<DISPLAY_DEVICEW>(),
+        ..Default::default()
+    };
+    let found = (0..MAX_SCREENS_PER_DISPLAY).any(|index| {
+        // SAFETY: `device` is null-terminated (from MONITORINFOEXW) and
+        // `screen` is a DISPLAY_DEVICEW with its size set.
+        let ok = unsafe {
+            EnumDisplayDevicesW(
+                PCWSTR(device.as_ptr()),
+                index,
+                &raw mut screen,
+                EDD_GET_DEVICE_INTERFACE_NAME,
+            )
+        };
+        ok.as_bool() && (screen.StateFlags & DISPLAY_DEVICE_ACTIVE).0 != 0
+    });
+    if !found {
+        return None;
+    }
+    let id = &screen.DeviceID;
+    let end = id.iter().position(|&c| c == 0).unwrap_or(id.len());
+    let interface = String::from_utf16_lossy(id.get(..end)?);
+    let key = edid::registry_key(&interface)?;
+    edid::size_mm(&read_edid(&key)?)
+}
+
+/// The `EDID` value under `key` in `HKEY_LOCAL_MACHINE`.
+fn read_edid(key: &str) -> Option<Vec<u8>> {
+    let key = HSTRING::from(key);
+    let mut data = vec![0_u8; EDID_MAX];
+    let mut size = u32::try_from(data.len()).ok()?;
+    // SAFETY: the strings outlive the call, and `data` holds the `size`
+    // bytes the call may write.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            &key,
+            w!("EDID"),
+            RRF_RT_REG_BINARY,
+            None,
+            Some(data.as_mut_ptr().cast()),
+            Some(&raw mut size),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    data.truncate(usize::try_from(size).ok()?);
+    Some(data)
 }

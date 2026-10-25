@@ -13,7 +13,9 @@ background = "#000000"
 # Use single quotes so backslashes stay as they are; a path without a
 # drive letter is looked for next to this file. image_fit is "fill"
 # (covers the monitor, cropping), "fit" (the whole picture, with bars
-# of background), "stretch" or "center" (actual size).
+# of background), "stretch", "center" (actual size) or "span" (one
+# picture across every monitor using it, drawn the same physical size
+# on each, so it carries on across the gap between screens).
 #
 # image = 'C:\Users\you\Pictures\wallpaper.jpg'
 # image_fit = "fill"
@@ -62,7 +64,11 @@ x = 64
 y = 64
 
 # A layout can also set its own background, image and image_fit, which
-# beat the ones at the top for the monitors it's used on.
+# beat the ones at the top for the monitors it's used on, and line up
+# its monitor's picture: image_zoom draws it bigger or smaller (for a
+# span it's worked out from the monitors' sizes if left out) and
+# image_offset = [x, y] moves it, in pixels, right and down. Use them
+# to make a spanned picture meet exactly across the bezels.
 #
 # Example: different widgets and pictures on two monitors. Put layouts
 # like these above the "*" one (or delete it), since the first match
@@ -71,6 +77,8 @@ y = 64
 # [[layout]]
 # monitor = "3440x1440"
 # image = 'C:\Users\you\Pictures\wide.jpg'
+# image_zoom = 1.1
+# image_offset = [0, -20]
 #
 # [[layout.widget]]
 # kind = "panel"

@@ -116,6 +116,11 @@ main {
   background: repeating-conic-gradient(rgba(128, 128, 128, .3) 0 25%,
     transparent 0 50%) 0 0 / 16px 16px;
 }
+.monitor .picture {
+  position: absolute; pointer-events: none; max-width: none;
+  image-orientation: none;
+}
+.monitor.moving-picture { cursor: move; }
 .monitor.pictured::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .08) 0 10px,
@@ -136,6 +141,8 @@ main {
 }
 .widget.empty { outline-color: var(--warn); }
 .hint { color: var(--muted); font-size: 12px; }
+.realsize { margin-left: 8px; white-space: nowrap; }
+.realsize input { vertical-align: -2px; }
 aside {
   background: var(--panel); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
@@ -221,6 +228,9 @@ code { font-family: Consolas, monospace; font-size: 12px; }
     <div class="hint" id="hint">
       Drag a widget to move it; it anchors to the nearest corner, edge or
       the centre. Arrow keys nudge the selected widget (Shift for 10).
+      <label class="realsize" title="Draw each monitor at its physical size, so a picture
+        spanning them lines up here as it does on your desk"><input type="checkbox"
+        id="realsize" checked> Real size</label>
       <span id="pstatus"></span>
     </div>
   </section>
@@ -273,7 +283,10 @@ const FITS = [
   ["fit", "Fit (whole picture, with bars)"],
   ["stretch", "Stretch"],
   ["center", "Centre (actual size)"],
+  ["span", "Span (one picture across monitors)"],
 ];
+/** Allowed picture zooms. */
+const ZOOM_MIN = 0.1, ZOOM_MAX = 10;
 const ANCHORS = [
   "top-left", "top", "top-right",
   "left", "center", "right",
@@ -349,6 +362,9 @@ function fromConfig(c) {
       imageMode: l.image == null ? "inherit" : String(l.image).trim() ? "file" : "none",
       image: l.image ?? "",
       image_fit: l.image_fit == null ? null : fitOf(l.image_fit),
+      image_zoom: l.image_zoom ?? null,
+      image_offset: Array.isArray(l.image_offset)
+        ? [Number(l.image_offset[0]) || 0, Number(l.image_offset[1]) || 0] : [0, 0],
       widgets: (l.widget || []).map((w) => {
         const anchor = w.anchor === "centre" ? "center" : (w.anchor || "bottom-right");
         const [dx, dy] = defaultOffset(anchor);
@@ -397,6 +413,11 @@ function toToml(m) {
     if (l.imageMode === "none") out.push('image = ""');
     if (l.imageMode === "file" && l.image.trim()) out.push(`image = ${str(l.image.trim())}`);
     if (l.image_fit != null) out.push(`image_fit = ${str(l.image_fit)}`);
+    if (l.image_zoom != null) {
+      out.push(`image_zoom = ${Math.round(l.image_zoom * 1000) / 1000}`);
+    }
+    const [ox, oy] = l.image_offset;
+    if (ox || oy) out.push(`image_offset = [${num(ox)}, ${num(oy)}]`);
     for (const w of l.widgets) {
       out.push("", "[[layout.widget]]", `kind = ${str(w.kind)}`);
       if (w.kind === "gpu") out.push(`gpu = ${Math.max(1, Math.round(w.gpu))}`);
@@ -544,7 +565,138 @@ function backdropOf(li) {
   let image = model.image.trim();
   if (l && l.imageMode === "none") image = "";
   if (l && l.imageMode === "file" && l.image.trim()) image = l.image.trim();
-  return { transparent, color, image };
+  const fit = (l && l.image_fit) || model.image_fit;
+  const zoom = l ? l.image_zoom : null;
+  const offset = l ? l.image_offset : [0, 0];
+  return { transparent, color, image, fit, zoom, offset };
+}
+
+// ---- Pictures, placed as wallflex places them (backdrop.rs) ----
+
+/** Pictures by path: { url, w, h } once loaded, else "loading" or "failed". */
+const pictures = {};
+
+/** Starts loading the picture at `path` for the monitors, once. */
+function loadPicture(path) {
+  if (!path || pictures[path]) return;
+  pictures[path] = "loading";
+  const failed = () => { pictures[path] = "failed"; renderDesk(); };
+  api("/api/picture", path).then(async (res) => {
+    if (!res.ok) throw new Error(await res.text());
+    const url = URL.createObjectURL(await res.blob());
+    const img = new Image();
+    img.style.imageOrientation = "none";
+    img.onload = () => {
+      pictures[path] = { url, w: img.naturalWidth, h: img.naturalHeight };
+      renderDesk();
+    };
+    img.onerror = failed;
+    img.src = url;
+  }).catch(failed);
+}
+
+function rectUnion(a, b) {
+  return { left: Math.min(a.left, b.left), top: Math.min(a.top, b.top),
+    right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) };
+}
+
+function rectCentre(r) {
+  return [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+}
+
+/** Where a and b touch: [middle x, middle y, length], or null. */
+function sharedEdge(a, b) {
+  const y = a.bottom === b.top ? a.bottom : a.top === b.bottom ? a.top : null;
+  if (y != null) {
+    const from = Math.max(a.left, b.left), to = Math.min(a.right, b.right);
+    if (to > from) return [from + (to - from) / 2, y, to - from];
+  }
+  const x = a.right === b.left ? a.right : a.left === b.right ? a.left : null;
+  if (x == null) return null;
+  const from = Math.max(a.top, b.top), to = Math.min(a.bottom, b.bottom);
+  return to > from ? [x, from + (to - from) / 2, to - from] : null;
+}
+
+/** The point a monitor zooms about: the middle of its shared edges. */
+function sharedAnchor(rect, others) {
+  let total = 0, sx = 0, sy = 0;
+  for (const o of others) {
+    if (o === rect) continue;
+    const edge = sharedEdge(rect, o);
+    if (!edge) continue;
+    sx += edge[0] * edge[2]; sy += edge[1] * edge[2]; total += edge[2];
+  }
+  return total > 0 ? [sx / total, sy / total] : rectCentre(rect);
+}
+
+/** Millimetres per pixel across, if the monitor's size is known. */
+function pitchOf(mon) {
+  return mon.mm ? mon.mm[0] / (mon.rect.right - mon.rect.left) : null;
+}
+
+/** How each monitor shows its picture (null without one). */
+function pictureViews() {
+  const screens = info.monitors.map((mon) => ({ mon, b: backdropOf(layoutOf(mon)) }));
+  return screens.map(({ mon, b }) => {
+    if (!b.image) return null;
+    if (b.fit !== "span") {
+      return { fit: b.fit, canvas: mon.rect, anchor: rectCentre(mon.rect),
+        zoom: b.zoom ?? 1, auto: 1, offset: b.offset, image: b.image };
+    }
+    const group = screens.filter((o) => o.b.image === b.image && o.b.fit === "span");
+    const pitches = group.map((o) => pitchOf(o.mon));
+    const own = pitchOf(mon);
+    const auto = pitches.every((p) => p > 0) && own > 0 ? Math.max(...pitches) / own : 1;
+    return {
+      fit: "span",
+      canvas: group.reduce((u, o) => rectUnion(u, o.mon.rect), mon.rect),
+      anchor: sharedAnchor(mon.rect, group.map((o) => o.mon.rect)),
+      zoom: b.zoom ?? auto, auto, offset: b.offset, image: b.image,
+    };
+  });
+}
+
+/** Where a `w` x `h` picture lands on `mon` for view `v`, in its pixels. */
+function placePicture(v, w, h, mon) {
+  const cw = v.canvas.right - v.canvas.left, ch = v.canvas.bottom - v.canvas.top;
+  const across = cw / w, down = ch / h;
+  let sx, sy;
+  if (v.fit === "fit") sx = sy = Math.min(across, down);
+  else if (v.fit === "stretch") { sx = across; sy = down; }
+  else if (v.fit === "center") sx = sy = 1;
+  else sx = sy = Math.max(across, down);
+  const cx = v.canvas.left + (cw - w * sx) / 2, cy = v.canvas.top + (ch - h * sy) / 2;
+  const [ax, ay] = v.anchor;
+  return {
+    left: ax + v.zoom * (cx - ax) + v.offset[0] - mon.rect.left,
+    top: ay + v.zoom * (cy - ay) + v.offset[1] - mon.rect.top,
+    width: w * sx * v.zoom, height: h * sy * v.zoom,
+  };
+}
+
+/** Alt+drag on a monitor: moves its picture (the layout's offset). */
+function dragPicture(e, monEl, img, li, ms) {
+  e.preventDefault();
+  const l = model.layouts[li];
+  const [ox, oy] = l.image_offset;
+  const startX = e.clientX, startY = e.clientY;
+  const left = parseFloat(img.style.left), top = parseFloat(img.style.top);
+  monEl.classList.add("moving-picture");
+  const move = (ev) => {
+    const dx = ev.clientX - startX, dy = ev.clientY - startY;
+    l.image_offset = [Math.round(ox + dx / ms), Math.round(oy + dy / ms)];
+    img.style.left = left + dx + "px";
+    img.style.top = top + dy + "px";
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", up);
+    changed();
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+  addEventListener("pointercancel", up);
 }
 
 function renderDesk() {
@@ -555,41 +707,73 @@ function renderDesk() {
     desk.innerHTML = '<p class="hint">No monitors found (is wallflex.exe next to this app?).</p>';
     return;
   }
-  const minX = Math.min(...mons.map((m) => m.rect.left));
-  const minY = Math.min(...mons.map((m) => m.rect.top));
-  const maxX = Math.max(...mons.map((m) => m.rect.right));
-  const maxY = Math.max(...mons.map((m) => m.rect.bottom));
+  // At real size, each monitor is shrunk by how much finer its pixels
+  // are than the coarsest monitor's, about the middle of the edges it
+  // shares (as wallflex zooms a spanned picture), so they still touch.
+  const real = $("realsize").checked && mons.every((m) => pitchOf(m) > 0);
+  const coarsest = real ? Math.max(...mons.map(pitchOf)) : 1;
+  const rects = mons.map((m) => m.rect);
+  const drawn = mons.map((m) => {
+    const f = real ? pitchOf(m) / coarsest : 1;
+    const [ax, ay] = real ? sharedAnchor(m.rect, rects) : [0, 0];
+    return { f, left: ax + (m.rect.left - ax) * f, top: ay + (m.rect.top - ay) * f,
+      right: ax + (m.rect.right - ax) * f, bottom: ay + (m.rect.bottom - ay) * f };
+  });
+  const minX = Math.min(...drawn.map((d) => d.left));
+  const minY = Math.min(...drawn.map((d) => d.top));
+  const maxX = Math.max(...drawn.map((d) => d.right));
+  const maxY = Math.max(...drawn.map((d) => d.bottom));
   const box = $("desk-wrap").getBoundingClientRect();
   const scale = Math.min(box.width / (maxX - minX), box.height / (maxY - minY));
   const padX = (box.width - (maxX - minX) * scale) / 2;
   const padY = (box.height - (maxY - minY) * scale) / 2;
   view = { minX, minY, scale, padX, padY };
+  const views = pictureViews();
   const px = (x) => padX + (x - minX) * scale;
   const py = (y) => padY + (y - minY) * scale;
 
-  for (const mon of mons) {
+  mons.forEach((mon, mi) => {
+    // Pixels on screen per monitor pixel.
+    const ms = scale * drawn[mi].f;
     const li = layoutOf(mon);
     const el = document.createElement("div");
     const back = backdropOf(li);
+    const pv = views[mi];
+    if (pv) loadPicture(pv.image);
+    const pic = pv && typeof pictures[pv.image] === "object" ? pictures[pv.image] : null;
     el.className = "monitor" + (li === selected.layout ? " active" : "")
-      + (back.transparent ? " clear" : "") + (back.image ? " pictured" : "");
+      + (back.transparent ? " clear" : "") + (back.image && !pic ? " pictured" : "");
     Object.assign(el.style, {
-      left: px(mon.rect.left) + "px", top: py(mon.rect.top) + "px",
-      width: (mon.rect.right - mon.rect.left) * scale + "px",
-      height: (mon.rect.bottom - mon.rect.top) * scale + "px",
+      left: px(drawn[mi].left) + "px", top: py(drawn[mi].top) + "px",
+      width: (mon.rect.right - mon.rect.left) * ms + "px",
+      height: (mon.rect.bottom - mon.rect.top) * ms + "px",
       backgroundColor: back.transparent ? "" : back.color,
     });
+    let img = null;
+    if (pic) {
+      const at = placePicture(pv, pic.w, pic.h, mon);
+      img = document.createElement("img");
+      img.className = "picture";
+      img.src = pic.url;
+      Object.assign(img.style, {
+        left: at.left * ms + "px", top: at.top * ms + "px",
+        width: at.width * ms + "px", height: at.height * ms + "px",
+      });
+      el.appendChild(img);
+    }
     el.addEventListener("pointerdown", (e) => {
-      if (e.target === el && li >= 0) select(li, -1);
+      if (e.target !== el || li < 0) return;
+      if (e.altKey && img) dragPicture(e, el, img, li, ms);
+      else select(li, -1);
     });
     for (const strip of taskbarStrips(mon)) {
       const t = document.createElement("div");
       t.className = "taskbar";
       Object.assign(t.style, {
-        left: (strip.left - mon.rect.left) * scale + "px",
-        top: (strip.top - mon.rect.top) * scale + "px",
-        width: (strip.right - strip.left) * scale + "px",
-        height: (strip.bottom - strip.top) * scale + "px",
+        left: (strip.left - mon.rect.left) * ms + "px",
+        top: (strip.top - mon.rect.top) * ms + "px",
+        width: (strip.right - strip.left) * ms + "px",
+        height: (strip.bottom - strip.top) * ms + "px",
       });
       el.appendChild(t);
     }
@@ -598,10 +782,11 @@ function renderDesk() {
     label.textContent = `${mon.name}${mon.primary ? " (primary)" : ""} · ${monitorSize(mon)} · `
       + (li >= 0 ? `layout ${li + 1}` : "no layout")
       + (back.image ? ` · ${back.image.split(/[\\/]/).pop()}` : "")
+      + (pv && pictures[pv.image] === "failed" ? " (can't open)" : "")
       + (back.transparent ? " · transparent" : "");
     el.appendChild(label);
     desk.appendChild(el);
-    if (li < 0) continue;
+    if (li < 0) return;
     const layout = model.layouts[li];
     layout.widgets.forEach((w, wi) => {
       const r = placeWidget(mon, layout, w);
@@ -611,9 +796,9 @@ function renderDesk() {
       we.className = "widget" + (isSel ? " selected" : "") + (img ? "" : " ghost")
         + (r.empty ? " empty" : "");
       Object.assign(we.style, {
-        left: (r.left - mon.rect.left) * scale + "px",
-        top: (r.top - mon.rect.top) * scale + "px",
-        width: r.width * scale + "px", height: r.height * scale + "px",
+        left: (r.left - mon.rect.left) * ms + "px",
+        top: (r.top - mon.rect.top) * ms + "px",
+        width: r.width * ms + "px", height: r.height * ms + "px",
       });
       we.title = kindLabel(w) + (r.empty ? " (nothing to show on this PC)" : "");
       if (img) {
@@ -624,10 +809,10 @@ function renderDesk() {
       } else {
         we.textContent = r.empty ? "nothing to show" : kindLabel(w);
       }
-      we.addEventListener("pointerdown", (e) => startDrag(e, we, mon, li, wi, r));
+      we.addEventListener("pointerdown", (e) => startDrag(e, we, mon, li, wi, r, ms));
       el.appendChild(we);
     });
-  }
+  });
 }
 
 /** The parts of a monitor outside its work area (the taskbar). */
@@ -647,7 +832,7 @@ function kindLabel(w) {
   return w.kind === "gpu" ? `GPU ${w.gpu}` : name;
 }
 
-function startDrag(e, el, mon, li, wi, rect) {
+function startDrag(e, el, mon, li, wi, rect, ms) {
   e.preventDefault();
   e.stopPropagation();
   select(li, wi, false);
@@ -659,13 +844,13 @@ function startDrag(e, el, mon, li, wi, rect) {
   const r = mon.rect;
   let moved = false;
   const move = (ev) => {
-    const dx = (ev.clientX - sx) / view.scale, dy = (ev.clientY - sy) / view.scale;
+    const dx = (ev.clientX - sx) / ms, dy = (ev.clientY - sy) / ms;
     if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return;
     moved = true;
     const left = keepInside(Math.round(rect.left + dx), rect.width, r.left, r.right);
     const top = keepInside(Math.round(rect.top + dy), rect.height, r.top, r.bottom);
-    el.style.left = (left - r.left) * view.scale + "px";
-    el.style.top = (top - r.top) * view.scale + "px";
+    el.style.left = (left - r.left) * ms + "px";
+    el.style.top = (top - r.top) * ms + "px";
     Object.assign(w, offsetsFor(mon, { ...rect, left, top }, w.anchor, true));
     updateWidgetFields(li, wi);
   };
@@ -833,6 +1018,49 @@ function layoutBackdrop(l) {
     el("div", { class: "row" }, el("label", {}, "Background"), bgSel, color),
     el("div", { class: "row" }, el("label", {}, "Picture"), picSel),
     ...own,
+    ...picturePlacing(l),
+  ];
+}
+
+/** Zoom and shift for a layout's picture, on the monitor it's shown on. */
+function picturePlacing(l) {
+  const li = model.layouts.indexOf(l);
+  const mi = info.monitors.findIndex((m) => layoutOf(m) === li);
+  const pv = mi >= 0 ? pictureViews()[mi] : null;
+  if (!pv) return [];
+  const round = (z) => Math.round(z * 1000) / 1000;
+  const zoomRange = { min: 0.25, max: 4, step: 0.001, value: round(pv.zoom) };
+  const auto = el("input", { type: "checkbox", checked: l.image_zoom == null,
+    onchange: (e) => { l.image_zoom = e.target.checked ? null : round(pv.auto); changed(); } });
+  const setZoom = (z) => {
+    l.image_zoom = clamp(z, ZOOM_MIN, ZOOM_MAX, 1);
+    auto.checked = false;
+  };
+  const slider = el("input", { type: "range", ...zoomRange, oninput: (e) => {
+    setZoom(Number(e.target.value));
+    zoomNum.value = l.image_zoom;
+    changed(false);
+  } });
+  const zoomNum = el("input", { type: "number", ...zoomRange, min: ZOOM_MIN, max: ZOOM_MAX,
+    onchange: (e) => { setZoom(Number(e.target.value)); changed(); } });
+  const shift = (i, name) => el("label", { class: "xy" }, el("span", {}, name),
+    el("input", { type: "number", step: 1, value: l.image_offset[i],
+      onchange: (e) => { l.image_offset[i] = Number(e.target.value) || 0; changed(); } }));
+  const help = (pv.fit === "span"
+    ? `Auto zoom here is ${pv.auto.toFixed(3)}: the same physical size as on the `
+      + "other monitors. Shift to line up across the gap between screens. "
+    : "") + "Alt+drag the monitor on the left to move its picture.";
+  return [
+    el("div", { class: "row" }, el("label", {}, "Zoom"),
+      el("label", { class: "check", style: "margin: 0" }, auto, el("span", {}, "Auto")),
+      el("div", { class: "range grow" }, slider, zoomNum)),
+    el("div", { class: "row" }, el("label", {}, "Shift"), shift(0, "x"), shift(1, "y"),
+      el("button", { onclick: () => {
+        l.image_zoom = null;
+        l.image_offset = [0, 0];
+        changed();
+      } }, "Reset")),
+    el("div", { class: "note" }, help),
   ];
 }
 
@@ -893,7 +1121,9 @@ function addLayout() {
   const taken = new Set(model.layouts.map((l) => String(l.monitor).toLowerCase()));
   const free = info.monitors.find((m) => !taken.has(m.name.toLowerCase()));
   // A specific monitor's layout has to come before a "*" one to be used.
-  model.layouts.unshift({ monitor: free ? free.name : "*", size: 1, widgets: [] });
+  model.layouts.unshift({ monitor: free ? free.name : "*", size: 1, widgets: [],
+    background: null, imageMode: "inherit", image: "", image_fit: null,
+    image_zoom: null, image_offset: [0, 0] });
   select(0, -1, false);
   changed();
 }
@@ -1322,6 +1552,7 @@ for (const b of $("tabs").children) {
 $("save").addEventListener("click", save);
 $("revert").addEventListener("click", revert);
 addEventListener("resize", () => { if (model) renderDesk(); });
+$("realsize").addEventListener("change", () => { if (model) renderDesk(); });
 addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
