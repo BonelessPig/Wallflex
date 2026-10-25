@@ -1602,6 +1602,25 @@ fn info_block_area() -> Area {
     }
 }
 
+/// `area` (pixels) with its edges moved to the nearest pixel edges, so
+/// it fills whole pixels and needs no smoothing. Areas that touch still
+/// touch, since a shared edge rounds the same way for both. One at
+/// least half a pixel across keeps at least a pixel, so thin lines and
+/// low bars don't vanish.
+fn snap_area(area: Area) -> Area {
+    let snap = |start: f64, end: f64| {
+        let (a, b) = (start.round(), end.round());
+        if b <= a && end - start >= 0.5 {
+            (a, a + 1.0)
+        } else {
+            (a, b)
+        }
+    };
+    let (x0, x1) = snap(area.x0, area.x1);
+    let (y0, y1) = snap(area.y0, area.y1);
+    Area { x0, y0, x1, y1 }
+}
+
 /// The RAM bar, in the info row.
 fn ram_bar_area() -> Area {
     Area {
@@ -1746,21 +1765,22 @@ impl Pen<'_, '_> {
         points.iter().map(|&p| self.point(p)).collect()
     }
 
-    /// The line weight in pixels, never thinner than one pixel.
+    /// The line weight in whole pixels, never thinner than one, so
+    /// straight lines are solid rather than smoothed.
     fn weight(&self) -> f64 {
-        (WEIGHT * self.scale).max(1.0)
+        (WEIGHT * self.scale).round().max(1.0)
     }
 
-    /// Fills an area.
+    /// Fills an area, snapped to whole pixels (see [`snap_area`]).
     fn fill(&mut self, area: Area, paint: Paint) {
-        let area = self.px(area);
+        let area = snap_area(self.px(area));
         self.canvas.fill_rect(area, paint);
     }
 
     /// Fills an area with a colour that changes down it: `color_at`
-    /// gets each row's height in units.
+    /// gets each row's height in units. Snapped to whole pixels.
     fn fill_shaded(&mut self, area: Area, color_at: impl Fn(f64) -> Rgb) {
-        let px = self.px(area);
+        let px = snap_area(self.px(area));
         let (scale, oy) = (self.scale, self.origin.1);
         self.canvas.fill_rect_rows(px, |y| Paint {
             color: color_at(y / scale - oy),
@@ -1768,24 +1788,28 @@ impl Pen<'_, '_> {
         });
     }
 
-    /// Outlines an area in ink at `alpha`.
+    /// Outlines an area in ink at `alpha`, snapped to whole pixels.
     fn stroke(&mut self, area: Area, alpha: f64) {
-        let (area, weight) = (self.px(area), self.weight());
+        let (area, weight) = (snap_area(self.px(area)), self.weight());
         self.canvas
             .stroke_rect(area, weight, Paint { color: INK, alpha });
     }
 
-    /// A dashed horizontal ink line at `alpha`.
+    /// A dashed horizontal ink line at `alpha`, its dashes, gaps and
+    /// edges on whole pixels.
     fn dashed(&mut self, (x0, x1): (f64, f64), y: f64, alpha: f64) {
         let s = self.scale;
         let weight = self.weight();
         let (start, y) = self.point((x0, y));
         let (end, _) = self.point((x1, 0.0));
+        // The line's top on a pixel edge, so it covers whole rows.
+        let y = (y - weight / 2.0).round() + weight / 2.0;
+        let whole = |v: f64| (v * s).round().max(1.0);
         self.canvas.dashed_hline(
-            (start, end),
+            (start.round(), end.round()),
             y,
             weight,
-            (NET_DASH.0 * s, NET_DASH.1 * s),
+            (whole(NET_DASH.0), whole(NET_DASH.1)),
             Paint { color: INK, alpha },
         );
     }
@@ -2183,6 +2207,47 @@ mod tests {
             "panel glide frame ({} parts): {} us",
             clips.len(),
             per_frame.as_micros()
+        );
+    }
+
+    #[test]
+    fn snaps_areas_to_whole_pixels() {
+        use super::{Area, snap_area};
+        let area = |x0, y0, x1, y1| Area { x0, y0, x1, y1 };
+        assert_eq!(
+            snap_area(area(1.3, 2.6, 7.5, 9.49)),
+            area(1.0, 3.0, 8.0, 9.0)
+        );
+        // Neighbours sharing an edge still meet.
+        let (left, right) =
+            (area(0.0, 0.0, 4.4, 1.0), area(4.4, 0.0, 9.0, 1.0));
+        assert_eq!(snap_area(left).x1, snap_area(right).x0);
+        // A thin line keeps a pixel; a sliver less than half doesn't.
+        assert_eq!(snap_area(area(3.6, 0.0, 4.2, 1.0)).x1, 5.0);
+        assert_eq!(snap_area(area(3.6, 0.0, 3.9, 1.0)).x1, 4.0);
+        let empty = snap_area(area(3.6, 0.0, 3.9, 1.0));
+        assert!(empty.x1 <= empty.x0);
+    }
+
+    #[test]
+    fn panel_rectangles_are_solid() {
+        // At a fractional scale, the CPU block's columns and bars are
+        // drawn without partly covered pixels: every pixel is the
+        // background, solid ink or the track's one blend of the two.
+        let mut dashboard = Dashboard::default();
+        dashboard.update(busy(1));
+        dashboard.settle();
+        let (pixels, _) = paint(&dashboard, Widget::Cpu, None);
+        let colours: std::collections::BTreeSet<u32> = pixels
+            .chunks(CANVAS.0)
+            .take(170)
+            .skip(46)
+            .flat_map(|row| row.iter().take(370).copied())
+            .collect();
+        assert!(
+            colours.len() <= 3,
+            "{} colours: {colours:x?}",
+            colours.len()
         );
     }
 

@@ -137,6 +137,10 @@ impl<'a> Canvas<'a> {
             &cols,
         );
         let solid = (paint.alpha >= 1.0).then(|| pack(paint.color));
+        // Translucent paint over a plain background gives the same
+        // result pixel after pixel: the last blend is reused when the
+        // pixel underneath and the strength match.
+        let mut last: Option<(u32, u64, u32)> = None;
         for y in rows {
             let cover_y = overlap(index_to_f64(y), area.y0, area.y1);
             let fast = solid.filter(|_| cover_y >= 1.0);
@@ -148,9 +152,31 @@ impl<'a> Canvas<'a> {
                     continue;
                 }
                 let cover_x = overlap(index_to_f64(x), area.x0, area.x1);
-                self.blend(x, y, paint, cover_x * cover_y);
+                let amount = unit(cover_x * cover_y * paint.alpha);
+                if amount <= 0.0 {
+                    continue;
+                }
+                let Some(pixel) = self.pixel_mut(x, y) else {
+                    continue;
+                };
+                let key = amount.to_bits();
+                *pixel = match last {
+                    Some((under, k, out)) if under == *pixel && k == key => out,
+                    _ => {
+                        let out =
+                            pack(mix(paint.color, unpack(*pixel), amount));
+                        last = Some((*pixel, key, out));
+                        out
+                    }
+                };
             }
         }
+    }
+
+    /// The pixel at (`x`, `y`), if it's on the canvas.
+    fn pixel_mut(&mut self, x: usize, y: usize) -> Option<&mut u32> {
+        let index = y.checked_mul(self.width)?.checked_add(x)?;
+        self.pixels.get_mut(index)
     }
 
     /// Sets columns `cols` of row `y` to `value`.

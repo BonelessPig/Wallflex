@@ -360,9 +360,14 @@ bar 72; an empty-clip draw is 2 us, so it's pixel work, ~7 ns a
 pixel. Skipping panel blocks outside the clip (`Pen::reaches`) gave
 9%, and writing opaque fully-covered pixels straight in
 (`Canvas::fill_rect`) took the CPU columns to 236 us: 965 to 820 us a
-frame overall. What's left: blends (`Canvas::blend` is float maths
-per pixel), and repainting whole moving areas when only a band of
-each column changes. Note the governor counts every thread: its
+frame overall. Then rectangles were snapped to whole pixels
+(`snap_area`; line weights rounded to whole pixels) so they have no
+partly covered pixels, and `fill_rect` reuses its last blend when the
+pixel underneath and the strength repeat (translucent outlines over
+the background): CPU columns 57 us, RAM bar 11, 572 us a frame. Edges
+round independently, so at 1080 columns and gaps can differ by a
+pixel. What's left: the rings' arcs (~200 us per GPU, smoothed by
+nature, ~16 fps) and the network graph (~100 us, ~32 fps). Note the governor counts every thread: its
 3-4.5% step-downs were more than the main thread showed, so catch
 one with per-thread times before blaming painting.
 

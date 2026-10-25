@@ -38,8 +38,11 @@ patch number (0.x.**y**) for fixes only.
   upload.
 - Animation costs less: a frame of the gliding bars no longer redraws
   the panel's other blocks, solid fills skip the blending maths, and
-  Discord updates repaint only the Discord widget (a 4K glide frame
-  went from about 0.97 ms to 0.82 ms).
+  Discord updates repaint only the Discord widget.
+- Bars, columns, outlines and other rectangles are drawn on whole
+  pixels, so their edges are crisp instead of smoothed, and repeated
+  blends are reused. With the change above, a 4K glide frame went
+  from about 0.97 ms to 0.57 ms. Rings and curves are still smoothed.
 - Smooth mode now stays smooth until the PC is 80% busy, then drops
   straight to light (it eased off at 60% and again at 85%).
 - In light mode, a monitor hidden by a full-screen window stops
