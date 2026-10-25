@@ -41,8 +41,33 @@ impl NetReader {
     }
 }
 
-/// Frees a table from `GetIfTable2` on drop.
+/// A table from `GetIfTable2`, freed on drop. The pointer is never null.
 struct IfTable(*mut MIB_IF_TABLE2);
+
+impl IfTable {
+    /// Takes ownership of a table `GetIfTable2` filled in; `None` if it's
+    /// null.
+    fn new(raw: *mut MIB_IF_TABLE2) -> Option<Self> {
+        (!raw.is_null()).then_some(Self(raw))
+    }
+
+    /// The table's rows. The slice borrows `self`, so the compiler won't
+    /// let it outlive the table (it's freed when `self` drops).
+    fn rows(&self) -> &[MIB_IF_ROW2] {
+        // SAFETY: `self.0` is non-null (checked in `new`) and points to
+        // a table Windows allocated, valid until `self` drops; the
+        // returned slice can't outlive `self`. Windows stores
+        // `NumEntries` rows one after another starting at `Table`, and
+        // the pointer to them comes from the allocation's own pointer
+        // (no reference to the declared one-row array), so it covers
+        // them all.
+        unsafe {
+            let count = usize::try_from((*self.0).NumEntries).unwrap_or(0);
+            let first = (&raw const (*self.0).Table).cast::<MIB_IF_ROW2>();
+            std::slice::from_raw_parts(first, count)
+        }
+    }
+}
 
 impl Drop for IfTable {
     fn drop(&mut self) {
@@ -70,21 +95,15 @@ fn totals() -> Option<(u64, u64, u64)> {
     let mut raw: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
     // SAFETY: on success Windows allocates the table and stores its
     // address in `raw`; `IfTable` frees it.
-    if unsafe { GetIfTable2(&raw mut raw) }.is_err() || raw.is_null() {
+    if unsafe { GetIfTable2(&raw mut raw) }.is_err() {
         return None;
     }
-    let table = IfTable(raw);
-    // SAFETY: the table is valid until `table` drops, and `NumEntries`
-    // rows are stored one after another starting at `Table`.
-    let rows: &[MIB_IF_ROW2] = unsafe {
-        let count = usize::try_from((*table.0).NumEntries).ok()?;
-        std::slice::from_raw_parts((&raw const (*table.0).Table).cast(), count)
-    };
+    let table = IfTable::new(raw)?;
 
     let mut received = 0_u64;
     let mut sent = 0_u64;
     let mut link = 0_u64;
-    for row in rows {
+    for row in table.rows() {
         let flags = row.InterfaceAndOperStatusFlags._bitfield;
         let counted = flags & HARDWARE_INTERFACE != 0
             && flags & FILTER_INTERFACE == 0
