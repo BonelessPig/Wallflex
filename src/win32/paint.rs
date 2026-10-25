@@ -4,23 +4,33 @@
 //! the text on top and copies it to the window. No buffer is ever the
 //! size of the monitor, which is what made Direct2D cost ~100 MB in
 //! milestone 1.
+//!
+//! With a transparent background or a picture, the widgets are *layered*
+//! instead: each is drawn see-through around its shapes (text is drawn
+//! white on black into a small mask, then blended in by its coverage)
+//! and handed to its own [`LayerWindow`]. The surface itself then only
+//! shows the background colour, painted once, or nothing at all when
+//! it's transparent (the picture has a window of its own).
 
-use windows::Win32::Foundation::{COLORREF, HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC,
+    ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint,
+    BitBlt, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC,
     CreateDIBSection, CreateFontW, CreateRectRgn, CreateSolidBrush,
     DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
-    ExcludeClipRect, FillRect, GdiFlush, GetDC, GetRegionData, GetUpdateRgn,
-    HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, HRGN, IntersectClipRect, NULLREGION,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, RGN_ERROR, RGNDATA, RGNDATAHEADER,
-    ReleaseDC, RestoreDC, SRCCOPY, SaveDC, SelectObject, SetBkMode,
-    SetTextAlign, SetTextColor, TA_BASELINE, TA_CENTER, TA_LEFT, TA_RIGHT,
-    TEXT_ALIGN_OPTIONS, TRANSPARENT, TextOutW,
+    ExcludeClipRect, FONT_QUALITY, FillRect, GdiFlush, GetDC, GetRegionData,
+    GetTextExtentPoint32W, GetTextMetricsW, GetUpdateRgn, HBITMAP, HBRUSH, HDC,
+    HFONT, HGDIOBJ, HRGN, IntersectClipRect, NULLREGION, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, RGN_ERROR, RGNDATA, RGNDATAHEADER, ReleaseDC, RestoreDC,
+    SRCCOPY, SaveDC, SelectObject, SetBkMode, SetTextAlign, SetTextColor,
+    TA_BASELINE, TA_CENTER, TA_LEFT, TA_RIGHT, TEXT_ALIGN_OPTIONS, TEXTMETRICW,
+    TRANSPARENT, TextOutW,
 };
 use windows::core::w;
 
+use super::layer::LayerWindow;
 use super::{struct_size, to_rect, to_win32_rect};
+use crate::backdrop::{Backdrop, Background};
 use crate::canvas::{Area, Canvas};
 use crate::color::Rgb;
 use crate::config::{Layout, Placement};
@@ -44,10 +54,36 @@ const BITS_PER_PIXEL: u16 = 32;
 const LABEL_REACH: (f64, f64) = (1.0, 0.4);
 /// `SaveDC`'s "most recent" index for `RestoreDC`.
 const LAST_SAVED_DC: i32 = -1;
+/// White, for text drawn into a mask.
+const MASK_INK: Rgb = Rgb {
+    r: 0xFF,
+    g: 0xFF,
+    b: 0xFF,
+};
+/// Room around text in its mask, as a share of its size, for glyphs
+/// that reach past their advance.
+const MASK_PAD: f64 = 0.25;
+/// The mask's starting size in pixels; it grows for longer text.
+const MASK_MIN: (i32, i32) = (256, 64);
+/// A pixel's colour bits, without its alpha.
+const COLOR_BITS: u32 = 0x00FF_FFFF;
+
+/// Where a surface is: its monitor and the part the taskbar leaves free
+/// (both in client pixels), and its top-left inside its parent window.
+#[derive(Clone, Copy, Debug)]
+pub struct Place {
+    /// The whole monitor.
+    pub bounds: Rect,
+    /// The work area.
+    pub work: Rect,
+    /// The surface's position in its parent.
+    pub origin: Point,
+}
 
 /// Paints one surface.
 pub struct Painter {
-    /// The background colour.
+    /// The background colour (black when transparent, for text
+    /// opacity; nothing is filled with it then).
     background_color: Rgb,
     /// Background brush, deleted on drop.
     background: HBRUSH,
@@ -61,6 +97,14 @@ pub struct Painter {
     slots: Vec<Slot>,
     /// Fonts by pixel size, shared by the widgets.
     fonts: Fonts,
+    /// Whether the widgets have windows of their own.
+    layered: bool,
+    /// Where the surface's top-left is inside its parent, for placing
+    /// the widgets' windows (which share that parent).
+    origin: Point,
+    /// The layered background colour still needs painting. Once
+    /// painted, the window keeps it.
+    backdrop_pending: bool,
 }
 
 /// One placed widget.
@@ -74,22 +118,29 @@ struct Slot {
     last: Option<Rect>,
     /// Its clickable areas from the last paint.
     hits: Vec<Hit>,
+    /// Its own window, when the widgets are layered.
+    layer: Option<LayerWindow>,
 }
 
 impl Painter {
-    /// Creates a painter for a monitor `bounds` big (in client pixels)
-    /// with `work` free of the taskbar, drawing `layout`'s widgets (none
-    /// if `None`).
+    /// Creates a painter for a monitor at `place`, drawing `layout`'s
+    /// widgets (none if `None`) over `backdrop`. When the backdrop is
+    /// [layered](Backdrop::layered), give it the widgets' windows with
+    /// [`Painter::attach_layers`] before it paints.
     ///
     /// # Errors
     ///
     /// When the background brush can't be created.
     pub fn new(
-        background: Rgb,
-        bounds: Rect,
-        work: Rect,
+        backdrop: &Backdrop,
+        place: Place,
         layout: Option<&Layout>,
     ) -> windows::core::Result<Self> {
+        let layered = backdrop.layered();
+        let (background, fill) = match backdrop.background {
+            Background::Color(color) => (color, true),
+            Background::Transparent => (Rgb::BLACK, false),
+        };
         // SAFETY: takes a plain colour value.
         let brush = unsafe { CreateSolidBrush(colorref(background)) };
         if brush.is_invalid() {
@@ -105,17 +156,44 @@ impl Painter {
                 buffer: None,
                 last: None,
                 hits: Vec::new(),
+                layer: None,
             })
             .collect();
+        let quality = if layered {
+            ANTIALIASED_QUALITY
+        } else {
+            CLEARTYPE_QUALITY
+        };
         Ok(Self {
             background_color: background,
             background: brush,
-            scale: monitor_scale(bounds.height()) * size,
-            bounds,
-            work,
+            scale: monitor_scale(place.bounds.height()) * size,
+            bounds: place.bounds,
+            work: place.work,
             slots,
-            fonts: Fonts::default(),
+            fonts: Fonts::new(quality),
+            layered,
+            origin: place.origin,
+            backdrop_pending: layered && fill,
         })
+    }
+
+    /// How many widgets this monitor shows.
+    pub fn widget_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Gives the widgets their own windows (one each, in order), for a
+    /// layered backdrop.
+    pub fn attach_layers(&mut self, layers: Vec<LayerWindow>) {
+        for (slot, layer) in self.slots.iter_mut().zip(layers) {
+            slot.layer = Some(layer);
+        }
+    }
+
+    /// The widgets' own windows, when layered.
+    pub fn layers(&self) -> impl Iterator<Item = &LayerWindow> {
+        self.slots.iter().filter_map(|slot| slot.layer.as_ref())
     }
 
     /// The areas to repaint after new data: where each widget is now
@@ -214,6 +292,10 @@ impl Painter {
     /// are redrawn, so a frame that moves the bars doesn't redraw the
     /// text and graphs around them.
     pub fn paint(&mut self, hwnd: HWND, dashboard: &Dashboard) {
+        if self.layered {
+            self.paint_layered(hwnd, dashboard);
+            return;
+        }
         let rects: Vec<Option<Rect>> = self
             .slots
             .iter()
@@ -249,6 +331,7 @@ impl Painter {
                         widget: slot.placement.widget,
                         scale: self.scale,
                         background: self.background_color,
+                        layered: false,
                     };
                     let target = Target { hdc, rect };
                     if let Some(hits) = draw_widget(
@@ -290,6 +373,59 @@ impl Painter {
         let _ = unsafe { EndPaint(hwnd, &raw const ps) };
     }
 
+    /// [`Painter::paint`] for layered widgets: each widget's changed
+    /// parts go to its own window, and the surface's background is
+    /// painted only the first time (the window keeps it after that).
+    fn paint_layered(&mut self, hwnd: HWND, dashboard: &Dashboard) {
+        let rects: Vec<Option<Rect>> = self
+            .slots
+            .iter()
+            .map(|slot| self.slot_rect(slot.placement, dashboard))
+            .collect();
+        let update = update_rects(hwnd);
+        let mut ps = PAINTSTRUCT::default();
+        // SAFETY: called from `hwnd`'s WM_PAINT handler with a valid
+        // PAINTSTRUCT, and always paired with EndPaint below.
+        let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };
+        if !hdc.is_invalid() {
+            let changed = if update.is_empty() {
+                vec![to_rect(ps.rcPaint)]
+            } else {
+                update
+            };
+            for (slot, rect) in self.slots.iter_mut().zip(rects) {
+                let job = WidgetJob {
+                    widget: slot.placement.widget,
+                    scale: self.scale,
+                    background: Rgb::BLACK,
+                    layered: true,
+                };
+                draw_layer(
+                    slot,
+                    rect.map(|rect| Target { hdc, rect }),
+                    (&changed, self.origin),
+                    &mut self.fonts,
+                    job,
+                    dashboard,
+                );
+            }
+            if self.backdrop_pending {
+                self.backdrop_pending = false;
+                self.paint_backdrop(hdc);
+            }
+        }
+        // SAFETY: pairs the BeginPaint above. It cannot fail.
+        let _ = unsafe { EndPaint(hwnd, &raw const ps) };
+    }
+
+    /// Paints the layered background colour.
+    fn paint_backdrop(&self, hdc: HDC) {
+        let whole = to_win32_rect(self.bounds);
+        // SAFETY: `hdc` is the paint DC; a failed fill only leaves the
+        // area unpainted.
+        let _ = unsafe { FillRect(hdc, &raw const whole, self.background) };
+    }
+
     /// Whether this monitor's layout places any widgets.
     pub fn has_widgets(&self) -> bool {
         !self.slots.is_empty()
@@ -301,7 +437,7 @@ impl Painter {
         for slot in &mut self.slots {
             slot.buffer = None;
         }
-        self.fonts = Fonts::default();
+        self.fonts = Fonts::new(self.fonts.quality);
     }
 
     /// What a click at `point` (client pixels) would do, if anything.
@@ -377,7 +513,7 @@ pub fn preview(
     let width = round_px((width * scale).ceil());
     let height = round_px((height * scale).ceil());
     let mut buffer = None;
-    let mut fonts = Fonts::default();
+    let mut fonts = Fonts::new(CLEARTYPE_QUALITY);
     // SAFETY: a DC for the whole screen, released below.
     let screen = unsafe { GetDC(None) };
     if screen.is_invalid() {
@@ -387,6 +523,7 @@ pub fn preview(
         widget,
         scale,
         background,
+        layered: false,
     };
     let rendered = render(
         screen,
@@ -401,7 +538,14 @@ pub fn preview(
     // handled.
     let _ = unsafe { ReleaseDC(None, screen) };
     rendered?;
-    let pixels = buffer.as_mut()?.pixels().to_vec();
+    // Without alpha, as before: some viewers would take it as opacity,
+    // and GDI's text leaves it at 0.
+    let pixels = buffer
+        .as_mut()?
+        .pixels()
+        .iter()
+        .map(|pixel| pixel & COLOR_BITS)
+        .collect();
     Some((
         u32::try_from(width).ok()?,
         u32::try_from(height).ok()?,
@@ -423,6 +567,8 @@ struct WidgetJob {
     scale: f64,
     /// Background colour.
     background: Rgb,
+    /// See-through around its shapes, for its own window.
+    layered: bool,
 }
 
 /// Where a widget goes: the window's paint DC and the widget's place.
@@ -478,6 +624,69 @@ fn draw_widget(
     Some(hits)
 }
 
+/// Draws one layered widget into its own window: the parts of it in
+/// `changed` (client pixels), or all of it if it's new, moved or
+/// resized. A widget with nothing to show (no `target`) has its window
+/// hidden. `origin` is the surface's top-left inside the windows'
+/// parent.
+fn draw_layer(
+    slot: &mut Slot,
+    target: Option<Target>,
+    (changed, origin): (&[Rect], Point),
+    fonts: &mut Fonts,
+    job: WidgetJob,
+    dashboard: &Dashboard,
+) {
+    let Some(layer) = slot.layer.as_mut() else {
+        return;
+    };
+    let Some(Target { hdc, rect }) = target else {
+        layer.hide();
+        slot.last = None;
+        return;
+    };
+    let moved = layer.place(rect.moved_by(origin));
+    let whole = moved || slot.last != Some(rect);
+    slot.last = Some(rect);
+    let corner = Point {
+        x: rect.left,
+        y: rect.top,
+    };
+    // Empty means all of it, to `render`.
+    let local: Vec<Rect> = if whole {
+        Vec::new()
+    } else {
+        let parts: Vec<Rect> = changed
+            .iter()
+            .filter_map(|c| c.intersection(rect))
+            .map(|part| part.relative_to(corner))
+            .collect();
+        if parts.is_empty() {
+            return;
+        }
+        parts
+    };
+    let size = (rect.width(), rect.height());
+    let kept = slot
+        .buffer
+        .as_ref()
+        .is_some_and(|b| (b.width, b.height) == size);
+    let Some((source, hits, drawn)) =
+        render(hdc, size, &local, &mut slot.buffer, fonts, job, dashboard)
+    else {
+        return;
+    };
+    slot.hits = hits;
+    let dirty = if whole || !kept {
+        None
+    } else {
+        drawn.into_iter().reduce(Rect::union)
+    };
+    // A refused update only leaves the old pixels up until the next
+    // paint.
+    let _ = layer.update(source, dirty);
+}
+
 /// Renders a widget into `buffer` (recreated if the size changed):
 /// shapes from the canvas, then the text on top, only inside `parts`
 /// (widget pixels; all of it when empty or the buffer is new). Returns
@@ -524,10 +733,18 @@ fn render(
                 span(part.left, part.right),
                 span(part.top, part.bottom),
             );
-            canvas.fill(job.background);
+            if job.layered {
+                canvas.clear();
+            } else {
+                canvas.fill(job.background);
+            }
             dashboard.draw(job.widget, &mut canvas, job.scale, job.background)
         };
-        draw_labels(buffer.dc, fonts, &drawing.labels, *part);
+        if job.layered {
+            draw_labels_layered(hdc, buffer, fonts, &drawing.labels, *part);
+        } else {
+            draw_labels(buffer.dc, fonts, &drawing.labels, *part);
+        }
         hits = drawing.hits;
     }
     Some((buffer.dc, hits, parts))
@@ -575,6 +792,95 @@ fn draw_labels(dc: HDC, fonts: &mut Fonts, labels: &[Label], part: Rect) {
     if saved != 0 {
         // SAFETY: undoes the SaveDC above.
         let _ = unsafe { RestoreDC(dc, LAST_SAVED_DC) };
+    }
+}
+
+/// Draws the labels that touch `part` onto a see-through widget's
+/// `buffer`: each is drawn white on black into the fonts' mask, then
+/// blended in by how much of each pixel the glyphs cover.
+fn draw_labels_layered(
+    hdc: HDC,
+    buffer: &mut DibBuffer,
+    fonts: &mut Fonts,
+    labels: &[Label],
+    part: Rect,
+) {
+    let (top, bottom) = (f64::from(part.top), f64::from(part.bottom));
+    for label in labels {
+        let above = label.y - label.size * LABEL_REACH.0;
+        let below = label.y + label.size * LABEL_REACH.1;
+        if below < top || above > bottom {
+            continue;
+        }
+        let clip = match label.clip {
+            Some(c) => part.intersection(Rect {
+                left: round_px(c.x0),
+                top: round_px(c.y0),
+                right: round_px(c.x1),
+                bottom: round_px(c.y1),
+            }),
+            None => Some(part),
+        };
+        let Some(clip) = clip else {
+            continue;
+        };
+        let Some(spot) = fonts.rasterize(hdc, label) else {
+            continue;
+        };
+        if let Some(mask) = fonts.mask.as_mut() {
+            blend_mask(buffer, mask, (spot, clip), label);
+        }
+    }
+}
+
+/// Blends `label`'s colour into `buffer` wherever `mask` (placed at
+/// `spot`, widget pixels) has text, inside `clip`.
+fn blend_mask(
+    buffer: &mut DibBuffer,
+    mask: &mut DibBuffer,
+    (spot, clip): (Rect, Rect),
+    label: &Label,
+) {
+    let Some(area) = spot.intersection(clip) else {
+        return;
+    };
+    let (Ok(width), Ok(height), Ok(mask_width)) = (
+        usize::try_from(buffer.width),
+        usize::try_from(buffer.height),
+        usize::try_from(mask.width),
+    ) else {
+        return;
+    };
+    let coverage = mask.pixels();
+    let Some(mut canvas) = Canvas::new(width, height, buffer.pixels()) else {
+        return;
+    };
+    let channel = |c: u8| f64::from(c) / 255.0;
+    let Rgb { r, g, b } = label.color;
+    let ink = [channel(r), channel(g), channel(b), label.alpha];
+    let index = |n: i32| usize::try_from(n).ok();
+    for y in area.top..area.bottom {
+        let (Some(row), Some(mask_row)) =
+            (index(y), index(y.saturating_sub(spot.top)))
+        else {
+            continue;
+        };
+        let start = mask_row.checked_mul(mask_width);
+        for x in area.left..area.right {
+            let at = index(x.saturating_sub(spot.left))
+                .zip(start)
+                .and_then(|(col, start)| start.checked_add(col));
+            let (Some(column), Some(&pixel)) =
+                (index(x), at.and_then(|i| coverage.get(i)))
+            else {
+                continue;
+            };
+            let [blue, green, red, _] = pixel.to_le_bytes();
+            let cover = channel(red.max(green).max(blue));
+            if cover > 0.0 {
+                canvas.cover(column, row, ink, cover);
+            }
+        }
     }
 }
 
@@ -643,9 +949,19 @@ fn region_rects(hwnd: HWND, region: HRGN) -> Vec<Rect> {
         .collect()
 }
 
-/// Fonts by pixel size, created on first use.
-#[derive(Default)]
-struct Fonts(Vec<(i32, Font)>);
+/// Fonts by pixel size, created on first use, and the scratch mask
+/// text is drawn into for see-through widgets.
+struct Fonts {
+    /// The fonts made so far, by em height in pixels.
+    list: Vec<(i32, Font)>,
+    /// How glyph edges are smoothed: `ClearType` on a solid background,
+    /// greyscale for see-through widgets (`ClearType`'s coloured edges
+    /// only work over a known colour).
+    quality: FONT_QUALITY,
+    /// Where one label at a time is drawn white on black, made on first
+    /// use and grown for longer text.
+    mask: Option<DibBuffer>,
+}
 
 /// A GDI font, deleted on drop.
 struct Font(HFONT);
@@ -659,6 +975,82 @@ impl Drop for Font {
 }
 
 impl Fonts {
+    /// No fonts yet; they'll be made at `quality`.
+    fn new(quality: FONT_QUALITY) -> Self {
+        Self {
+            list: Vec::new(),
+            quality,
+            mask: None,
+        }
+    }
+
+    /// Draws `label`'s text white on black into the mask (its top-left
+    /// corner), and says where that corner of the mask belongs on the
+    /// widget, and how much of the mask the text uses.
+    fn rasterize(&mut self, hdc: HDC, label: &Label) -> Option<Rect> {
+        let font = self.get(round_px(label.size))?;
+        if self.mask.is_none() {
+            self.mask = DibBuffer::new(hdc, MASK_MIN.0, MASK_MIN.1);
+        }
+        let wide: Vec<u16> = label.text.encode_utf16().collect();
+        let (extent, metrics) = measure(self.mask.as_ref()?.dc, font, &wide)?;
+        let pad = round_px(label.size * MASK_PAD).max(1);
+        let width = extent.cx.saturating_add(pad.saturating_mul(2));
+        let height = metrics.tmHeight.saturating_add(pad.saturating_mul(2));
+        let mask = self.mask_at_least(hdc, (width, height))?;
+        mask.clear(width, height);
+        let baseline = pad.saturating_add(metrics.tmAscent);
+        // SAFETY: the mask's DC is valid; the old font is restored before
+        // returning. Results are informational.
+        unsafe {
+            let old = SelectObject(mask.dc, font.into());
+            let _ = SetTextAlign(
+                mask.dc,
+                TEXT_ALIGN_OPTIONS(TA_LEFT.0 | TA_BASELINE.0),
+            );
+            let _ = SetTextColor(mask.dc, colorref(MASK_INK));
+            let _ = SetBkMode(mask.dc, TRANSPARENT);
+            let _ = TextOutW(mask.dc, pad, baseline, &wide);
+            let _ = SelectObject(mask.dc, old);
+        }
+        let shift = match label.align {
+            Align::Left => 0,
+            Align::Right => extent.cx,
+            Align::Center => extent.cx / 2,
+        };
+        let left = round_px(label.x).saturating_sub(shift).saturating_sub(pad);
+        let top = round_px(label.y)
+            .saturating_sub(metrics.tmAscent)
+            .saturating_sub(pad);
+        Some(Rect {
+            left,
+            top,
+            right: left.saturating_add(width),
+            bottom: top.saturating_add(height),
+        })
+    }
+
+    /// The mask, remade bigger first if it's smaller than `size`.
+    fn mask_at_least(
+        &mut self,
+        hdc: HDC,
+        (width, height): (i32, i32),
+    ) -> Option<&mut DibBuffer> {
+        let fits = self
+            .mask
+            .as_ref()
+            .is_some_and(|m| m.width >= width && m.height >= height);
+        if !fits {
+            let (old_w, old_h) =
+                self.mask.as_ref().map_or(MASK_MIN, |m| (m.width, m.height));
+            // Free the old mask before making the new one.
+            self.mask = None;
+            self.mask =
+                DibBuffer::new(hdc, width.max(old_w), height.max(old_h));
+        }
+        self.mask.as_mut()
+    }
+
     /// Draws one label.
     fn draw_label(&mut self, dc: HDC, label: &Label) {
         let Some(font) = self.get(round_px(label.size)) else {
@@ -684,12 +1076,13 @@ impl Fonts {
 
     /// The font at `pixels` (em height).
     fn get(&mut self, pixels: i32) -> Option<HFONT> {
-        if let Some((_, font)) = self.0.iter().find(|(size, _)| *size == pixels)
+        if let Some((_, font)) =
+            self.list.iter().find(|(size, _)| *size == pixels)
         {
             return Some(font.0);
         }
-        if self.0.len() >= MAX_FONTS {
-            self.0.clear();
+        if self.list.len() >= MAX_FONTS {
+            self.list.clear();
         }
         // Negative height asks for the character (em) height, like CSS.
         let height = pixels.checked_neg()?;
@@ -707,7 +1100,7 @@ impl Fonts {
                 DEFAULT_CHARSET,
                 OUT_DEFAULT_PRECIS,
                 CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
+                self.quality,
                 0,
                 w!("Bahnschrift"),
             )
@@ -715,9 +1108,26 @@ impl Fonts {
         if handle.is_invalid() {
             return None;
         }
-        self.0.push((pixels, Font(handle)));
+        self.list.push((pixels, Font(handle)));
         Some(handle)
     }
+}
+
+/// How big `text` is in `font`, and the font's measurements, using
+/// `dc` to measure.
+fn measure(dc: HDC, font: HFONT, text: &[u16]) -> Option<(SIZE, TEXTMETRICW)> {
+    let mut extent = SIZE::default();
+    let mut metrics = TEXTMETRICW::default();
+    // SAFETY: `dc` is a valid memory DC; the old font is restored before
+    // returning, and both out-parameters are locals.
+    let ok = unsafe {
+        let old = SelectObject(dc, font.into());
+        let sized = GetTextExtentPoint32W(dc, text, &raw mut extent).as_bool();
+        let measured = GetTextMetricsW(dc, &raw mut metrics).as_bool();
+        let _ = SelectObject(dc, old);
+        sized && measured
+    };
+    ok.then_some((extent, metrics))
 }
 
 /// A 32-bit DIB section selected into its own memory DC: GDI can draw
@@ -805,6 +1215,21 @@ impl DibBuffer {
         unsafe {
             let _ = GdiFlush();
             std::slice::from_raw_parts_mut(self.bits, count)
+        }
+    }
+}
+
+impl DibBuffer {
+    /// Blackens the top-left `width` x `height` pixels.
+    fn clear(&mut self, width: i32, height: i32) {
+        let stride = usize::try_from(self.width).unwrap_or(0);
+        let cols = usize::try_from(width).unwrap_or(0).min(stride);
+        let rows = usize::try_from(height).unwrap_or(0);
+        let pixels = self.pixels();
+        for row in pixels.chunks_exact_mut(stride.max(1)).take(rows) {
+            if let Some(span) = row.get_mut(..cols) {
+                span.fill(0);
+            }
         }
     }
 }

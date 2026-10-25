@@ -79,11 +79,55 @@ impl Rect {
             bottom: self.bottom.saturating_sub(origin.y),
         }
     }
+
+    /// The same rectangle moved by `by`: the opposite of
+    /// [`Rect::relative_to`].
+    pub fn moved_by(self, by: Point) -> Self {
+        Self {
+            left: self.left.saturating_add(by.x),
+            top: self.top.saturating_add(by.y),
+            right: self.right.saturating_add(by.x),
+            bottom: self.bottom.saturating_add(by.y),
+        }
+    }
+
+    /// The smallest rectangle holding both.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            top: self.top.min(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Point, Rect};
+
+    #[test]
+    fn moves_and_joins() {
+        let by = Point { x: 10, y: -5 };
+        let moved = UPPER.moved_by(by);
+        assert_eq!(moved.relative_to(by), UPPER);
+        assert_eq!(moved.left, 236);
+        let small = Rect {
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+        };
+        assert_eq!(
+            small.union(UPPER),
+            Rect {
+                left: 0,
+                top: -1440,
+                right: 3666,
+                bottom: 1,
+            }
+        );
+    }
 
     /// The upper 3440x1440 monitor from the plan, above the main one.
     const UPPER: Rect = Rect {

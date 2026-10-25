@@ -1,11 +1,14 @@
-//! Settings from `config.toml`: the background colour and which widgets
-//! go where on each monitor. The file format is documented in
-//! `config.default.toml`, which is also written for new users.
+//! Settings from `config.toml`: the background (a colour, transparent
+//! or a picture) and which widgets go where on each monitor. The file
+//! format is documented in `config.default.toml`, which is also written
+//! for new users.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::backdrop::{Backdrop, Background, Fit, Wallpaper};
 use crate::color::Rgb;
 use crate::geometry::Rect;
 use crate::pace::Mode;
@@ -27,8 +30,12 @@ const SIZE_RANGE: (f64, f64) = (0.25, 4.0);
 /// Validated settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// Background colour.
-    pub background: Rgb,
+    /// Background colour, or transparent; a layout can change it.
+    pub background: Background,
+    /// Picture shown on every monitor whose layout doesn't change it.
+    pub image: Option<PathBuf>,
+    /// How pictures are fitted, unless a layout says otherwise.
+    pub image_fit: Fit,
     /// Layouts in file order; a monitor uses the first that matches.
     pub layouts: Vec<Layout>,
     /// Discord, if set up.
@@ -69,6 +76,24 @@ pub struct Layout {
     pub size: f64,
     /// The widgets, drawn in order.
     pub widgets: Vec<Placement>,
+    /// Its own background, if it changes the top-level one.
+    pub background: Option<Background>,
+    /// Its own picture, or none, if it changes the top-level one.
+    pub image: ImageChoice,
+    /// How its picture is fitted, if it changes the top-level setting.
+    pub image_fit: Option<Fit>,
+}
+
+/// A layout's `image`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ImageChoice {
+    /// Left out: the top-level picture, if any.
+    #[default]
+    Inherit,
+    /// `image = ""`: no picture on these monitors.
+    Off,
+    /// This picture.
+    Path(PathBuf),
 }
 
 /// One widget and where it goes.
@@ -240,13 +265,53 @@ impl Settings {
     pub fn layout_for(&self, monitor: &MonitorInfo<'_>) -> Option<&Layout> {
         self.layouts.iter().find(|l| l.monitor.matches(monitor))
     }
+
+    /// What goes behind the widgets on a monitor using `layout` (`None`
+    /// for a monitor no layout matches): the layout's own background
+    /// and picture where it gives them, else the top-level ones.
+    pub fn backdrop_for(&self, layout: Option<&Layout>) -> Backdrop {
+        let background =
+            layout.and_then(|l| l.background).unwrap_or(self.background);
+        let path = match layout.map(|l| &l.image) {
+            None | Some(ImageChoice::Inherit) => self.image.clone(),
+            Some(ImageChoice::Off) => None,
+            Some(ImageChoice::Path(path)) => Some(path.clone()),
+        };
+        let fit = layout.and_then(|l| l.image_fit).unwrap_or(self.image_fit);
+        Backdrop {
+            background,
+            image: path.map(|path| Wallpaper { path, fit }),
+        }
+    }
+
+    /// The settings with relative picture paths made relative to `dir`
+    /// (the config file's folder).
+    #[must_use]
+    pub fn with_base_dir(mut self, dir: &Path) -> Self {
+        let resolve = |path: &mut PathBuf| {
+            if path.is_relative() {
+                *path = dir.join(&*path);
+            }
+        };
+        if let Some(path) = &mut self.image {
+            resolve(path);
+        }
+        for layout in &mut self.layouts {
+            if let ImageChoice::Path(path) = &mut layout.image {
+                resolve(path);
+            }
+        }
+        self
+    }
 }
 
 impl Default for Settings {
     /// The built-in defaults, the same as `config.default.toml`.
     fn default() -> Self {
         Self {
-            background: Rgb::BLACK,
+            background: Background::Color(Rgb::BLACK),
+            image: None,
+            image_fit: Fit::Fill,
             layouts: vec![Layout {
                 monitor: MonitorMatch::Any,
                 size: 1.0,
@@ -255,6 +320,9 @@ impl Default for Settings {
                     anchor: Anchor::BottomRight,
                     offset: (DEFAULT_OFFSET, DEFAULT_OFFSET),
                 }],
+                background: None,
+                image: ImageChoice::Inherit,
+                image_fit: None,
             }],
             discord: None,
             performance: Mode::Smooth,
@@ -281,8 +349,12 @@ impl std::error::Error for ConfigError {}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
-    /// `"#RRGGBB"`.
+    /// `"#RRGGBB"` or `"transparent"`.
     background: Option<String>,
+    /// Picture file.
+    image: Option<String>,
+    /// `"fill"`, `"fit"`, `"stretch"` or `"center"`.
+    image_fit: Option<String>,
     /// `[[layout]]` tables.
     #[serde(default)]
     layout: Vec<RawLayout>,
@@ -347,6 +419,12 @@ struct RawLayout {
     monitor: Option<String>,
     /// Scale factor.
     size: Option<f64>,
+    /// `"#RRGGBB"` or `"transparent"`.
+    background: Option<String>,
+    /// Picture file, or `""` for none.
+    image: Option<String>,
+    /// How the picture is fitted.
+    image_fit: Option<String>,
     /// `[[layout.widget]]` tables.
     #[serde(default)]
     widget: Vec<RawWidget>,
@@ -376,12 +454,24 @@ struct RawWidget {
 pub fn parse(text: &str) -> Result<Settings, ConfigError> {
     let raw: RawConfig =
         toml::from_str(text).map_err(|e| ConfigError(e.to_string()))?;
-    let background = match raw.background {
-        Some(hex) => Rgb::from_hex(&hex).ok_or_else(|| {
-            ConfigError(format!("background: '{hex}' isn't a #RRGGBB colour"))
-        })?,
-        None => Rgb::BLACK,
+    let background = raw
+        .background
+        .as_deref()
+        .map(parse_background)
+        .transpose()
+        .map_err(ConfigError)?
+        .unwrap_or(Background::Color(Rgb::BLACK));
+    let image = match raw.image.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(path) => Some(PathBuf::from(path)),
     };
+    let image_fit = raw
+        .image_fit
+        .as_deref()
+        .map(parse_fit)
+        .transpose()
+        .map_err(ConfigError)?
+        .unwrap_or_default();
     let layouts = (1_u32..)
         .zip(raw.layout)
         .map(|(number, layout)| {
@@ -422,6 +512,8 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
     };
     Ok(Settings {
         background,
+        image,
+        image_fit,
         layouts,
         discord,
         performance,
@@ -518,10 +610,52 @@ fn parse_layout(raw: RawLayout) -> Result<Layout, String> {
             parse_widget(&widget).map_err(|e| format!("widget {number}: {e}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let background = raw
+        .background
+        .as_deref()
+        .map(parse_background)
+        .transpose()?;
+    let image = match raw.image.as_deref().map(str::trim) {
+        None => ImageChoice::Inherit,
+        Some("") => ImageChoice::Off,
+        Some(path) => ImageChoice::Path(PathBuf::from(path)),
+    };
+    let image_fit = raw.image_fit.as_deref().map(parse_fit).transpose()?;
     Ok(Layout {
         monitor,
         size,
         widgets,
+        background,
+        image,
+        image_fit,
+    })
+}
+
+/// Parses a `background` value.
+fn parse_background(text: &str) -> Result<Background, String> {
+    if text.trim().eq_ignore_ascii_case("transparent") {
+        return Ok(Background::Transparent);
+    }
+    Rgb::from_hex(text).map(Background::Color).ok_or_else(|| {
+        format!(
+            "background: '{text}' isn't a #RRGGBB colour or \"transparent\""
+        )
+    })
+}
+
+/// Parses an `image_fit` value.
+fn parse_fit(text: &str) -> Result<Fit, String> {
+    Ok(match text {
+        "fill" => Fit::Fill,
+        "fit" => Fit::Contain,
+        "stretch" => Fit::Stretch,
+        "center" | "centre" => Fit::Center,
+        other => {
+            return Err(format!(
+                "image_fit: '{other}' isn't \"fill\", \"fit\", \"stretch\" \
+                 or \"center\""
+            ));
+        }
     })
 }
 
@@ -604,10 +738,13 @@ fn parse_anchor(text: &str) -> Result<Anchor, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::{
-        Anchor, DEFAULT_CONFIG, Layout, MonitorInfo, MonitorMatch, Placement,
-        Settings, parse,
+        Anchor, DEFAULT_CONFIG, ImageChoice, Layout, MonitorInfo, MonitorMatch,
+        Placement, Settings, parse,
     };
+    use crate::backdrop::{Background, Fit, Wallpaper};
     use crate::color::Rgb;
     use crate::geometry::Rect;
     use crate::widgets::Widget;
@@ -641,7 +778,7 @@ mod tests {
     #[test]
     fn empty_file_has_no_layouts() {
         let settings = parse("").unwrap();
-        assert_eq!(settings.background, Rgb::BLACK);
+        assert_eq!(settings.background, Background::Color(Rgb::BLACK));
         assert_eq!(settings.layouts, vec![]);
     }
 
@@ -664,11 +801,11 @@ mod tests {
         let settings = parse(text).unwrap();
         assert_eq!(
             settings.background,
-            Rgb {
+            Background::Color(Rgb {
                 r: 0x10,
                 g: 0x20,
                 b: 0x30
-            }
+            })
         );
         assert_eq!(
             settings.layouts[0],
@@ -680,6 +817,9 @@ mod tests {
                     anchor: Anchor::TopLeft,
                     offset: (10.0, 20.0),
                 }],
+                background: None,
+                image: ImageChoice::Inherit,
+                image_fit: None,
             }
         );
         assert_eq!(
@@ -689,9 +829,68 @@ mod tests {
     }
 
     #[test]
+    fn reads_backgrounds_and_pictures() {
+        let text = r##"
+            background = "Transparent"
+            image = 'pictures\sky.jpg'
+            image_fit = "fit"
+            [[layout]]
+            monitor = "DISPLAY2"
+            background = "#FFFFFF"
+            image = 'C:\walls\city.png'
+            image_fit = "centre"
+            [[layout]]
+            monitor = "primary"
+            image = ""
+            [[layout]]
+            monitor = "*"
+        "##;
+        let settings =
+            parse(text).unwrap().with_base_dir(Path::new(r"C:\config"));
+        let sky = PathBuf::from(r"C:\config\pictures\sky.jpg");
+        assert_eq!(settings.background, Background::Transparent);
+        assert_eq!(settings.image.as_deref(), Some(sky.as_path()));
+        assert_eq!(settings.image_fit, Fit::Contain);
+        let [second, primary, rest] = settings.layouts.as_slice() else {
+            panic!("three layouts");
+        };
+        let white = Background::Color(Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        });
+        let own = settings.backdrop_for(Some(second));
+        assert_eq!(own.background, white);
+        assert_eq!(
+            own.image,
+            Some(Wallpaper {
+                path: r"C:\walls\city.png".into(),
+                fit: Fit::Center,
+            })
+        );
+        let off = settings.backdrop_for(Some(primary));
+        assert_eq!(off.background, Background::Transparent);
+        assert_eq!(off.image, None);
+        let inherited = Some(Wallpaper {
+            path: sky,
+            fit: Fit::Contain,
+        });
+        assert_eq!(settings.backdrop_for(Some(rest)).image, inherited);
+        assert_eq!(settings.backdrop_for(None).image, inherited);
+    }
+
+    #[test]
     fn explains_mistakes() {
         let error = |text: &str| parse(text).unwrap_err().0;
         assert!(error("background = \"red\"").contains("background"));
+        assert!(error("image_fit = \"tile\"").contains("image_fit"));
+        assert!(
+            error(
+                "[[layout]]
+background = \"clear\""
+            )
+            .contains("layout 1")
+        );
         assert!(error("colour = 1").contains("colour"));
         assert!(
             error("[[layout]]\nmonitor = \"left one\"").contains("layout 1")

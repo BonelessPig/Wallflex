@@ -112,6 +112,15 @@ main {
   background: rgba(0, 0, 0, .55); color: #fff; pointer-events: none;
   white-space: nowrap;
 }
+.monitor.clear {
+  background: repeating-conic-gradient(rgba(128, 128, 128, .3) 0 25%,
+    transparent 0 50%) 0 0 / 16px 16px;
+}
+.monitor.pictured::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .08) 0 10px,
+    transparent 10px 20px);
+}
 .widget {
   position: absolute; cursor: grab; touch-action: none;
   outline: 1px dashed rgba(255, 255, 255, .25);
@@ -259,6 +268,12 @@ const KINDS = [
   ["discord", "Discord"],
   ["visualizer", "Music visualizer"],
 ];
+const FITS = [
+  ["fill", "Fill (covers the monitor, cropping)"],
+  ["fit", "Fit (whole picture, with bars)"],
+  ["stretch", "Stretch"],
+  ["center", "Centre (actual size)"],
+];
 const ANCHORS = [
   "top-left", "top", "top-right",
   "left", "center", "right",
@@ -308,15 +323,32 @@ function defaultOffset(anchor) {
   return [h === "middle" ? 0 : DEFAULT_OFFSET, v === "middle" ? 0 : DEFAULT_OFFSET];
 }
 
+function isTransparent(v) {
+  return String(v).trim().toLowerCase() === "transparent";
+}
+
+function fitOf(v) {
+  return v === "centre" ? "center" : v;
+}
+
 function fromConfig(c) {
   c = c || {};
   const p = c.panel || {}, n = c.network || {}, d = c.discord;
+  const bg = String(c.background || "#000000");
   return {
-    background: (c.background || "#000000").toUpperCase(),
+    transparent: isTransparent(bg),
+    background: isTransparent(bg) ? "#000000" : bg.toUpperCase(),
+    image: c.image ?? "",
+    image_fit: fitOf(c.image_fit) || "fill",
     performance: c.performance || "smooth",
     layouts: (c.layout || []).map((l) => ({
       monitor: l.monitor ?? "*",
       size: l.size ?? 1,
+      background: l.background == null ? null
+        : isTransparent(l.background) ? "transparent" : String(l.background).toUpperCase(),
+      imageMode: l.image == null ? "inherit" : String(l.image).trim() ? "file" : "none",
+      image: l.image ?? "",
+      image_fit: l.image_fit == null ? null : fitOf(l.image_fit),
       widgets: (l.widget || []).map((w) => {
         const anchor = w.anchor === "centre" ? "center" : (w.anchor || "bottom-right");
         const [dx, dy] = defaultOffset(anchor);
@@ -354,11 +386,17 @@ function toToml(m) {
     "# config.example.toml (next to wallflex.exe) explains every option;",
     "# you can still edit this file by hand.",
     "",
-    `background = ${str(m.background)}`,
-    `performance = ${str(m.performance)}`,
+    `background = ${str(m.transparent ? "transparent" : m.background)}`,
   ];
+  if (m.image.trim()) out.push(`image = ${str(m.image.trim())}`);
+  if (m.image_fit !== "fill") out.push(`image_fit = ${str(m.image_fit)}`);
+  out.push(`performance = ${str(m.performance)}`);
   for (const l of m.layouts) {
     out.push("", "[[layout]]", `monitor = ${str(l.monitor)}`, `size = ${num(l.size)}`);
+    if (l.background != null) out.push(`background = ${str(l.background)}`);
+    if (l.imageMode === "none") out.push('image = ""');
+    if (l.imageMode === "file" && l.image.trim()) out.push(`image = ${str(l.image.trim())}`);
+    if (l.image_fit != null) out.push(`image_fit = ${str(l.image_fit)}`);
     for (const w of l.widgets) {
       out.push("", "[[layout.widget]]", `kind = ${str(w.kind)}`);
       if (w.kind === "gpu") out.push(`gpu = ${Math.max(1, Math.round(w.gpu))}`);
@@ -497,6 +535,18 @@ function monitorSize(mon) {
 
 let view = null;
 
+/** What's behind the widgets on monitors using layout `li` (-1: none). */
+function backdropOf(li) {
+  const l = li >= 0 ? model.layouts[li] : null;
+  const own = l && l.background != null;
+  const transparent = own ? l.background === "transparent" : model.transparent;
+  const color = own && !transparent ? l.background : model.background;
+  let image = model.image.trim();
+  if (l && l.imageMode === "none") image = "";
+  if (l && l.imageMode === "file" && l.image.trim()) image = l.image.trim();
+  return { transparent, color, image };
+}
+
 function renderDesk() {
   const desk = $("desk");
   desk.textContent = "";
@@ -520,12 +570,14 @@ function renderDesk() {
   for (const mon of mons) {
     const li = layoutOf(mon);
     const el = document.createElement("div");
-    el.className = "monitor" + (li === selected.layout ? " active" : "");
+    const back = backdropOf(li);
+    el.className = "monitor" + (li === selected.layout ? " active" : "")
+      + (back.transparent ? " clear" : "") + (back.image ? " pictured" : "");
     Object.assign(el.style, {
       left: px(mon.rect.left) + "px", top: py(mon.rect.top) + "px",
       width: (mon.rect.right - mon.rect.left) * scale + "px",
       height: (mon.rect.bottom - mon.rect.top) * scale + "px",
-      background: model.background,
+      backgroundColor: back.transparent ? "" : back.color,
     });
     el.addEventListener("pointerdown", (e) => {
       if (e.target === el && li >= 0) select(li, -1);
@@ -544,7 +596,9 @@ function renderDesk() {
     const label = document.createElement("div");
     label.className = "label";
     label.textContent = `${mon.name}${mon.primary ? " (primary)" : ""} · ${monitorSize(mon)} · `
-      + (li >= 0 ? `layout ${li + 1}` : "no layout");
+      + (li >= 0 ? `layout ${li + 1}` : "no layout")
+      + (back.image ? ` · ${back.image.split(/[\\/]/).pop()}` : "")
+      + (back.transparent ? " · transparent" : "");
     el.appendChild(label);
     desk.appendChild(el);
     if (li < 0) continue;
@@ -728,12 +782,58 @@ function paneLayouts() {
       note,
       el("div", { class: "row" }, el("label", {}, "Size"),
         el("div", { class: "range grow" }, size, sizeNum)),
+      layoutBackdrop(l),
       el("div", { class: "wlist" }, l.widgets.map((w, wi) => widgetRow(li, wi))),
       addWidget(li));
     out.push(card);
   });
   out.push(el("button", { onclick: addLayout }, "+ Add layout"));
   return out;
+}
+
+/** A picture file box and its fit, for General or a layout. */
+function pictureFields(label, get, set, getFit, setFit, fits) {
+  return [
+    el("div", { class: "field" }, el("label", {}, label),
+      el("input", { type: "text", value: get(), spellcheck: false,
+        placeholder: "C:\\Users\\you\\Pictures\\wallpaper.jpg",
+        // Explorer's "Copy as path" adds quotes.
+        onchange: (e) => { set(e.target.value.trim().replace(/^"(.*)"$/, "$1")); changed(); } })),
+    el("div", { class: "row" }, el("label", {}, "Fit"),
+      el("select", { class: "grow", onchange: (e) => { setFit(e.target.value); changed(); } },
+        fits.map(([v, t]) => el("option", { value: v, selected: v === getFit() }, t)))),
+  ];
+}
+
+/** A layout's own background and picture, or General's. */
+function layoutBackdrop(l) {
+  const bgKind = l.background == null ? ""
+    : l.background === "transparent" ? "transparent" : "color";
+  const bgSel = el("select", { class: "grow", onchange: (e) => {
+    const v = e.target.value;
+    if (v === "") l.background = null;
+    else if (v === "transparent") l.background = "transparent";
+    else l.background = model.background;
+    changed();
+  } }, [["", "Same as General"], ["color", "Colour"], ["transparent", "Transparent"]]
+    .map(([v, t]) => el("option", { value: v, selected: v === bgKind }, t)));
+  const color = bgKind === "color" ? el("input", { type: "color",
+    value: l.background.toLowerCase(),
+    oninput: (e) => { l.background = e.target.value.toUpperCase(); changed(false); } }) : null;
+  const picSel = el("select", { class: "grow", onchange: (e) => {
+    l.imageMode = e.target.value;
+    changed();
+  } }, [["inherit", "Same as General"], ["none", "None"], ["file", "Its own"]]
+    .map(([v, t]) => el("option", { value: v, selected: v === l.imageMode }, t)));
+  const own = l.imageMode === "file" ? pictureFields("Picture file (full path)",
+    () => l.image, (v) => { l.image = v; },
+    () => l.image_fit ?? "", (v) => { l.image_fit = v || null; },
+    [["", "Same as General"], ...FITS]) : [];
+  return [
+    el("div", { class: "row" }, el("label", {}, "Background"), bgSel, color),
+    el("div", { class: "row" }, el("label", {}, "Picture"), picSel),
+    ...own,
+  ];
 }
 
 function widgetRow(li, wi) {
@@ -969,14 +1069,19 @@ function paneGeneral() {
       if (/^#?[0-9A-F]{6}$/.test(v)) model.background = v.startsWith("#") ? v : "#" + v;
       changed();
     } });
+  const bg = (transparent, label, help) => el("label", { class: "check" },
+    el("input", { type: "radio", name: "bg", checked: model.transparent === transparent,
+      onchange: () => { model.transparent = transparent; changed(); } }),
+    el("span", {}, label, el("small", {}, help)));
   const perf = (value, label, help) => el("label", { class: "check" },
     el("input", { type: "radio", name: "perf", checked: model.performance === value,
       onchange: () => { model.performance = value; changed(); } }),
     el("span", {}, label, el("small", {}, help)));
   return [
     el("h2", {}, "Background"),
-    el("p", {}, "The colour behind the widgets, in place of a wallpaper."),
-    el("div", { class: "row" },
+    el("p", {}, "What's behind the widgets. Each layout can choose its own."),
+    bg(false, "A colour", "In place of the Windows wallpaper."),
+    el("div", { class: "row", style: "margin-left: 24px" },
       el("input", { type: "color", value: model.background.toLowerCase(),
         oninput: (e) => {
           model.background = e.target.value.toUpperCase();
@@ -984,6 +1089,13 @@ function paneGeneral() {
           changed(false);
         } }),
       hex),
+    bg(true, "Transparent", "The Windows wallpaper shows through around the widgets."),
+    el("h2", {}, "Picture"),
+    el("p", {}, "Shown on every monitor, over the background, unless a layout picks "
+      + "its own or none. JPEG, PNG, BMP, GIF or TIFF."),
+    ...pictureFields("Picture file (full path; empty for none)",
+      () => model.image, (v) => { model.image = v; },
+      () => model.image_fit, (v) => { model.image_fit = v; }, FITS),
     el("h2", {}, "Performance"),
     perf("smooth", "Smooth", "Glides and the visualizer at up to 60 frames a second while the PC "
       + "has room, easing off when it gets busy."),
@@ -1117,7 +1229,8 @@ async function revert() {
 // ---- Previews ----
 
 function schedulePreview() {
-  const key = JSON.stringify([model.background, model.panel, model.network.seconds]);
+  const key = JSON.stringify([model.transparent || model.background, model.panel,
+    model.network.seconds]);
   if (key === previewKey) return;
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => refreshPreviews(key), PREVIEW_DELAY_MS);

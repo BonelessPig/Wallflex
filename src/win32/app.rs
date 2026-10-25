@@ -31,6 +31,7 @@ use super::audio::AudioTap;
 use super::desktop::{self, DesktopHost, Layout};
 use super::discord::{BotSettings, DiscordLink};
 use super::images::ImageFetcher;
+use super::layer;
 use super::media::MediaWatcher;
 use super::mouse::{self, MouseHook};
 use super::sensors::Sensors;
@@ -40,6 +41,7 @@ use super::tray::{self, Choice, Tray};
 use super::usage::{self, CpuMeter};
 use super::{class_name, monitors, struct_size};
 use crate::args::Options;
+use crate::backdrop::{Backdrop, Background};
 use crate::config::{self, DiscordSettings, MonitorInfo, Settings};
 use crate::discord::session::Credentials;
 use crate::geometry::Rect;
@@ -233,7 +235,9 @@ impl ConfigFile {
         match config::parse(&text) {
             Ok(settings) => {
                 log!("loaded settings from {path}");
-                Some(settings)
+                // Pictures are found from the config file's folder.
+                let folder = self.path.parent().unwrap_or(&self.path);
+                Some(settings.with_base_dir(folder))
             }
             Err(error) => {
                 log!(
@@ -308,6 +312,7 @@ pub fn run(
     let instance = module_instance()?;
     register_controller_class(instance)?;
     surface::register_class(instance)?;
+    layer::register_class(instance)?;
 
     // SAFETY: the string is a valid null-terminated constant.
     let taskbar = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
@@ -1168,7 +1173,10 @@ fn check(host: &DesktopHost, surfaces: &[Surface]) -> Health {
     if host.layout == Layout::Raised {
         // SAFETY: GetWindow only reads window relationships.
         let below_icons = unsafe { GetWindow(host.icons, GW_HWNDNEXT) }.ok();
-        if !surfaces.iter().any(|s| Some(s.hwnd()) == below_icons) {
+        let ours = below_icons.is_some_and(|hwnd| {
+            surfaces.iter().any(|surface| surface.owns(hwnd))
+        });
+        if !ours {
             return Health::WrongOrder;
         }
     }
@@ -1229,10 +1237,7 @@ fn rebuild() {
         return;
     };
     // A --color on the command line beats the config file.
-    let background = OPTIONS
-        .get()
-        .and_then(|o| o.background)
-        .unwrap_or(settings.background);
+    let color = OPTIONS.get().and_then(|o| o.background);
 
     let host = match desktop::find() {
         Ok(host) => host,
@@ -1266,7 +1271,17 @@ fn rebuild() {
             info.width,
             info.height
         );
-        match surface::create(&host, &monitor, instance, background, layout) {
+        let backdrop = match color {
+            Some(color) => Backdrop {
+                background: Background::Color(color),
+                image: None,
+            },
+            None => settings.backdrop_for(layout),
+        };
+        if let Some(image) = &backdrop.image {
+            log!("{short_name}: picture {}", image.path.display());
+        }
+        match surface::create(&host, &monitor, instance, &backdrop, layout) {
             Ok(surface) => surfaces.push(surface),
             Err(error) => log!("no surface for {short_name}: {error}"),
         }

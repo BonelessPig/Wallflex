@@ -12,6 +12,14 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- `background = "transparent"` keeps your Windows wallpaper and draws
+  just the widgets on top, with smooth edges and text.
+- `image` shows a picture behind the widgets (JPEG, PNG, BMP, GIF or
+  TIFF), fitted with `image_fit`: `"fill"`, `"fit"`, `"stretch"` or
+  `"center"`. Set it once for every monitor, or per layout for a
+  different picture (or none) on each. The settings app has both under
+  **General**, and per layout.
+
 - An installer, `wallflex-<version>-setup.exe`: installs for your
   account only (no admin), adds a Start menu entry and optionally
   starts Wallflex at sign-in. Upgrades close the running copy and keep
