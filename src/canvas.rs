@@ -128,12 +128,44 @@ impl<'a> Canvas<'a> {
     pub fn fill_rect(&mut self, area: Area, paint: Paint) {
         let (rows, cols) =
             (self.span_y(area.y0, area.y1), self.span_x(area.x0, area.x1));
+        // With opaque paint, pixels the area covers completely just take
+        // its colour (blending at full strength gives exactly that), so
+        // they're written straight in: most of a solid bar. Only the
+        // smoothed edges are blended.
+        let full = within(
+            f64_to_index(area.x0.ceil())..f64_to_index(area.x1.floor()),
+            &cols,
+        );
+        let solid = (paint.alpha >= 1.0).then(|| pack(paint.color));
         for y in rows {
             let cover_y = overlap(index_to_f64(y), area.y0, area.y1);
+            let fast = solid.filter(|_| cover_y >= 1.0);
+            if let Some(value) = fast {
+                self.fill_span(y, full.clone(), value);
+            }
             for x in cols.clone() {
+                if fast.is_some() && full.contains(&x) {
+                    continue;
+                }
                 let cover_x = overlap(index_to_f64(x), area.x0, area.x1);
                 self.blend(x, y, paint, cover_x * cover_y);
             }
+        }
+    }
+
+    /// Sets columns `cols` of row `y` to `value`.
+    fn fill_span(
+        &mut self,
+        y: usize,
+        cols: std::ops::Range<usize>,
+        value: u32,
+    ) {
+        let start = y.checked_mul(self.width);
+        let span = start.and_then(|s| {
+            Some(s.checked_add(cols.start)?..s.checked_add(cols.end)?)
+        });
+        if let Some(row) = span.and_then(|r| self.pixels.get_mut(r)) {
+            row.fill(value);
         }
     }
 
@@ -517,6 +549,13 @@ impl<'a> Canvas<'a> {
         });
     }
 
+    /// Whether any of `area` (pixels) is inside the clip, so a caller
+    /// can skip work that a clipped repaint wouldn't show.
+    pub fn touches(&self, area: Area) -> bool {
+        !self.span_x(area.x0, area.x1).is_empty()
+            && !self.span_y(area.y0, area.y1).is_empty()
+    }
+
     /// Pixel columns that `x0..x1` touches, clipped to the canvas.
     fn span_x(&self, x0: f64, x1: f64) -> std::ops::Range<usize> {
         within(clip_span(x0, x1, self.width), &self.clip.0)
@@ -761,6 +800,96 @@ fn unit_to_u8(value: f64) -> u8 {
 mod tests {
     use super::{Area, Canvas, Paint, mix, unpack};
     use crate::color::Rgb;
+
+    /// `fill_rect` as it was before its fast path: every pixel blended.
+    fn fill_rect_reference(
+        pixels: &mut [u32],
+        width: usize,
+        area: Area,
+        paint: Paint,
+    ) {
+        for (i, pixel) in pixels.iter_mut().enumerate() {
+            let (x, y) =
+                (i.checked_rem(width).unwrap(), i.checked_div(width).unwrap());
+            let cover = |cell: usize, start: f64, end: f64| {
+                let cell = f64::from(u32::try_from(cell).unwrap());
+                (end.min(cell + 1.0) - start.max(cell)).clamp(0.0, 1.0)
+            };
+            let amount = (cover(x, area.x0, area.x1)
+                * cover(y, area.y0, area.y1)
+                * paint.alpha)
+                .clamp(0.0, 1.0);
+            if amount > 0.0 {
+                *pixel = super::pack(mix(paint.color, unpack(*pixel), amount));
+            }
+        }
+    }
+
+    #[test]
+    fn fast_fills_match_blended_fills() {
+        let background = super::pack(Rgb {
+            r: 30,
+            g: 60,
+            b: 90,
+        });
+        let areas = [
+            (1.0, 1.0, 9.0, 7.0),
+            (0.3, 0.6, 8.7, 9.2),
+            (2.5, -3.0, 3.4, 12.0),
+            (-4.0, 4.25, 20.0, 4.75),
+            (6.9, 2.0, 6.95, 9.0),
+        ];
+        for alpha in [1.0, 0.5] {
+            for (x0, y0, x1, y1) in areas {
+                let area = Area { x0, y0, x1, y1 };
+                let paint = Paint {
+                    color: Rgb {
+                        r: 200,
+                        g: 120,
+                        b: 10,
+                    },
+                    alpha,
+                };
+                let mut expected = vec![background; 100];
+                fill_rect_reference(&mut expected, 10, area, paint);
+                let mut pixels = vec![background; 100];
+                Canvas::new(10, 10, &mut pixels)
+                    .unwrap()
+                    .fill_rect(area, paint);
+                assert_eq!(pixels, expected, "{area:?} at alpha {alpha}");
+                // And inside a clip.
+                let mut clipped = vec![background; 100];
+                let mut canvas = Canvas::new(10, 10, &mut clipped).unwrap();
+                canvas.set_clip(3..6, 2..8);
+                canvas.fill_rect(area, paint);
+                for (i, (got, want)) in
+                    clipped.iter().zip(&expected).enumerate()
+                {
+                    let (x, y) = (
+                        i.checked_rem(10).unwrap(),
+                        i.checked_div(10).unwrap(),
+                    );
+                    let inside = (3..6).contains(&x) && (2..8).contains(&y);
+                    let want = if inside { *want } else { background };
+                    assert_eq!(*got, want, "({x}, {y}) of {area:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn knows_what_the_clip_touches() {
+        let mut pixels = vec![0_u32; 100];
+        let mut canvas = Canvas::new(10, 10, &mut pixels).unwrap();
+        let area = |x0, y0, x1, y1| Area { x0, y0, x1, y1 };
+        assert!(canvas.touches(area(2.0, 2.0, 4.0, 4.0)));
+        canvas.set_clip(5..8, 5..8);
+        assert!(!canvas.touches(area(2.0, 2.0, 4.0, 4.0)));
+        assert!(!canvas.touches(area(2.0, 6.0, 4.9, 7.0)));
+        // Any part of a pixel counts: smoothed edges reach it.
+        assert!(canvas.touches(area(2.0, 6.0, 5.1, 7.0)));
+        assert!(!canvas.touches(area(20.0, 20.0, 30.0, 30.0)));
+    }
 
     #[test]
     fn graph_line_matches_polyline() {

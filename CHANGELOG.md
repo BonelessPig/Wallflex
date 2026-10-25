@@ -36,6 +36,10 @@ patch number (0.x.**y**) for fixes only.
 - The network graph shows the last 30 seconds by default (was a
   minute), with rounded lines and filled areas under download and
   upload.
+- Animation costs less: a frame of the gliding bars no longer redraws
+  the panel's other blocks, solid fills skip the blending maths, and
+  Discord updates repaint only the Discord widget (a 4K glide frame
+  went from about 0.97 ms to 0.82 ms).
 - Smooth mode now stays smooth until the PC is 80% busy, then drops
   straight to light (it eased off at 60% and again at 85%).
 - In light mode, a monitor hidden by a full-screen window stops

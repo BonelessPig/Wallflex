@@ -254,6 +254,11 @@ pub enum Widget {
 const NET_PEAK_SETTLED: f64 = 0.002;
 /// Room around a moving part, so its smoothed edges repaint too.
 const MOVING_MARGIN: f64 = 1.0;
+/// Room around a panel block (the CPU, network, a GPU chart, the info
+/// row) when deciding whether a repaint reaches it: smoothed edges and
+/// text that pokes out a little. Blocks are `ROW_GAP` or `COLUMN_GAP`
+/// apart, so this never pulls in a neighbour.
+const BLOCK_MARGIN: f64 = 4.0;
 /// Top of the RAM bar, under the RAM text.
 const RAM_BAR_TOP: f64 = HEAD_SIZE * 1.4;
 /// Thickness of the RAM bar.
@@ -931,21 +936,32 @@ impl Dashboard {
 
     /// The panel: CPU and network side by side, GPUs under them, then
     /// the RAM/SSD line.
+    ///
+    /// Blocks a clipped repaint doesn't reach are skipped: a glide frame
+    /// repaints the panel's moving parts one at a time, and drawing the
+    /// whole panel (the graph's curves, every GPU's text) for each was
+    /// most of what animation cost.
     fn draw_panel(&self, pen: &mut Pen<'_, '_>) {
         let layout = self.panel_layout();
         if let Some(x) = layout.cpu {
             pen.origin = (x, 0.0);
-            self.draw_cpu(pen);
+            if pen.reaches(cpu_block_area()) {
+                self.draw_cpu(pen);
+            }
         }
         if let Some(x) = layout.network {
             pen.origin = (x, 0.0);
-            self.draw_net(pen);
+            if pen.reaches(net_block_area()) {
+                self.draw_net(pen);
+            }
         }
         pen.origin = (0.0, layout.gpus_top);
         self.draw_gpus(pen);
         if let Some(top) = layout.info_top {
             pen.origin = (0.0, top);
-            self.draw_info(pen);
+            if pen.reaches(info_block_area()) {
+                self.draw_info(pen);
+            }
         }
         pen.origin = (0.0, 0.0);
     }
@@ -1158,10 +1174,14 @@ impl Dashboard {
         pen.text((right, labels_y), NET_TEXT, QUIET, Align::Right, "NOW");
     }
 
-    /// One ring chart per GPU, two per row.
+    /// One ring chart per GPU, two per row; charts a clipped repaint
+    /// doesn't reach are skipped.
     fn draw_gpus(&self, pen: &mut Pen<'_, '_>) {
         let levels = self.shown();
         for (spot, index) in self.shown_gpus().into_iter().enumerate() {
+            if !pen.reaches(gpu_chart_area(gpu_grid_spot(spot))) {
+                continue;
+            }
             if let Some(gpu) = self.snapshot.gpus.get(index) {
                 let rings = gpu_rings(&levels.rings, index);
                 draw_ring_chart(pen, gpu_grid_spot(spot), gpu, rings);
@@ -1560,6 +1580,28 @@ fn net_block_area() -> Area {
     }
 }
 
+/// A whole GPU chart whose rings start at `(left, top)`: its name
+/// above, the rings and the legend beside them (which reaches a little
+/// above and below the rings; `BLOCK_MARGIN` covers that).
+fn gpu_chart_area((left, top): (f64, f64)) -> Area {
+    Area {
+        x0: left,
+        y0: top - RING_NAME_ROOM,
+        x1: left + COLUMN_W,
+        y1: top + RING_SIZE,
+    }
+}
+
+/// The whole info row (RAM text and bar, SSD temperatures).
+fn info_block_area() -> Area {
+    Area {
+        x0: 0.0,
+        y0: 0.0,
+        x1: PANEL_W,
+        y1: INFO_H,
+    }
+}
+
 /// The RAM bar, in the info row.
 fn ram_bar_area() -> Area {
     Area {
@@ -1670,6 +1712,18 @@ struct Pen<'a, 'b> {
 }
 
 impl Pen<'_, '_> {
+    /// Whether anything drawn in `area` (units, from the origin), give
+    /// or take `BLOCK_MARGIN`, would show inside the canvas's clip.
+    fn reaches(&self, area: Area) -> bool {
+        let grown = Area {
+            x0: area.x0 - BLOCK_MARGIN,
+            y0: area.y0 - BLOCK_MARGIN,
+            x1: area.x1 + BLOCK_MARGIN,
+            y1: area.y1 + BLOCK_MARGIN,
+        };
+        self.canvas.touches(self.px(grown))
+    }
+
     /// An area from units to pixels.
     fn px(&self, area: Area) -> Area {
         let (ox, oy) = self.origin;
@@ -1977,7 +2031,209 @@ mod tests {
     };
     use crate::canvas::Canvas;
     use crate::color::Rgb;
-    use crate::sensors::{Cpu, Gpu, Network, Snapshot};
+    use crate::sensors::{Cpu, DiskTemp, Gpu, Memory, Network, Snapshot};
+
+    /// A busy reading, varied by `step`, with something in every part
+    /// of the panel.
+    fn busy(step: u32) -> Snapshot {
+        let gpu = |name: &str, use_: f64| Gpu {
+            name: name.into(),
+            usage: Some(use_),
+            temp_c: Some(61.0),
+            temp_max_c: Some(90.0),
+            fan_rpm: Some(1400),
+            fan_max_rpm: Some(3000),
+            power_percent: Some(48.0),
+            vram_used_bytes: Some(3_000_000_000),
+            vram_total_bytes: Some(8_000_000_000),
+        };
+        let shift = f64::from(step) * 13.0;
+        Snapshot {
+            cpu: Cpu {
+                total: Some(37.0),
+                per_core: (0_u32..16)
+                    .map(|c| (f64::from(c) * 17.0 + shift) % 100.0)
+                    .collect(),
+                cores: Vec::new(),
+                clock_ghz: Some(4.25),
+            },
+            memory: Some(Memory {
+                used_bytes: 12_000_000_000,
+                total_bytes: 32_000_000_000,
+                modules: 2,
+            }),
+            network: Some(Network {
+                down_kbps: 2_000.0 + shift * 900.0,
+                up_kbps: 300.0 + shift * 40.0,
+                link_kbps: Some(1_000_000.0),
+            }),
+            gpus: vec![
+                gpu("NVIDIA GeForce GTX 1070 Ti", 30.0 + shift),
+                gpu("NVIDIA GeForce RTX 2080", 70.0),
+            ],
+            disks: vec![DiskTemp {
+                disk: 0,
+                name: None,
+                temp_c: 41,
+            }],
+        }
+    }
+
+    /// Draws `widget` as a repaint does (background, then the widget),
+    /// clipped to `clip` if given. Returns the pixels and the text.
+    fn paint(
+        dashboard: &Dashboard,
+        widget: Widget,
+        clip: Option<(std::ops::Range<usize>, std::ops::Range<usize>)>,
+    ) -> (Vec<u32>, Vec<super::Label>) {
+        let mut pixels = vec![0_u32; CANVAS.0.saturating_mul(CANVAS.1)];
+        let drawing = {
+            let mut canvas =
+                Canvas::new(CANVAS.0, CANVAS.1, &mut pixels).unwrap();
+            if let Some((x, y)) = clip {
+                canvas.set_clip(x, y);
+            }
+            canvas.fill(Rgb::BLACK);
+            dashboard.draw(widget, &mut canvas, SCALE, Rgb::BLACK)
+        };
+        (pixels, drawing.labels)
+    }
+
+    /// Room for the panel at `SCALE` (433 x 249 units).
+    const CANVAS: (usize, usize) = (860, 500);
+    /// About a 4K monitor at size 0.9.
+    const SCALE: f64 = 1.94;
+
+    /// Pixel columns and rows that `area` (units) covers at `SCALE`.
+    fn pixels_of(
+        area: super::Area,
+    ) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+        let px = |v: f64| -> usize {
+            format!("{:.0}", (v * SCALE).max(0.0)).parse().unwrap()
+        };
+        (px(area.x0)..px(area.x1), px(area.y0)..px(area.y1))
+    }
+
+    /// Times a glide frame of the panel as a repaint draws it: each
+    /// moving part (CPU columns, network graph, each GPU's rings, the RAM
+    /// bar) drawn on its own, clipped. Run with
+    /// `cargo test --release bench_glide -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a benchmark, not a check"]
+    fn bench_glide_frames() {
+        use super::{
+            cpu_columns_area, gpu_grid_spot, net_plot_area, ram_bar_area,
+            ring_area, shift, shift_x,
+        };
+        let mut dashboard = Dashboard::default();
+        for step in 0..6 {
+            dashboard.update(busy(step));
+        }
+        dashboard.settle();
+        let layout = dashboard.panel_layout();
+        let mut parts = Vec::new();
+        parts.extend(layout.cpu.map(|x| shift_x(cpu_columns_area(), x)));
+        parts.extend(layout.network.map(|x| shift_x(net_plot_area(), x)));
+        for spot in 0..layout.gpus.len() {
+            let rings = ring_area(gpu_grid_spot(spot));
+            parts.push(shift(rings, layout.gpus_top));
+        }
+        parts.extend(layout.info_top.map(|top| shift(ram_bar_area(), top)));
+        let clips: Vec<_> = parts.into_iter().map(pixels_of).collect();
+        let frames = 2_000_u32;
+        let mut pixels = vec![0_u32; CANVAS.0.saturating_mul(CANVAS.1)];
+        let start = std::time::Instant::now();
+        for _ in 0..frames {
+            for (x, y) in &clips {
+                let mut canvas =
+                    Canvas::new(CANVAS.0, CANVAS.1, &mut pixels).unwrap();
+                canvas.set_clip(x.clone(), y.clone());
+                canvas.fill(Rgb::BLACK);
+                let drawing = dashboard.draw(
+                    Widget::Panel,
+                    &mut canvas,
+                    SCALE,
+                    Rgb::BLACK,
+                );
+                std::hint::black_box(drawing);
+            }
+        }
+        let per_frame = start.elapsed() / frames;
+        for (x, y) in &clips {
+            let one = std::time::Instant::now();
+            for _ in 0..frames {
+                let mut canvas =
+                    Canvas::new(CANVAS.0, CANVAS.1, &mut pixels).unwrap();
+                canvas.set_clip(x.clone(), y.clone());
+                canvas.fill(Rgb::BLACK);
+                let drawing = dashboard.draw(
+                    Widget::Panel,
+                    &mut canvas,
+                    SCALE,
+                    Rgb::BLACK,
+                );
+                std::hint::black_box(drawing);
+            }
+            println!(
+                "  part {x:?} x {y:?}: {} us",
+                (one.elapsed() / frames).as_micros()
+            );
+        }
+        println!(
+            "panel glide frame ({} parts): {} us",
+            clips.len(),
+            per_frame.as_micros()
+        );
+    }
+
+    #[test]
+    fn clipped_repaints_match_the_full_panel() {
+        let mut dashboard = Dashboard::default();
+        for step in 0..6 {
+            dashboard.update(busy(step));
+        }
+        dashboard.settle();
+        let (full, labels) = paint(&dashboard, Widget::Panel, None);
+        // Small windows all over the panel, as glide frames repaint.
+        let (w, h) = (61, 29);
+        for top in (0..CANVAS.1).step_by(23) {
+            for left in (0..CANVAS.0).step_by(47) {
+                let (right, bottom) =
+                    (left.saturating_add(w), top.saturating_add(h));
+                let clip =
+                    (left..right.min(CANVAS.0), top..bottom.min(CANVAS.1));
+                let (part, part_labels) =
+                    paint(&dashboard, Widget::Panel, Some(clip.clone()));
+                for y in clip.1.clone() {
+                    for x in clip.0.clone() {
+                        let at = y.saturating_mul(CANVAS.0).saturating_add(x);
+                        assert_eq!(
+                            part[at], full[at],
+                            "pixel ({x}, {y}) differs when clipped to {clip:?}"
+                        );
+                    }
+                }
+                // Text anchored in or next to the window must be there.
+                for label in &labels {
+                    let near_x = label.x + label.size
+                        >= f64::from(u32::try_from(left).unwrap())
+                        && label.x - label.size
+                            <= f64::from(u32::try_from(right).unwrap());
+                    let near_y = label.y + label.size
+                        >= f64::from(u32::try_from(top).unwrap())
+                        && label.y - label.size
+                            <= f64::from(u32::try_from(bottom).unwrap());
+                    if near_x && near_y {
+                        assert!(
+                            part_labels.contains(label),
+                            "'{}' missing when clipped to {clip:?}",
+                            label.text
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn split(name: &str) -> (String, String) {
         split_gpu_name(name)

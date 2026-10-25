@@ -121,8 +121,27 @@ impl Painter {
     /// The areas to repaint after new data: where each widget is now
     /// and, if it moved or changed size, where it was.
     pub fn dirty_rects(&self, dashboard: &Dashboard) -> Vec<RECT> {
+        self.changed_rects(dashboard, |_| true)
+    }
+
+    /// The same as [`Self::dirty_rects`], for just the `widget`s.
+    pub fn widget_rects(
+        &self,
+        dashboard: &Dashboard,
+        widget: Widget,
+    ) -> Vec<RECT> {
+        self.changed_rects(dashboard, |w| w == widget)
+    }
+
+    /// Where the widgets `wanted` picks are now, plus where they were
+    /// last painted if that differs, in client pixels.
+    fn changed_rects(
+        &self,
+        dashboard: &Dashboard,
+        wanted: impl Fn(Widget) -> bool,
+    ) -> Vec<RECT> {
         let mut rects = Vec::new();
-        for slot in &self.slots {
+        for slot in self.slots.iter().filter(|s| wanted(s.placement.widget)) {
             let now = self.slot_rect(slot.placement, dashboard);
             rects.extend(now.map(to_win32_rect));
             if slot.last != now {

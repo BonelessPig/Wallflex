@@ -1505,8 +1505,10 @@ fn on_discord_update() {
         if *sleep == Sleep::Awake {
             fetch_wanted_images(dashboard, images.as_mut());
         }
+        // Only the Discord widget shows Discord; repainting the rest for
+        // every presence or speaking change was wasted work.
         for surface in surfaces.iter() {
-            surface.invalidate_widgets(dashboard);
+            surface.invalidate_widget(dashboard, Widget::Discord);
         }
     });
 }

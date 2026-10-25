@@ -25,7 +25,7 @@ use super::struct_size;
 use crate::color::Rgb;
 use crate::config::Layout as ConfigLayout;
 use crate::geometry::{Point, Rect};
-use crate::widgets::{Action, Dashboard};
+use crate::widgets::{Action, Dashboard, Widget};
 
 /// Window class for surfaces.
 const SURFACE_CLASS: PCWSTR = w!("WallflexSurface");
@@ -151,6 +151,12 @@ impl Surface {
                 InvalidateRect(Some(self.hwnd), Some(&raw const rect), false)
             };
         }
+    }
+
+    /// Asks Windows to repaint every `widget` on this monitor (and where
+    /// it was, if it moved or changed size).
+    pub fn invalidate_widget(&self, dashboard: &Dashboard, widget: Widget) {
+        self.invalidate_rects(&self.painter.widget_rects(dashboard, widget));
     }
 
     /// Asks Windows to repaint just the parts of the widgets that are

@@ -348,6 +348,24 @@ feeding fake music every frame 0.34-0.58%, so the bars cost about 0.1%
 or less. Memory +3.5 MB working set, +1 MB private (Windows audio DLLs,
 3 more threads). Not yet watched live with real music.
 
+Where animation time goes (24 Oct 2026, release build, 4K at size
+0.9, panel + visualizer + Discord, music playing): 130-250 ms of
+main-thread time a second, almost all of it `WM_PAINT`. A shared
+timer for the glide and visualizer was tried and dropped: it halved
+the paints (~125 to ~68 a second) but not the time, measured back to
+back, since the cost is pixels drawn, not paints. Per part of a glide
+frame (`cargo test --release bench_glide -- --ignored --nocapture`):
+CPU columns 315 us, network graph 113, each GPU's rings ~200, RAM
+bar 72; an empty-clip draw is 2 us, so it's pixel work, ~7 ns a
+pixel. Skipping panel blocks outside the clip (`Pen::reaches`) gave
+9%, and writing opaque fully-covered pixels straight in
+(`Canvas::fill_rect`) took the CPU columns to 236 us: 965 to 820 us a
+frame overall. What's left: blends (`Canvas::blend` is float maths
+per pixel), and repainting whole moving areas when only a band of
+each column changes. Note the governor counts every thread: its
+3-4.5% step-downs were more than the main thread showed, so catch
+one with per-thread times before blaming painting.
+
 Smoother smooth mode (24 Oct 2026): CPU and network four times a
 second, CPU glides lasting until the next reading, ring/RAM glides a
 full second, and the network graph sliding between readings with its
