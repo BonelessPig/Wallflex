@@ -68,7 +68,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   visualizer at ~64 fps; Normal: 0.3 s / ~32 fps; Light: no glides,
   sensors once a second, visualizer ~16 fps). The `Governor` drops
   straight to Light at once when the PC is 80% busy, steps down a level
-  when Wallflex is over 2% CPU for 3 s (`win32/usage.rs` measures it),
+  when Wallflex is over 2% CPU for 3 s (`win32/usage.rs` measures it
+  by cycle count, not the tick-sampled process times),
   and climbs back one level per 10 calm seconds. Timer intervals sit
   just under whole 15.625 ms system ticks (15, 31, 62 ms), since a
   timer fires on the first tick after it's due. Over 120 MB private,
@@ -367,9 +368,20 @@ pixel underneath and the strength repeat (translucent outlines over
 the background): CPU columns 57 us, RAM bar 11, 572 us a frame. Edges
 round independently, so at 1080 columns and gaps can differ by a
 pixel. What's left: the rings' arcs (~200 us per GPU, smoothed by
-nature, ~16 fps) and the network graph (~100 us, ~32 fps). Note the governor counts every thread: its
-3-4.5% step-downs were more than the main thread showed, so catch
-one with per-thread times before blaming painting.
+nature, ~16 fps) and the network graph (~100 us, ~32 fps).
+
+CPU spikes that weren't (24 Oct 2026): Task Manager and the governor
+showed Wallflex jumping to 3-5% every few minutes, and the governor
+kept stepping down to normal for 10-20 s. Per-thread times said the
+main thread, but no message handler, sent or posted, was busy then.
+`GetProcessTimes`/`GetThreadTimes` (and Task Manager) charge a whole
+15.6 ms clock tick to the thread running when it lands, and the frame
+timers wake Wallflex right on the ticks. Side by side with
+`QueryThreadCycleTime`: busy seconds read 270-390 ms sampled against
+92-102 ms of cycles. `CpuMeter` now divides `QueryProcessCycleTime` by
+the timestamp counter (`_rdtsc`; Windows counts thread cycles in its
+units). To measure Wallflex from outside, use cycle counts (Process
+Explorer) rather than Task Manager's CPU column.
 
 Smoother smooth mode (24 Oct 2026): CPU and network four times a
 second, CPU glides lasting until the next reading, ring/RAM glides a

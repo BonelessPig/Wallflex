@@ -50,6 +50,16 @@ patch number (0.x.**y**) for fixes only.
   hidden, Wallflex sleeps (no sensor readings, sound capture or
   animation) until one is visible again.
 
+### Fixed
+
+- Wallflex no longer keeps switching itself from smooth to normal for
+  no reason. It measured its own CPU use with Windows' usual counters,
+  which charge a whole 15.6 ms clock tick to whatever is running when
+  the tick lands; with animation timers waking it right on the ticks,
+  that read three to four times the real use. It now counts CPU
+  cycles. (Task Manager uses the same tick counters, so it still shows
+  short 3-5% jumps that aren't real.)
+
 ## [0.1.0] - 2026-10-24
 
 The first release.
