@@ -28,8 +28,8 @@ use crate::backdrop::{self, Backdrop, Background, Mapping, Wallpaper};
 use crate::color::Rgb;
 use crate::config::Layout as ConfigLayout;
 use crate::geometry::{Point, Rect};
-use crate::widgets::{Action, Dashboard, Widget};
 use crate::log;
+use crate::widgets::{Action, Dashboard, Widget};
 
 /// Window class for surfaces.
 const SURFACE_CLASS: PCWSTR = w!("WallflexSurface");

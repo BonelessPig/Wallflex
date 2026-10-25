@@ -148,6 +148,13 @@ impl<'a> Canvas<'a> {
             &cols,
         );
         let solid = (paint.alpha >= 1.0).then(|| pack(paint.color));
+        let channel = |c: u8| f64::from(c) / 255.0;
+        let ink = [
+            channel(paint.color.r),
+            channel(paint.color.g),
+            channel(paint.color.b),
+            1.0,
+        ];
         // Translucent paint over a plain background gives the same
         // result pixel after pixel: the last blend is reused when the
         // pixel underneath and the strength match.
@@ -174,8 +181,9 @@ impl<'a> Canvas<'a> {
                 *pixel = match last {
                     Some((under, k, out)) if under == *pixel && k == key => out,
                     _ => {
-                        let out =
-                            pack(mix(paint.color, unpack(*pixel), amount));
+                        // Premultiplied, so see-through canvases keep
+                        // their alpha.
+                        let out = over(*pixel, ink, amount);
                         last = Some((*pixel, key, out));
                         out
                     }
