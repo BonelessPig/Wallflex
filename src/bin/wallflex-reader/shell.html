@@ -5,7 +5,11 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none';
   script-src 'unsafe-inline'; style-src 'unsafe-inline';
   img-src https://guides.wallflex data:; media-src https://guides.wallflex;
-  frame-src https://guides.wallflex about:">
+  frame-src https://guides.wallflex about: https: http: mailto:">
+<!-- frame-src also decides where a guide's frame may navigate. Web and
+  mail links must pass it, or Edge shows "This content is blocked" in the
+  frame; the app cancels each such navigation (messages::judge) and opens
+  it in the default browser instead, so nothing but guides ever loads. -->
 <title>Guides</title>
 <style>
 :root {
