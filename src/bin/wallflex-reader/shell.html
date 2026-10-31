@@ -268,6 +268,7 @@ iframe {
   border: 1px solid var(--rule);
   color: var(--ink);
 }
+#error { background: var(--bg); }
 [hidden] { display: none !important; }
 #menu {
   position: absolute;
@@ -324,6 +325,16 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
   text-overflow: ellipsis;
 }
 .item .kind { flex: none; color: var(--quiet); font-size: 11px; }
+.item .convert {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--quiet);
+  font-size: 11px;
+}
+.item .convert:hover { color: var(--accent); border-color: var(--accent); }
+.item .convert.busy { pointer-events: none; opacity: 0.6; }
 .item.current { color: var(--accent); font-weight: 600; }
 .item.active { background: var(--hover); }
 .none { padding: 10px 8px; color: var(--quiet); }
@@ -452,13 +463,14 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
 <main id="main">
   <div class="note" id="empty" hidden>
     <strong>No guides yet</strong>
-    <div>Put Markdown, HTML, PDF or text files in your Guides folder:</div>
+    <div>Put Markdown, HTML, PDF, LaTeX or text files in your Guides folder:</div>
     <code id="where"></code>
     <button id="open-folder">Open the Guides folder</button>
   </div>
   <div class="note" id="error" hidden>
-    <strong>Can't show this guide</strong>
+    <strong id="error-title">Can't show this guide</strong>
     <div id="error-text"></div>
+    <button id="error-dismiss" hidden>OK</button>
   </div>
   <div id="style" hidden>
     <div class="label">Theme</div>
@@ -488,7 +500,7 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
 const webview = window.chrome && window.chrome.webview;
 const $ = (id) => document.getElementById(id);
 const send = (message) => { if (webview) webview.postMessage(message); };
-const KIND_NAMES = { markdown: "", text: "TXT", html: "HTML", pdf: "PDF" };
+const KIND_NAMES = { markdown: "", text: "TXT", html: "HTML", pdf: "PDF", tex: "TEX" };
 
 // Reading styles: the app only checks and stores these names.
 const THEMES = [
@@ -758,8 +770,7 @@ function onShow(message) {
   $("empty").hidden = true;
   removeView();
   if (message.error) {
-    $("error-text").textContent = message.error;
-    $("error").hidden = false;
+    showError("Can't show this guide", message.error, false);
     return;
   }
   $("error").hidden = true;
@@ -775,6 +786,28 @@ function onShow(message) {
     view.src = message.url;
   }
   $("main").prepend(view);
+}
+
+function showError(title, text, dismissable) {
+  $("error-title").textContent = title;
+  $("error-text").textContent = text;
+  $("error-dismiss").hidden = !dismissable;
+  $("error").hidden = false;
+}
+
+// Pandoc has turned an HTML or LaTeX guide into Markdown (or failed).
+function onConverted(message) {
+  document.querySelectorAll(".convert.busy").forEach((button) => {
+    button.classList.remove("busy");
+    button.textContent = "→ MD";
+  });
+  if (message.error) {
+    showError("Can't convert this guide", message.error, true);
+    return;
+  }
+  closeMenu();
+  send({ type: "list" });
+  open(message.path);
 }
 
 function open(path) {
@@ -831,6 +864,21 @@ function fillMenu() {
     kind.className = "kind";
     kind.textContent = KIND_NAMES[guide.kind] || "";
     item.append(name, kind);
+    if (guide.convertible) {
+      const convert = document.createElement("span");
+      convert.className = "convert";
+      convert.setAttribute("role", "button");
+      convert.title = "Convert to Markdown with pandoc";
+      convert.textContent = "→ MD";
+      convert.addEventListener("click", (event) => {
+        event.stopPropagation();
+        convert.classList.add("busy");
+        convert.textContent = "…";
+        // The app waits for pandoc, so let the page repaint first.
+        setTimeout(() => send({ type: "convert", path: guide.path }), 30);
+      });
+      item.append(convert);
+    }
     item.addEventListener("click", () => choose(index));
     list.append(item);
   });
@@ -911,6 +959,9 @@ $("folder").addEventListener("click", () => {
   setFan(false);
   send({ type: "folder" });
 });
+$("error-dismiss").addEventListener("click", () => {
+  $("error").hidden = true;
+});
 $("open-folder").addEventListener("click", () => send({ type: "folder" }));
 for (const button of document.querySelectorAll(".pin")) {
   button.addEventListener("click", () => send({ type: "pin", side: button.dataset.side }));
@@ -952,6 +1003,7 @@ if (webview) {
     const message = event.data;
     if (message.type === "list") onList(message);
     else if (message.type === "show") onShow(message);
+    else if (message.type === "converted") onConverted(message);
     else if (message.type === "pinned") setPinned(message.pinned, message.side);
     else if (message.type === "escape") escape();
   });

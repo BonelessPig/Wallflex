@@ -10,6 +10,11 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- The reader's guide list has a **-> MD** button on HTML and LaTeX
+  guides that converts them to Markdown with pandoc (found on `PATH`;
+  not included), writing a `.md` copy beside the original. LaTeX
+  (`.tex`) files now show in the guide list as plain text. PDFs can't be
+  converted.
 - Dragging the floating reader against the left or right edge of the
   screen and letting go pins it to that side.
 - Dragging the reader's menu dot while it is pinned unpins it and floats

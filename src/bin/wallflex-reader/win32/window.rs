@@ -564,6 +564,16 @@ impl Reader {
                 self.saved.corner = corner;
                 self.remember();
             }
+            Request::Convert(name) => {
+                // Pandoc is quick on a guide and is stopped after
+                // `convert::TIME_LIMIT`, so this waits for it.
+                let path = std::env::var_os("PATH");
+                self.view.post(&messages::converted(
+                    &self.folder,
+                    &name,
+                    path.as_deref(),
+                ));
+            }
             Request::Folder => {
                 // It's made at startup; this only matters if it was
                 // deleted since, and Explorer says so if it's missing.

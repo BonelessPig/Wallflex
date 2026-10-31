@@ -4,18 +4,21 @@
 //! The page asks: `{"type": "ready" | "list" | "close" | "folder"}`,
 //! `{"type": "open", "path": NAME}`, `{"type": "pin", "side": "left" |
 //! "right"}`, `{"type": "move", "at": [X, Y]}`, `{"type": "style",
-//! "style": STYLE}` or `{"type": "corner", "corner": NAME}`. The app
+//! "style": STYLE}`, `{"type": "corner", "corner": NAME}` or
+//! `{"type": "convert", "path": NAME}` (HTML or LaTeX to Markdown with
+//! pandoc). The app
 //! answers with `list` (the guides, the last one shown, whether it's
 //! pinned and to which side, the style and the menu dot's corner),
 //! `show` (a guide: a reading page as `html`, a file to load as `url`,
-//! or an `error`), `pinned` and `escape` (Esc was
-//! pressed).
+//! or an `error`), `converted` (the new guide's `path`, or an `error`),
+//! `pinned` and `escape` (Esc was pressed).
 
 use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::convert;
 use crate::corner::Corner;
 use crate::guides::{self, Kind};
 use crate::place::Edge;
@@ -44,6 +47,8 @@ pub enum Request {
     Style(Style),
     /// Remember that the menu dot sits in this corner.
     Corner(Corner),
+    /// Convert this HTML or LaTeX guide to Markdown with pandoc.
+    Convert(String),
 }
 
 /// A request as the page sends it.
@@ -77,6 +82,7 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "move" => Request::Move(raw.at?),
         "style" => Request::Style(raw.style?),
         "corner" => Request::Corner(raw.corner?),
+        "convert" => Request::Convert(raw.path?),
         _ => return None,
     })
 }
@@ -100,6 +106,8 @@ pub fn list(folder: &Path, saved: &Saved) -> String {
                 "title": guides::title(name),
                 "folder": guides::folder_of(name),
                 "kind": guides::kind(name).map(Kind::name),
+                "convertible": guides::kind(name)
+                    .is_some_and(convert::can_convert),
             })
         })
         .collect();
@@ -146,6 +154,20 @@ pub fn show(folder: &Path, name: &str) -> (String, bool) {
         Ok(text) => (answer("html", guides::render(kind, name, &text)), true),
         Err(error) => (answer("error", error), false),
     }
+}
+
+/// The `converted` answer for converting guide `name` in `folder` with
+/// pandoc (found on `path_var`): the new guide's name, or an `error`.
+pub fn converted(
+    folder: &Path,
+    name: &str,
+    path_var: Option<&std::ffi::OsStr>,
+) -> String {
+    match convert::convert_guide(folder, name, path_var) {
+        Ok(new) => json!({ "type": "converted", "path": new }),
+        Err(error) => json!({ "type": "converted", "error": error }),
+    }
+    .to_string()
 }
 
 /// Tells the page Esc was pressed (it closes its guide list, or asks to
@@ -223,7 +245,7 @@ pub fn judge(uri: &str, top: bool) -> Navigation {
 
 #[cfg(test)]
 mod tests {
-    use super::{Navigation, Request, judge, parse_request, show};
+    use super::{Navigation, Request, converted, judge, parse_request, show};
     use crate::corner::Corner;
     use crate::place::Edge;
 
@@ -258,6 +280,11 @@ mod tests {
         );
         assert_eq!(parse_request(r#"{"type":"corner","corner":"mid"}"#), None);
         assert_eq!(parse_request(r#"{"type":"corner"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"convert","path":"a.html"}"#),
+            Some(Request::Convert("a.html".to_owned()))
+        );
+        assert_eq!(parse_request(r#"{"type":"convert"}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }
@@ -301,5 +328,13 @@ mod tests {
         let (answer, ok) = show(std::path::Path::new(r"C:\g"), "../x.md");
         assert!(!ok);
         assert!(answer.contains("\"error\""));
+    }
+
+    #[test]
+    fn refuses_to_convert_outside_the_folder() {
+        let answer =
+            converted(std::path::Path::new(r"C:\g"), "../x.html", None);
+        assert!(answer.contains("\"error\""));
+        assert!(!answer.contains("\"path\""));
     }
 }

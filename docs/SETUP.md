@@ -117,8 +117,9 @@ Add a widget with `kind = "guides"` (bottom-right is a good spot) for
 a small book icon. Clicking it opens your guides in a borderless
 window right on the desktop. Put the guides in the `Guides` folder
 next to `config.toml` (`%APPDATA%\Wallflex\Guides`; the reader's folder
-button opens it): Markdown (`.md`), web pages (`.html`), PDFs and text
-files, in up to four levels of folders. Markdown can show pictures
+button opens it): Markdown (`.md`), web pages (`.html`), PDFs, LaTeX
+(`.tex`, shown as plain text) and text files, in up to four levels of
+folders. Markdown can show pictures
 kept beside it and link to other guides.
 
 - The window opens in the corner nearest the icon and hides when you
@@ -147,6 +148,11 @@ kept beside it and link to other guides.
   Black), a font, the text size and the line spacing. Markdown and text
   guides follow it; HTML and PDF guides keep their own look.
 - Web links open in your usual browser.
+- HTML and LaTeX guides have a **-> MD** button in the guide list that
+  converts them to Markdown, next to the original (`Setup.html` becomes
+  `Setup.md`), so they follow your reading style. It needs
+  [pandoc](https://pandoc.org), which Wallflex doesn't include:
+  `winget install JohnMacFarlane.Pandoc`. PDFs can't be converted.
 
 The reader needs Microsoft Edge WebView2, which comes with Windows 11.
 It only uses memory while it's open and quits two minutes after it's

@@ -131,6 +131,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   scripts; HTML and PDF load from the virtual host `guides.wallflex`.
   `messages.rs` is the page protocol and `judge`, which decides every
   navigation (guides through the app, web links to the browser).
+  `convert.rs`: the list's "-> MD" button (HTML and `.tex` guides, shown
+  as text) runs `pandoc --sandbox -f html|latex -t gfm-raw_html` (found
+  on absolute `PATH` entries only, 20 s limit, run on the app thread)
+  into a sibling `.md` that is never overwritten. Pandoc isn't shipped
+  (about 150 MB) and can't read PDFs.
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the

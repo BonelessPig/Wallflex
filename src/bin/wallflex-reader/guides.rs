@@ -4,8 +4,9 @@
 //! parts (`Games/Setup.md`). Every name the page sends is checked here
 //! before it touches the disk, so it can't reach outside the folder.
 //! HTML and PDF guides load straight from the folder through `WebView2`'s
-//! virtual host ([`HOST`]); Markdown and text are turned into a reading
-//! page here, with one stylesheet, and shown without scripts.
+//! virtual host ([`HOST`]); Markdown, text and LaTeX source are turned
+//! into a reading page here, with one stylesheet, and shown without
+//! scripts.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -56,22 +57,26 @@ pub enum Kind {
     Html,
     /// A PDF, in Edge's viewer.
     Pdf,
+    /// LaTeX source, shown as text (it can be converted to Markdown).
+    Tex,
 }
 
 /// Guide files, by extension (lower case).
-const KINDS: [(&str, Kind); 6] = [
+const KINDS: [(&str, Kind); 8] = [
     ("md", Kind::Markdown),
     ("markdown", Kind::Markdown),
     ("txt", Kind::Text),
     ("html", Kind::Html),
     ("htm", Kind::Html),
     ("pdf", Kind::Pdf),
+    ("tex", Kind::Tex),
+    ("latex", Kind::Tex),
 ];
 
 impl Kind {
     /// Whether the reader makes the page itself (else it loads the file).
     pub fn is_rendered(self) -> bool {
-        matches!(self, Self::Markdown | Self::Text)
+        matches!(self, Self::Markdown | Self::Text | Self::Tex)
     }
 
     /// Its name for the page.
@@ -81,6 +86,7 @@ impl Kind {
             Self::Text => "text",
             Self::Html => "html",
             Self::Pdf => "pdf",
+            Self::Tex => "tex",
         }
     }
 }
@@ -254,7 +260,7 @@ pub fn escape_html(text: &str) -> String {
 pub fn render(kind: Kind, name: &str, text: &str) -> String {
     let (class, body) = match kind {
         Kind::Markdown => ("markdown", markdown(text, &folder_url(name))),
-        Kind::Text | Kind::Html | Kind::Pdf => {
+        Kind::Text | Kind::Tex | Kind::Html | Kind::Pdf => {
             ("text", format!("<pre>{}</pre>", escape_html(text)))
         }
     };
