@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none';
+  script-src 'unsafe-inline'; style-src 'unsafe-inline';
+  img-src https://guides.wallflex data:; media-src https://guides.wallflex;
+  frame-src https://guides.wallflex about:">
+<title>Guides</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #fbfaf7;
+  --bar: #f3f1ec;
+  --ink: #1f1f22;
+  --quiet: #6c6b70;
+  --rule: #e3e1db;
+  --hover: rgba(0, 0, 0, 0.06);
+  --press: rgba(0, 0, 0, 0.1);
+  --accent: #2a63c9;
+  --menu: #ffffff;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    color-scheme: dark;
+    --bg: #141416;
+    --bar: #1b1b1e;
+    --ink: #e7e5e0;
+    --quiet: #9b9994;
+    --rule: #2b2b30;
+    --hover: rgba(255, 255, 255, 0.07);
+    --press: rgba(255, 255, 255, 0.12);
+    --accent: #8db4ff;
+    --menu: #222226;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141416;
+  --bar: #1b1b1e;
+  --ink: #e7e5e0;
+  --quiet: #9b9994;
+  --rule: #2b2b30;
+  --hover: rgba(255, 255, 255, 0.07);
+  --press: rgba(255, 255, 255, 0.12);
+  --accent: #8db4ff;
+  --menu: #222226;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="sepia"] {
+  color-scheme: light;
+  --bg: #f4ecd8;
+  --bar: #ece2c9;
+  --ink: #433422;
+  --quiet: #7a6a55;
+  --rule: #dccfb0;
+  --hover: rgba(67, 52, 34, 0.07);
+  --press: rgba(67, 52, 34, 0.12);
+  --accent: #8a4b14;
+  --menu: #f8f1e1;
+  --shadow: 0 10px 30px rgba(67, 52, 34, 0.18), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+:root[data-theme="black"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bar: #0b0b0b;
+  --ink: #c9c6bf;
+  --quiet: #85827c;
+  --rule: #222222;
+  --hover: rgba(255, 255, 255, 0.07);
+  --press: rgba(255, 255, 255, 0.12);
+  --accent: #7fa7e8;
+  --menu: #141414;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  overflow: hidden;
+}
+header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 42px;
+  padding: 0 6px 0 8px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--rule);
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: default;
+}
+button:hover { background: var(--hover); }
+button:active { background: var(--press); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  color: var(--quiet);
+}
+.icon:hover { color: var(--ink); }
+.icon[aria-pressed="true"] { color: var(--accent); }
+svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  text-align: left;
+}
+#pick .book { flex: none; color: var(--quiet); }
+#title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+#pick .chevron { flex: none; width: 12px; height: 12px; color: var(--quiet); }
+main { flex: 1; position: relative; min-height: 0; }
+iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+.note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  text-align: center;
+  color: var(--quiet);
+  font-size: 14px;
+  user-select: text;
+}
+.note strong { color: var(--ink); font-size: 15px; font-weight: 600; }
+.note code {
+  font: 12px "Cascadia Mono", Consolas, monospace;
+  word-break: break-all;
+}
+.note button {
+  padding: 6px 14px;
+  border: 1px solid var(--rule);
+  color: var(--ink);
+}
+[hidden] { display: none !important; }
+#menu {
+  position: absolute;
+  top: 46px;
+  left: 8px;
+  right: 8px;
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  background: var(--menu);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  z-index: 2;
+}
+#filter {
+  flex: none;
+  margin: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  outline: none;
+}
+#filter:focus { border-color: var(--accent); }
+#list { flex: 1; overflow: auto; padding: 0 6px 6px; }
+.group {
+  padding: 8px 8px 4px;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+}
+.item span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.item .kind { flex: none; color: var(--quiet); font-size: 11px; }
+.item.current { color: var(--accent); font-weight: 600; }
+.item.active { background: var(--hover); }
+.none { padding: 10px 8px; color: var(--quiet); }
+#aa { width: 34px; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
+#aa[aria-expanded="true"], #pick[aria-expanded="true"] { background: var(--press); }
+#style {
+  position: absolute;
+  top: 46px;
+  right: 8px;
+  width: 300px;
+  max-width: calc(100% - 16px);
+  padding: 4px 14px 14px;
+  background: var(--menu);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 2;
+}
+.label {
+  display: flex;
+  justify-content: space-between;
+  margin: 12px 0 6px;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.themes { display: flex; justify-content: space-between; }
+.theme {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 52px;
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--quiet);
+}
+.swatch {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  font: 600 13px Georgia, serif;
+}
+.theme[aria-pressed="true"] { color: var(--ink); }
+.theme[aria-pressed="true"] .swatch { box-shadow: 0 0 0 2px var(--menu), 0 0 0 4px var(--accent); }
+.fonts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.font, .seg button {
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  text-align: center;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.font[aria-pressed="true"], .seg button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.size { display: flex; align-items: center; gap: 8px; }
+.size button { width: 32px; height: 30px; border: 1px solid var(--rule); }
+.size .small { font-size: 12px; }
+.size .big { font-size: 18px; }
+.size input { flex: 1; accent-color: var(--accent); }
+.seg { display: flex; gap: 4px; }
+.seg button { flex: 1; font-size: 12px; }
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border: 3px solid var(--menu);
+  border-radius: 6px;
+}
+</style>
+</head>
+<body>
+<header>
+  <button id="pick" aria-haspopup="listbox" aria-expanded="false" title="Choose a guide (Ctrl+K)">
+    <svg class="book" viewBox="0 0 16 16"><path d="M8 4.2C6.6 3 4.4 2.7 2 3
+      v9.6c2.4-.3 4.6 0 6 1.2 1.4-1.2 3.6-1.5 6-1.2V3c-2.4-.3-4.6 0-6 1.2z
+      M8 4.2v9.6"/></svg>
+    <span id="title">Guides</span>
+    <svg class="chevron" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg>
+  </button>
+  <button class="icon" id="aa" aria-expanded="false" title="Theme, font and size">Aa</button>
+  <button class="icon" id="folder" title="Open the Guides folder">
+    <svg viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.3 1.5H13
+      c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/></svg>
+  </button>
+  <button class="icon" id="pin" aria-pressed="false" title="Pin to the side of the screen">
+    <svg viewBox="0 0 16 16"><path d="M10 2.5l3.5 3.5-2.2.8-2.4 2.4.4 2.8
+      -1 1-2.4-2.4L3 13.5l-.5-.5 2.9-2.9L3 7.7l1-1 2.8.4 2.4-2.4z"/></svg>
+  </button>
+  <button class="icon" id="close" title="Close (Esc)">
+    <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+  </button>
+</header>
+<main id="main">
+  <div class="note" id="empty" hidden>
+    <strong>No guides yet</strong>
+    <div>Put Markdown, HTML, PDF or text files in your Guides folder:</div>
+    <code id="where"></code>
+    <button id="open-folder">Open the Guides folder</button>
+  </div>
+  <div class="note" id="error" hidden>
+    <strong>Can't show this guide</strong>
+    <div id="error-text"></div>
+  </div>
+  <div id="style" hidden>
+    <div class="label">Theme</div>
+    <div class="themes" id="themes"></div>
+    <div class="label">Font</div>
+    <div class="fonts" id="fonts"></div>
+    <div class="label">Text size <span id="size-value"></span></div>
+    <div class="size">
+      <button class="small" id="smaller" title="Smaller">A</button>
+      <input type="range" id="size" min="12" max="28" step="1" aria-label="Text size">
+      <button class="big" id="bigger" title="Bigger">A</button>
+    </div>
+    <div class="label">Line spacing</div>
+    <div class="seg" id="spacings"></div>
+  </div>
+  <div id="menu" role="listbox" hidden>
+    <input id="filter" placeholder="Find a guide" spellcheck="false" autocomplete="off">
+    <div id="list"></div>
+  </div>
+</main>
+<script>
+"use strict";
+const webview = window.chrome && window.chrome.webview;
+const $ = (id) => document.getElementById(id);
+const send = (message) => { if (webview) webview.postMessage(message); };
+const KIND_NAMES = { markdown: "", text: "TXT", html: "HTML", pdf: "PDF" };
+
+// Reading styles: the app only checks and stores these names.
+const THEMES = [
+  ["auto", "Auto", "linear-gradient(135deg, #fbfaf7 50%, #141416 50%)", "#777"],
+  ["light", "Light", "#fbfaf7", "#1f1f22"],
+  ["sepia", "Sepia", "#f4ecd8", "#433422"],
+  ["dark", "Dark", "#141416", "#e7e5e0"],
+  ["black", "Black", "#000000", "#c9c6bf"],
+];
+const SEGOE = "'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif";
+const FONTS = {
+  segoe: ["Segoe UI", SEGOE,
+    "'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif"],
+  sitka: ["Sitka", "'Sitka Text', 'Sitka Small', Cambria, serif",
+    "'Sitka Subheading', 'Sitka Text', Cambria, serif"],
+  georgia: ["Georgia", "Georgia, Cambria, serif"],
+  verdana: ["Verdana", "Verdana, Tahoma, sans-serif"],
+  bahnschrift: ["Bahnschrift", "Bahnschrift, 'Segoe UI', sans-serif"],
+  cascadia: ["Cascadia Mono", "'Cascadia Mono', Consolas, monospace"],
+};
+const SPACINGS = { compact: ["Compact", 1.45], normal: ["Normal", 1.65], airy: ["Airy", 1.9] };
+const SIZE_RANGE = [12, 28];
+let style = { theme: "auto", font: "segoe", size: 16, spacing: "normal" };
+
+let guides = [];
+let current = null;
+let shown = [];
+let active = -1;
+
+function setPinned(pinned) {
+  const pin = $("pin");
+  pin.setAttribute("aria-pressed", String(pinned));
+  pin.title = pinned ? "Unpin (float by the book icon)" : "Pin to the side of the screen";
+}
+
+// The CSS variables a reading page gets for the current style.
+function styleVariables() {
+  const font = FONTS[style.font] || FONTS.segoe;
+  const spacing = SPACINGS[style.spacing] || SPACINGS.normal;
+  return {
+    "--font": font[1],
+    "--heading-font": font[2] || font[1],
+    "--size": style.size + "px",
+    "--leading": String(spacing[1]),
+  };
+}
+
+// Applies the style to an element (a page's <html>).
+function styleElement(element) {
+  element.dataset.theme = style.theme;
+  for (const [name, value] of Object.entries(styleVariables())) {
+    element.style.setProperty(name, value);
+  }
+}
+
+// The same, as attributes for a reading page's <html> tag, so it opens
+// in the right style without a flash.
+function styleAttributes() {
+  const css = Object.entries(styleVariables())
+    .map(([name, value]) => name + ":" + value).join(";");
+  return ' data-theme="' + style.theme + '" style="' + css + '"';
+}
+
+function applyStyle() {
+  document.documentElement.dataset.theme = style.theme;
+  const view = $("view");
+  const page = view && view.srcdoc && view.contentDocument;
+  if (page && page.documentElement) styleElement(page.documentElement);
+  fillStylePanel();
+}
+
+function setStyle(change) {
+  style = Object.assign({}, style, change);
+  style.size = Math.min(Math.max(style.size, SIZE_RANGE[0]), SIZE_RANGE[1]);
+  applyStyle();
+  send({ type: "style", style });
+}
+
+function fillStylePanel() {
+  document.querySelectorAll(".theme").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.value === style.theme));
+  });
+  document.querySelectorAll(".font").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.value === style.font));
+  });
+  document.querySelectorAll("#spacings button").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.value === style.spacing));
+  });
+  $("size").value = String(style.size);
+  $("size-value").textContent = style.size + " px";
+}
+
+function buildStylePanel() {
+  for (const [value, label, background, ink] of THEMES) {
+    const button = document.createElement("button");
+    button.className = "theme";
+    button.dataset.value = value;
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = background;
+    swatch.style.color = ink;
+    swatch.textContent = value === "auto" ? "" : "Aa";
+    button.append(swatch, label);
+    button.addEventListener("click", () => setStyle({ theme: value }));
+    $("themes").append(button);
+  }
+  for (const [value, [label, family]] of Object.entries(FONTS)) {
+    const button = document.createElement("button");
+    button.className = "font";
+    button.dataset.value = value;
+    button.textContent = label;
+    button.style.fontFamily = family;
+    button.addEventListener("click", () => setStyle({ font: value }));
+    $("fonts").append(button);
+  }
+  for (const [value, [label]] of Object.entries(SPACINGS)) {
+    const button = document.createElement("button");
+    button.dataset.value = value;
+    button.textContent = label;
+    button.addEventListener("click", () => setStyle({ spacing: value }));
+    $("spacings").append(button);
+  }
+  $("size").addEventListener("input", () => setStyle({ size: Number($("size").value) }));
+  $("smaller").addEventListener("click", () => setStyle({ size: style.size - 1 }));
+  $("bigger").addEventListener("click", () => setStyle({ size: style.size + 1 }));
+  fillStylePanel();
+}
+
+function toggleStylePanel(open) {
+  $("style").hidden = !open;
+  $("aa").setAttribute("aria-expanded", String(open));
+  if (open) closeMenu();
+}
+
+function onList(message) {
+  if (message.style) {
+    style = message.style;
+    applyStyle();
+  }
+  guides = message.guides;
+  $("where").textContent = message.where;
+  setPinned(message.pinned);
+  const empty = guides.length === 0;
+  $("empty").hidden = !empty;
+  if (empty) {
+    current = null;
+    $("title").textContent = "Guides";
+    removeView();
+    $("error").hidden = true;
+    return;
+  }
+  if (!current || !guides.some((g) => g.path === current)) {
+    open(message.start);
+  }
+  if (!$("menu").hidden) fillMenu();
+}
+
+function removeView() {
+  const old = $("view");
+  if (old) old.remove();
+}
+
+function onShow(message) {
+  current = message.path;
+  $("title").textContent = message.title;
+  document.title = message.title;
+  $("empty").hidden = true;
+  removeView();
+  if (message.error) {
+    $("error-text").textContent = message.error;
+    $("error").hidden = false;
+    return;
+  }
+  $("error").hidden = true;
+  const view = document.createElement("iframe");
+  view.id = "view";
+  view.title = message.title;
+  if (message.html !== undefined) {
+    // A reading page made by the app: no scripts; links go through
+    // the app, which opens guides here and web pages in the browser.
+    view.sandbox = "allow-same-origin allow-popups";
+    view.srcdoc = message.html.replace("<html>", "<html" + styleAttributes() + ">");
+  } else {
+    view.src = message.url;
+  }
+  $("main").prepend(view);
+}
+
+function open(path) {
+  if (path) send({ type: "open", path });
+}
+
+function openMenu() {
+  toggleStylePanel(false);
+  send({ type: "list" });
+  $("menu").hidden = false;
+  $("pick").setAttribute("aria-expanded", "true");
+  $("filter").value = "";
+  fillMenu();
+  $("filter").focus();
+}
+
+function closeMenu() {
+  $("menu").hidden = true;
+  $("pick").setAttribute("aria-expanded", "false");
+}
+
+function fillMenu() {
+  const words = $("filter").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  shown = guides.filter((g) => {
+    const text = g.path.toLowerCase();
+    return words.every((w) => text.includes(w));
+  });
+  const list = $("list");
+  list.textContent = "";
+  if (shown.length === 0) {
+    const none = document.createElement("div");
+    none.className = "none";
+    none.textContent = guides.length ? "No guides match." : "No guides yet.";
+    list.append(none);
+  }
+  let folder = null;
+  shown.forEach((guide, index) => {
+    if (guide.folder !== folder) {
+      folder = guide.folder;
+      if (folder) {
+        const group = document.createElement("div");
+        group.className = "group";
+        group.textContent = folder.replaceAll("/", " / ");
+        list.append(group);
+      }
+    }
+    const item = document.createElement("button");
+    item.className = "item" + (guide.path === current ? " current" : "");
+    item.setAttribute("role", "option");
+    item.dataset.index = String(index);
+    const name = document.createElement("span");
+    name.textContent = guide.title;
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = KIND_NAMES[guide.kind] || "";
+    item.append(name, kind);
+    item.addEventListener("click", () => choose(index));
+    list.append(item);
+  });
+  const at = shown.findIndex((g) => g.path === current);
+  setActive(words.length ? 0 : Math.max(at, 0));
+}
+
+function setActive(index) {
+  active = shown.length ? Math.min(Math.max(index, 0), shown.length - 1) : -1;
+  document.querySelectorAll(".item").forEach((item) => {
+    const on = Number(item.dataset.index) === active;
+    item.classList.toggle("active", on);
+    if (on) item.scrollIntoView({ block: "nearest" });
+  });
+}
+
+function choose(index) {
+  const guide = shown[index];
+  closeMenu();
+  if (guide && guide.path !== current) open(guide.path);
+}
+
+$("pick").addEventListener("click", () => {
+  if ($("menu").hidden) openMenu(); else closeMenu();
+});
+$("filter").addEventListener("input", fillMenu);
+$("filter").addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") { setActive(active + 1); event.preventDefault(); }
+  if (event.key === "ArrowUp") { setActive(active - 1); event.preventDefault(); }
+  if (event.key === "Enter") { choose(active); event.preventDefault(); }
+});
+$("aa").addEventListener("click", () => toggleStylePanel($("style").hidden));
+$("folder").addEventListener("click", () => send({ type: "folder" }));
+$("open-folder").addEventListener("click", () => send({ type: "folder" }));
+$("pin").addEventListener("click", () => send({ type: "pin" }));
+$("close").addEventListener("click", () => send({ type: "close" }));
+document.addEventListener("mousedown", (event) => {
+  if (!$("menu").hidden && !event.target.closest("#menu, #pick")) closeMenu();
+  if (!$("style").hidden && !event.target.closest("#style, #aa")) toggleStylePanel(false);
+});
+function escape() {
+  if (!$("menu").hidden) closeMenu();
+  else if (!$("style").hidden) toggleStylePanel(false);
+  else send({ type: "close" });
+}
+
+// A click in the guide moves the focus there, and never reaches this
+// page: close the panels then too.
+window.addEventListener("blur", () => {
+  closeMenu();
+  toggleStylePanel(false);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    escape();
+    event.preventDefault();
+  } else if (event.ctrlKey && (event.key === "k" || event.key === "o")) {
+    openMenu();
+    event.preventDefault();
+  }
+});
+
+if (webview) {
+  webview.addEventListener("message", (event) => {
+    const message = event.data;
+    if (message.type === "list") onList(message);
+    else if (message.type === "show") onShow(message);
+    else if (message.type === "pinned") setPinned(message.pinned);
+    else if (message.type === "escape") escape();
+  });
+}
+buildStylePanel();
+send({ type: "ready" });
+</script>
+</body>
+</html>

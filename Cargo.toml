@@ -12,6 +12,9 @@ publish = false
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
+# Only the guides reader (wallflex-reader) uses these two.
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
+webview2-com = "0.39.1"
 
 [dependencies.windows]
 version = "0.62.2"
@@ -21,6 +24,7 @@ features = [
     "Media_Control",
     "Storage_Streams",
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
     "Win32_Media_Audio",
@@ -34,6 +38,7 @@ features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Console",
+    "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_LibraryLoader",

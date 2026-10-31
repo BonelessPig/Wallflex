@@ -707,6 +707,7 @@ fn parse_widget(raw: &RawWidget) -> Result<Placement, String> {
         ("info", None) => Widget::Info,
         ("discord", None) => Widget::Discord,
         ("visualizer", None) => Widget::Visualizer,
+        ("guides", None) => Widget::Guides,
         ("gpu", Some(number)) if number >= 1 => {
             let index = number.saturating_sub(1);
             Widget::Gpu(usize::try_from(index).map_err(|e| e.to_string())?)

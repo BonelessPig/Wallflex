@@ -5,7 +5,7 @@ Builds a release of Wallflex and zips it for sharing.
 .DESCRIPTION
 Runs the checks (fmt, clippy, tests), builds the release exes, and puts
 dist\wallflex-<version>.zip together with wallflex.exe, the optional
-wallflex-settings.exe, the setup guide, the
+wallflex-settings.exe and wallflex-reader.exe, the setup guide, the
 default settings and the licences. Then builds the installer,
 dist\wallflex-<version>-setup.exe, from installer\wallflex.iss with
 Inno Setup 6 (winget install JRSoftware.InnoSetup). Nothing personal
@@ -56,6 +56,7 @@ try {
     $files = @{
         'target\release\wallflex.exe' = 'wallflex.exe'
         'target\release\wallflex-settings.exe' = 'wallflex-settings.exe'
+        'target\release\wallflex-reader.exe' = 'wallflex-reader.exe'
         'docs\SETUP.md'               = 'SETUP.md'
         'config.default.toml'         = 'config.example.toml'
         'LICENSE-MIT'                 = 'LICENSE-MIT'

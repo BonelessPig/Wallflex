@@ -23,7 +23,8 @@ fork's core and the Workshop authors' files are not licensed to copy.
 - `cargo clippy --all-targets -- -D warnings`, with `pedantic` plus the
   MISRA-style lints in `Cargo.toml` (no unwrap/expect/panic, no unchecked
   indexing, overflow or `as` casts).
-- `unsafe` is denied everywhere except `src/win32/`, which opts in. Every
+- `unsafe` is denied everywhere except `src/win32/` and the reader's
+  `src/bin/wallflex-reader/win32/`, which opt in. Every
   `unsafe` block needs a `// SAFETY:` comment saying why it is sound.
 - Every item, private ones included, has a doc comment.
 - `clippy.toml` lets tests unwrap, expect, panic and index: a panic is
@@ -115,6 +116,36 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   starts it with `--config` when it sits next to `wallflex.exe`, else
   opens the file. Test with `--no-open --config <scratch file>` and
   curl (copy the token from its output).
+- `src/bin/wallflex-reader/`: the optional guides reader, a third
+  binary, started by the `guides` widget (`src/widgets/guides.rs`, a
+  book icon; `Action::OpenGuides` makes `app.rs` run
+  `wallflex-reader.exe --at X,Y --config <path>`; the mouse hook runs
+  while Discord or a guides widget is set up). It shows Markdown,
+  HTML, PDF and text files from `Guides\` next to the config in a
+  borderless WebView2 window (`webview2-com`, static loader, so no DLL
+  to ship). Only its `win32/` uses `unsafe`. One copy: a second start
+  sends its point by `WM_COPYDATA` and the first shows or hides.
+  `guides.rs` checks names (as `library::resolve`) and renders Markdown
+  (pulldown-cmark; raw HTML escaped, links rebased, heading ids) and
+  text into reading pages shown in a sandboxed `srcdoc` frame without
+  scripts; HTML and PDF load from the virtual host `guides.wallflex`.
+  `messages.rs` is the page protocol and `judge`, which decides every
+  navigation (guides through the app, web links to the browser).
+  `place.rs`: floating in the work area's corner nearest the click,
+  or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
+  sizes scale by the larger of DPI and monitor height / 1080, and the
+  page is zoomed to match. It hides on focus loss (unless pinned),
+  checking `GetForegroundWindow` when the posted note arrives, since
+  showing it bounces the focus. Hidden 2 minutes, it exits.
+  `reader.json` next to the config keeps pinned, last guide, zoom and
+  the reading style (`style.rs`: theme, font, size, spacing, checked
+  against known names; the "Aa" panel in `shell.html` owns how each
+  looks, as CSS variables and `data-theme` on the reading page's
+  `<html>`, set before it loads and live after). HTML and PDF guides
+  aren't restyled. WebView2 data is in
+  `%LOCALAPPDATA%\Wallflex\WebView2`. Debug builds use their own
+  window class and lock (`WallflexReaderDev`), so testing never
+  toggles the installed reader.
 - `src/backdrop.rs`: what's behind the widgets: `Background` (a colour
   or `Transparent`), an optional picture (`Wallpaper`: path, `Fit`
   (fill, fit, stretch, center, span), zoom, offset), and the placing:

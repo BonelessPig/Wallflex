@@ -171,7 +171,7 @@ pub enum Demo {
     Inbox,
 }
 
-/// What a click on the Discord widget does.
+/// What a click on a widget does: mostly the Discord widget's controls.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// A tab: show that page, or close if it's already open.
@@ -197,6 +197,9 @@ pub enum Action {
     PromoteFriend(String),
     /// VOICE: switch between names and avatars.
     CallView,
+    /// The guides widget: open the reader. The app handles it; the
+    /// Discord widget ignores it.
+    OpenGuides,
 }
 
 /// The widget's state: the session's view plus what the wallpaper kept
@@ -564,6 +567,7 @@ impl DiscordUi {
                 self.friend_top.truncate(MAX_FRIEND_TOP);
             }
             Action::CallView => self.call_view = self.call_view.other(),
+            Action::OpenGuides => {}
         }
         if self.is_open() && self.page() == Page::Inbox {
             self.mark_inbox_seen();

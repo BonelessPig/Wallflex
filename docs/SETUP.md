@@ -18,7 +18,9 @@ Wallflex, replaces it and keeps your settings.
 The setup also offers the **settings app** (ticked by default; choose
 "Wallflex only" to leave it out). It's a window for arranging the
 widgets by dragging them and changing settings without editing the
-file. It only runs while its window is open.
+file. It only runs while its window is open. It also offers the
+**guides reader** (ticked by default too), which opens your own guides
+from a book icon on the desktop; see "Guides" below.
 
 Or, for a portable copy, unzip `wallflex-<version>.zip` somewhere
 permanent and double-click `wallflex.exe`. (If you move the exe later,
@@ -108,6 +110,31 @@ shows whatever your default speakers play, with the song or video's
 title, artist and album art (from Windows' media controls, preferring
 music apps, then browsers). It uses no CPU while it's quiet, and rests
 while a full-screen window covers its monitor.
+
+### Guides
+
+Add a widget with `kind = "guides"` (bottom-right is a good spot) for
+a small book icon. Clicking it opens your guides in a borderless
+window right on the desktop. Put the guides in the `Guides` folder
+next to `config.toml` (`%APPDATA%\Wallflex\Guides`; the reader's folder
+button opens it): Markdown (`.md`), web pages (`.html`), PDFs and text
+files, in up to four levels of folders. Markdown can show pictures
+kept beside it and link to other guides.
+
+- The window opens in the corner nearest the icon and hides when you
+  click somewhere else, press Esc or click the icon again.
+- The pin button docks it full height to that side of the screen and
+  keeps it open while you work; windows you maximise make room for it.
+- The title opens the list of guides (Ctrl+K); type to find one.
+  Ctrl and the mouse wheel zoom, and the zoom is remembered.
+- **Aa** picks a theme (Auto follows Windows; Light, Sepia, Dark or
+  Black), a font, the text size and the line spacing. Markdown and text
+  guides follow it; HTML and PDF guides keep their own look.
+- Web links open in your usual browser.
+
+The reader needs Microsoft Edge WebView2, which comes with Windows 11.
+It only uses memory while it's open and quits two minutes after it's
+hidden.
 
 `[panel]` hides parts you don't want (`cpu`, `network`, `ram`, `ssd`,
 or `gpus = [1]` for only the first GPU); by default everything this PC

@@ -48,7 +48,7 @@ use crate::discord::session::Credentials;
 use crate::geometry::Rect;
 use crate::log;
 use crate::pace::{Governor, Level};
-use crate::widgets::{Dashboard, Widget};
+use crate::widgets::{Action, Dashboard, Widget};
 
 /// Window class of the hidden controller window. Also how `--quit` and
 /// the single-instance check find a running copy.
@@ -112,6 +112,8 @@ const WM_MEDIA: u32 = WM_APP + 7;
 const LOG_FILE: &str = "wallflex.log";
 /// The optional settings app, installed next to this exe.
 const SETTINGS_APP: &str = "wallflex-settings.exe";
+/// The guides reader, next to this exe.
+const READER_APP: &str = "wallflex-reader.exe";
 /// `ShellExecuteW` results above this mean success.
 const SHELL_EXECUTE_OK: usize = 32;
 /// Top-level desktop windows: a click on one of these reached the
@@ -1374,7 +1376,11 @@ fn apply_discord_settings() {
             wanted.is_some(),
             wanted.as_ref().is_some_and(|d| d.bot_token.is_some()),
         );
-        if wanted.is_some() && state.mouse_hook.is_none() {
+        let clickable = wanted.is_some()
+            || state.settings.layouts.iter().any(|layout| {
+                layout.widgets.iter().any(|p| p.widget == Widget::Guides)
+            });
+        if clickable && state.mouse_hook.is_none() {
             let notify =
                 HWND(std::ptr::with_exposed_provenance_mut(controller));
             state.mouse_hook = Some(MouseHook::start(
@@ -1382,7 +1388,7 @@ fn apply_discord_settings() {
                 WM_DESKTOP_CLICK,
                 WM_DESKTOP_HOVER,
             ));
-        } else if wanted.is_none() {
+        } else if !clickable {
             state.mouse_hook = None;
         }
         if wanted == state.discord_settings {
@@ -1478,12 +1484,17 @@ fn on_desktop_click(point: POINT) {
             dashboard,
             discord,
             images,
+            config,
             ..
         } = &mut *state;
         let Some(action) = surfaces.iter().find_map(|s| s.hit_test(point))
         else {
             return;
         };
+        if action == Action::OpenGuides {
+            open_reader(config.as_ref().map(|c| c.path.as_path()), point);
+            return;
+        }
         let command = dashboard.click(&action);
         if let Some(link) = discord.as_ref() {
             for command in
@@ -1643,6 +1654,29 @@ fn open_settings_app(config: &std::path::Path) -> bool {
             log!("can't start {}: {error}", app.display());
             false
         }
+    }
+}
+
+/// Starts the guides reader (`wallflex-reader.exe`, next to this exe),
+/// or tells a running one to show or hide itself. `point` is where the
+/// book icon was clicked (desktop pixels), so the reader opens next to
+/// it. A missing reader is logged.
+fn open_reader(config: Option<&std::path::Path>, point: POINT) {
+    let Some(app) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(READER_APP)))
+        .filter(|app| app.is_file())
+    else {
+        log!("the guides reader ({READER_APP}) isn't installed");
+        return;
+    };
+    let mut command = std::process::Command::new(&app);
+    command.arg("--at").arg(format!("{},{}", point.x, point.y));
+    if let Some(config) = config {
+        command.arg("--config").arg(config);
+    }
+    if let Err(error) = command.spawn() {
+        log!("can't start {}: {error}", app.display());
     }
 }
 

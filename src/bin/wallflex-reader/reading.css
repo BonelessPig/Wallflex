@@ -1,0 +1,147 @@
+/* Themes: the page sets data-theme on <html>; without it (or "auto")
+   the colours follow Windows' light or dark mode. */
+:root {
+  color-scheme: light;
+  --bg: #fbfaf7;
+  --ink: #1f1f22;
+  --quiet: #66656a;
+  --rule: #e3e1db;
+  --code-bg: #f0eee8;
+  --link: #2a63c9;
+  --mark: #fff0a8;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --heading-font: "Segoe UI Variable Display", "Segoe UI", system-ui,
+    sans-serif;
+  --size: 16px;
+  --leading: 1.65;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]), :root[data-theme="auto"] {
+    color-scheme: dark;
+    --bg: #141416;
+    --ink: #e7e5e0;
+    --quiet: #9b9994;
+    --rule: #2b2b30;
+    --code-bg: #1e1e23;
+    --link: #8db4ff;
+    --mark: #5a4d12;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141416;
+  --ink: #e7e5e0;
+  --quiet: #9b9994;
+  --rule: #2b2b30;
+  --code-bg: #1e1e23;
+  --link: #8db4ff;
+  --mark: #5a4d12;
+}
+:root[data-theme="sepia"] {
+  color-scheme: light;
+  --bg: #f4ecd8;
+  --ink: #433422;
+  --quiet: #7a6a55;
+  --rule: #e0d3b6;
+  --code-bg: #ebe0c6;
+  --link: #8a4b14;
+  --mark: #f2d77e;
+}
+:root[data-theme="black"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --ink: #c9c6bf;
+  --quiet: #85827c;
+  --rule: #222222;
+  --code-bg: #121212;
+  --link: #7fa7e8;
+  --mark: #4a3f0f;
+}
+html { background: var(--bg); }
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--size);
+  line-height: var(--leading);
+  overflow-wrap: break-word;
+}
+main { max-width: 68ch; margin: 0 auto; padding: 24px 28px 72px; }
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--heading-font);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 1.7em 0 0.5em;
+  scroll-margin-top: 16px;
+}
+h1 { font-size: 1.8em; margin-top: 0.3em; }
+h2 {
+  font-size: 1.35em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--rule);
+}
+h3 { font-size: 1.12em; }
+h4, h5, h6 { font-size: 1em; }
+p, ul, ol, dl, blockquote, table, pre, figure { margin: 0 0 1em; }
+ul, ol { padding-left: 1.5em; }
+li + li { margin-top: 0.3em; }
+li > ul, li > ol { margin: 0.3em 0 0; }
+a {
+  color: var(--link);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+strong { font-weight: 600; }
+mark { background: var(--mark); color: inherit; }
+code, pre, kbd {
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 0.88em;
+}
+code, kbd {
+  background: var(--code-bg);
+  padding: 0.12em 0.36em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--code-bg);
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow: auto;
+  line-height: 1.5;
+}
+pre code { background: none; padding: 0; font-size: 1em; }
+blockquote {
+  margin-left: 0;
+  padding: 0.1em 0 0.1em 14px;
+  border-left: 3px solid var(--rule);
+  color: var(--quiet);
+}
+img { max-width: 100%; height: auto; border-radius: 6px; }
+table { border-collapse: collapse; display: block; overflow: auto; }
+th, td {
+  border: 1px solid var(--rule);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+th { font-weight: 600; }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2em 0; }
+input[type="checkbox"] { margin: 0 0.45em 0 0; vertical-align: -1px; }
+li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+.footnote-definition { font-size: 0.9em; color: var(--quiet); }
+body.text main { max-width: 80ch; }
+body.text pre {
+  background: none;
+  padding: 0;
+  white-space: pre-wrap;
+  font-size: 0.92em;
+  line-height: var(--leading);
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border: 3px solid var(--bg);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track { background: transparent; }

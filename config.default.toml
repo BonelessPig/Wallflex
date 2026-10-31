@@ -52,6 +52,9 @@ size = 1.0
 #   "visualizer"  bars for the music playing, with what's playing (title,
 #                 artist, album art) under them; only draws while sound
 #                 plays, and rests while a full-screen window covers it
+#   "guides"   a book icon: click it to read your guides (Markdown,
+#              HTML, PDF or text files in the Guides folder next to this
+#              file) in a borderless window
 # "anchor" is the corner or edge it sits against: top-left, top,
 # top-right, left, center, right, bottom-left, bottom or bottom-right.
 # Positions are measured from the edges of the area the taskbar leaves

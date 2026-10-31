@@ -230,6 +230,7 @@ fn preview(height: u32, path: &str, options: &Options) -> ExitCode {
         PreviewWidget::Network => Widget::Network,
         PreviewWidget::Gpus => Widget::Gpus,
         PreviewWidget::Info => Widget::Info,
+        PreviewWidget::Guides => Widget::Guides,
         PreviewWidget::Visualizer => {
             dashboard.show_visualizer_demo();
             Widget::Visualizer
@@ -284,6 +285,7 @@ fn preview_all(
         ("info".to_owned(), Widget::Info),
         ("visualizer".to_owned(), Widget::Visualizer),
         ("discord".to_owned(), Widget::Discord),
+        ("guides".to_owned(), Widget::Guides),
     ];
     for (number, index) in (1_u32..).zip(0..PREVIEW_MAX_GPUS) {
         all.push((format!("gpu{number}"), Widget::Gpu(index)));

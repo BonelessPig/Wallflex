@@ -15,6 +15,7 @@
 #define AppName "Wallflex"
 #define AppExe "wallflex.exe"
 #define SettingsExe "wallflex-settings.exe"
+#define ReaderExe "wallflex-reader.exe"
 #define RunKey "Software\Microsoft\Windows\CurrentVersion\Run"
 
 [Setup]
@@ -52,7 +53,7 @@ OutputBaseFilename=wallflex-{#AppVersion}-setup
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Types]
-Name: "full"; Description: "Wallflex and the settings app"
+Name: "full"; Description: "Wallflex, the settings app and the guides reader"
 Name: "compact"; Description: "Wallflex only (edit config.toml by hand)"
 Name: "custom"; Description: "Custom"; Flags: iscustom
 
@@ -64,6 +65,11 @@ Name: "main"; Description: "Wallflex"; Types: full compact custom; \
 Name: "settings"; \
   Description: "Settings app: drag widgets into place, change settings in a window"; \
   Types: full
+; Optional: opens guides from the "guides" widget's book icon. It uses
+; WebView2 (part of Windows 11) and only runs while it's open.
+Name: "reader"; \
+  Description: "Guides reader: read your own guides from a book icon on the desktop"; \
+  Types: full
 
 [Tasks]
 Name: "startup"; Description: "Start Wallflex when I sign in"
@@ -73,6 +79,8 @@ Source: "..\target\release\{#AppExe}"; DestDir: "{app}"; \
   Flags: ignoreversion
 Source: "..\target\release\{#SettingsExe}"; DestDir: "{app}"; \
   Components: settings; Flags: ignoreversion
+Source: "..\target\release\{#ReaderExe}"; DestDir: "{app}"; \
+  Components: reader; Flags: ignoreversion
 Source: "..\docs\SETUP.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\config.default.toml"; DestDir: "{app}"; \
   DestName: "config.example.toml"; Flags: ignoreversion
@@ -89,6 +97,11 @@ Name: "{autoprograms}\{#AppName} Settings"; \
 Type: files; Name: "{app}\{#SettingsExe}"; Components: not settings
 Type: files; Name: "{autoprograms}\{#AppName} Settings.lnk"; \
   Components: not settings
+Type: files; Name: "{app}\{#ReaderExe}"; Components: not reader
+
+[UninstallDelete]
+; The guides reader's browser data (cache, zoom), kept next to the exe.
+Type: filesandordirs; Name: "{app}\WebView2"
 
 [Registry]
 ; The same value the tray menu's "Start with Windows" writes.

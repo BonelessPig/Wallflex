@@ -253,12 +253,17 @@ impl Painter {
             .any(|slot| slot.placement.widget == widget)
     }
 
-    /// Where widgets with hover highlights (Discord) were last drawn, in
-    /// client pixels.
+    /// Where widgets with hover highlights (Discord, guides) were last
+    /// drawn, in client pixels.
     pub fn hover_rects(&self) -> Vec<Rect> {
         self.slots
             .iter()
-            .filter(|slot| slot.placement.widget == Widget::Discord)
+            .filter(|slot| {
+                matches!(
+                    slot.placement.widget,
+                    Widget::Discord | Widget::Guides
+                )
+            })
             .filter_map(|slot| slot.last)
             .collect()
     }

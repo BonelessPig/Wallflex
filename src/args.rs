@@ -19,10 +19,10 @@ Options:
                     save the widgets as a BMP, as they'd look on a
                     monitor HEIGHT pixels tall, then exit
   --widget <KIND>   the widget --preview draws: panel (default), cpu,
-                    network, gpus, info, discord, discord-avatars,
-                    discord-inbox or visualizer (the last four with
-                    sample data); or all, with FILE a folder to save
-                    each widget in as <kind>.bmp
+                    network, gpus, info, guides, discord,
+                    discord-avatars, discord-inbox or visualizer (the
+                    last four with sample data); or all, with FILE a
+                    folder to save each widget in as <kind>.bmp
   --check           check the settings file, print what's wrong, exit
   --info            print the monitors and GPUs as JSON, then exit
   --diagnose        print how the desktop windows are laid out, then exit
@@ -90,6 +90,8 @@ pub enum PreviewWidget {
     DiscordInbox,
     /// The music visualizer with sample bars.
     Visualizer,
+    /// The guides book icon.
+    Guides,
     /// Every widget, each to its own file in a folder.
     All,
 }
@@ -194,6 +196,7 @@ where
                     "discord-avatars" => PreviewWidget::DiscordAvatars,
                     "discord-inbox" => PreviewWidget::DiscordInbox,
                     "visualizer" => PreviewWidget::Visualizer,
+                    "guides" => PreviewWidget::Guides,
                     "all" => PreviewWidget::All,
                     _ => {
                         return Err(ArgError::BadValue {

@@ -8,6 +8,25 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Added
+
+- A `guides` widget: a book icon that opens your own guides in a
+  borderless reader window on the desktop. Put Markdown, HTML, PDF or
+  text files in the `Guides` folder next to `config.toml`
+  (`%APPDATA%\Wallflex\Guides`). The reader floats in the corner by the
+  icon and hides when you click elsewhere, press Esc or click the icon
+  again; its pin button docks it full height to the side of the screen
+  instead, and maximised windows make room for it. Ctrl+K picks a guide.
+  It's a separate, optional program (`wallflex-reader.exe`) using
+  WebView2, so it only uses memory while it's open, and it exits two
+  minutes after it's hidden.
+- The reader's **Aa** button sets how guides look: a theme (Auto, which
+  follows Windows, Light, Sepia, Dark or Black), the font (Segoe UI,
+  Sitka, Georgia, Verdana, Bahnschrift or Cascadia Mono), the text size
+  and the line spacing. Changes show at once and are remembered.
+  Markdown and text guides follow all of it; HTML and PDF guides keep
+  their own look.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

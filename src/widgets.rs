@@ -7,6 +7,7 @@
 //! [`Canvas`]; text comes back as [`Label`]s for GDI to draw on top.
 
 mod discord;
+mod guides;
 mod motion;
 mod visualizer;
 
@@ -251,6 +252,8 @@ pub enum Widget {
     Discord,
     /// Music visualizer: bars for what's playing.
     Visualizer,
+    /// A book icon that opens the guides reader.
+    Guides,
 }
 
 /// The graph's scale counts as settled within this share of the peak.
@@ -360,6 +363,8 @@ pub struct Dashboard {
     /// Which groups moved on the last frame: CPU columns, graph, rings
     /// and RAM bar. Only they need repainting.
     stepped: (bool, bool, bool),
+    /// The pointer is over the guides icon.
+    guides_hover: bool,
 }
 
 /// Which parts the panel shows (the config's `[panel]`). By default
@@ -765,7 +770,8 @@ impl Dashboard {
             | Widget::Gpu(_)
             | Widget::Info
             | Widget::Discord
-            | Widget::Visualizer => Vec::new(),
+            | Widget::Visualizer
+            | Widget::Guides => Vec::new(),
         }
     }
 
@@ -842,6 +848,7 @@ impl Dashboard {
             Widget::Info => (PANEL_W, INFO_H),
             Widget::Visualizer => self.visualizer.size(),
             Widget::Discord => self.discord.size(),
+            Widget::Guides => guides::size(),
         }
     }
 
@@ -883,6 +890,7 @@ impl Dashboard {
             Widget::Info => self.draw_info(&mut pen),
             Widget::Visualizer => self.visualizer.draw(&mut pen),
             Widget::Discord => self.discord.draw(&mut pen),
+            Widget::Guides => guides::draw(&mut pen, self.guides_hover),
         }
         Drawing {
             labels: pen.labels,
@@ -891,9 +899,13 @@ impl Dashboard {
     }
 
     /// Notes the control under the pointer, for hover highlights.
-    /// Returns whether the Discord widget needs repainting.
+    /// Returns whether a widget with highlights needs repainting.
     pub fn set_hover(&mut self, hover: Option<Action>) -> bool {
-        self.discord.set_hover(hover)
+        let guides = hover == Some(Action::OpenGuides);
+        let guides_changed = guides != self.guides_hover;
+        self.guides_hover = guides;
+        let discord_changed = self.discord.set_hover(hover);
+        guides_changed || discord_changed
     }
 
     /// Handles a click on a widget. Returns a command for the Discord
