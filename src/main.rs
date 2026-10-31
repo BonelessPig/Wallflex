@@ -6,6 +6,12 @@
 
 // Release builds have no console window; debug builds keep one for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Only Windows runs the desktop app so far, so elsewhere much of the
+// shared code (Discord, the visualizer, pacing, ...) has no caller yet.
+#![cfg_attr(
+    not(windows),
+    allow(dead_code, reason = "the desktop app isn't ported yet")
+)]
 
 mod args;
 mod audio;
@@ -16,16 +22,29 @@ mod color;
 mod config;
 mod discord;
 mod edid;
+#[cfg(not(windows))]
+mod font;
 mod geometry;
 #[cfg(test)]
 mod icon;
 mod image;
 mod log;
 mod media;
+mod monitor;
 mod pace;
+mod paths;
+mod platform;
+#[cfg(not(windows))]
+mod preview;
 mod sensors;
 mod text;
 mod widgets;
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(windows)]
 mod win32;
 
 use std::path::PathBuf;
@@ -44,7 +63,7 @@ const PREVIEW_READINGS: u32 = 4;
 fn main() -> ExitCode {
     // Lets `--help`, `--diagnose` and errors print when a release build
     // is started from a terminal.
-    win32::console::attach_parent();
+    platform::attach_console();
 
     let options = match args::parse(std::env::args().skip(1)) {
         Ok(options) => options,
@@ -60,7 +79,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Sensors => {
-            let mut sensors = win32::sensors::Sensors::new();
+            let mut sensors = platform::Sensors::new();
             let _first = sensors.sample();
             std::thread::sleep(SENSOR_WARMUP);
             for line in text::lines(&sensors.sample()) {
@@ -75,11 +94,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Diagnose => {
-            println!("{}", win32::app::diagnose());
+            println!("{}", platform::diagnose());
             ExitCode::SUCCESS
         }
         Command::Quit => {
-            if win32::app::request_quit() {
+            if platform::request_quit() {
                 ExitCode::SUCCESS
             } else {
                 eprintln!("wallflex: no running copy found");
@@ -94,7 +113,7 @@ fn main() -> ExitCode {
 /// on first run), starts the log next to it, then draws until quit.
 fn start(options: Options) -> ExitCode {
     let custom = options.config.as_ref().map(PathBuf::from);
-    let config_path = custom.clone().or_else(default_config_path);
+    let config_path = custom.clone().or_else(paths::default_config_path);
     if let Some(path) = &config_path {
         if let Some(dir) = path.parent() {
             // If this fails, the log and default file just aren't written.
@@ -112,19 +131,13 @@ fn start(options: Options) -> ExitCode {
             }
         }
     }
-    match win32::app::run(options, config_path) {
+    match platform::run(options, config_path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             crate::log!("{error}");
             ExitCode::FAILURE
         }
     }
-}
-
-/// `%APPDATA%\Wallflex\config.toml`.
-fn default_config_path() -> Option<PathBuf> {
-    let app_data = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(app_data).join("Wallflex").join("config.toml"))
 }
 
 /// Reads and checks a settings file: `--config`'s, or the default one.
@@ -135,8 +148,13 @@ fn default_config_path() -> Option<PathBuf> {
 fn load_settings(path: Option<&str>) -> Result<config::Settings, String> {
     let path = path
         .map(PathBuf::from)
-        .or_else(default_config_path)
-        .ok_or("can't find the settings folder (%APPDATA%)")?;
+        .or_else(paths::default_config_path)
+        .ok_or_else(|| {
+            format!(
+                "can't find the settings folder ({})",
+                paths::CONFIG_DIR_NAME
+            )
+        })?;
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("can't read {}: {e}", path.display()))?;
     let settings = config::parse(&text).map_err(|e| e.to_string())?;
@@ -165,7 +183,7 @@ fn info() -> serde_json::Value {
             "left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom,
         })
     };
-    let monitors: Vec<_> = win32::monitors::list()
+    let monitors: Vec<_> = platform::monitors()
         .into_iter()
         .map(|m| {
             serde_json::json!({
@@ -177,7 +195,7 @@ fn info() -> serde_json::Value {
             })
         })
         .collect();
-    let gpus: Vec<_> = win32::sensors::Sensors::new()
+    let gpus: Vec<_> = platform::Sensors::new()
         .sample()
         .gpus
         .into_iter()
@@ -203,7 +221,7 @@ fn preview(height: u32, path: &str, options: &Options) -> ExitCode {
             }
             None => None,
         };
-    let mut sensors = win32::sensors::Sensors::new();
+    let mut sensors = platform::Sensors::new();
     let mut dashboard = widgets::Dashboard::default();
     if let Some(settings) = &settings {
         dashboard.set_parts(settings.parts.clone());
@@ -314,7 +332,7 @@ fn save_preview(
     background: color::Rgb,
     path: &str,
 ) -> bool {
-    let image = win32::paint::preview(dashboard, widget, height, background)
+    let image = platform::preview(dashboard, widget, height, background)
         .and_then(|(w, h, pixels)| bmp::encode(w, h, &pixels));
     let Some(image) = image else {
         eprintln!("wallflex: couldn't render the preview");
@@ -330,12 +348,20 @@ fn save_preview(
 }
 
 /// Longest wait for `--preview`'s pictures.
+#[cfg(windows)]
 const PREVIEW_IMAGE_WAIT: Duration = Duration::from_secs(10);
 /// How often `--preview` checks for them.
+#[cfg(windows)]
 const PREVIEW_IMAGE_POLL: Duration = Duration::from_millis(100);
+
+/// Downloads nothing: picture downloads aren't ported yet, so Discord
+/// previews show no avatars.
+#[cfg(not(windows))]
+fn fetch_preview_images(_dashboard: &mut widgets::Dashboard) {}
 
 /// Downloads the pictures the preview's sample data uses, waiting up to
 /// [`PREVIEW_IMAGE_WAIT`].
+#[cfg(windows)]
 fn fetch_preview_images(dashboard: &mut widgets::Dashboard) {
     let wanted = dashboard.wanted_images();
     // No window to notify: the preview checks for itself.

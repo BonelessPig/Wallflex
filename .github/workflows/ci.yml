@@ -9,12 +9,17 @@ permissions:
 
 jobs:
   check:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - name: Format
+        if: matrix.os == 'windows-latest'
         run: cargo fmt --check
       - name: Clippy (warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
@@ -22,3 +27,17 @@ jobs:
         run: cargo test
       - name: Release build
         run: cargo build --release
+      # Only Windows draws on the desktop so far; elsewhere, check that
+      # readings and previews work, and keep the previews to look at.
+      - name: Smoke test (sensors and previews)
+        if: matrix.os != 'windows-latest'
+        run: |
+          target/release/wallflex --sensors
+          target/release/wallflex --preview 1440 previews --widget all
+          ls -l previews
+      - name: Keep the previews
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: previews-${{ matrix.os }}
+          path: previews

@@ -419,15 +419,131 @@ pub fn product_name(raw: &[u8]) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// Counter maths for systems that report ticks and wrapping 32-bit
+/// counters (macOS), kept here so it's tested on every system.
+pub mod counters {
+    #![cfg_attr(
+        windows,
+        allow(dead_code, reason = "only the macOS layer uses these")
+    )]
+
+    use super::{PERCENT_MAX, u64_to_f64};
+
+    /// One logical processor's clock ticks spent in each state, as macOS's
+    /// `host_processor_info` counts them: user, system, idle, nice. They
+    /// count up from boot and wrap.
+    pub type CpuTicks = [u32; 4];
+    /// Where the idle ticks are in [`CpuTicks`].
+    const IDLE_STATE: usize = 2;
+    /// Most threads per core [`cores_by_threads`] accepts (two-way SMT).
+    const MAX_THREADS_PER_CORE: usize = 2;
+
+    /// Use per logical processor (0 to 100%) and for the whole CPU between
+    /// two readings of tick counts. Empty and `None` if the readings don't
+    /// have the same processors.
+    pub fn tick_loads(
+        before: &[CpuTicks],
+        after: &[CpuTicks],
+    ) -> (Vec<f64>, Option<f64>) {
+        if before.len() != after.len() {
+            return (Vec::new(), None);
+        }
+        let (mut all_busy, mut all_ticks) = (0_u64, 0_u64);
+        let loads = before
+            .iter()
+            .zip(after)
+            .map(|(old, new)| {
+                let mut ticks = 0_u64;
+                let mut idle = 0_u64;
+                for (state, (o, n)) in old.iter().zip(new).enumerate() {
+                    let passed = wrapped_delta(*o, *n);
+                    ticks = ticks.saturating_add(passed);
+                    if state == IDLE_STATE {
+                        idle = passed;
+                    }
+                }
+                let busy = ticks.saturating_sub(idle);
+                all_busy = all_busy.saturating_add(busy);
+                all_ticks = all_ticks.saturating_add(ticks);
+                share_percent(busy, ticks).unwrap_or(0.0)
+            })
+            .collect();
+        (loads, share_percent(all_busy, all_ticks))
+    }
+
+    /// `part` of `whole` as a percentage, `None` if `whole` is 0.
+    fn share_percent(part: u64, whole: u64) -> Option<f64> {
+        (whole > 0).then(|| {
+            (u64_to_f64(part) / u64_to_f64(whole) * PERCENT_MAX)
+                .clamp(0.0, PERCENT_MAX)
+        })
+    }
+
+    /// How far a 32-bit counter moved, allowing for one wrap.
+    pub fn wrapped_delta(before: u32, after: u32) -> u64 {
+        u64::from(after.wrapping_sub(before))
+    }
+
+    /// Each core's logical processors when all that's known is how many of
+    /// each there are, numbering a core's threads next to each other (as
+    /// macOS does on Intel Macs; Apple Silicon has one per core). Empty if
+    /// the counts don't divide evenly or give more than two threads a core.
+    pub fn cores_by_threads(
+        logical: usize,
+        physical: usize,
+    ) -> Vec<Vec<usize>> {
+        let per_core = logical.checked_div(physical).unwrap_or(0);
+        let even = logical.checked_rem(physical) == Some(0);
+        if !even || per_core == 0 || per_core > MAX_THREADS_PER_CORE {
+            return Vec::new();
+        }
+        (0..logical)
+            .collect::<Vec<_>>()
+            .chunks(per_core)
+            .map(<[usize]>::to_vec)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use super::counters::{cores_by_threads, tick_loads, wrapped_delta};
     use super::{
         composite_temperature, cores_from_topology, cpu_clock_ghz,
         gpu_usage_by_luid, has_seek_penalty, luid_from_instance, luid_key,
         memory_modules, processor_loads, product_name, rate_kbps, vram_by_luid,
     };
+
+    #[test]
+    fn loads_from_ticks() {
+        let before = [[10, 10, 80, 0], [0, 0, 0, 0]];
+        let after = [[40, 20, 140, 0], [u32::MAX, 0, 0, 0]];
+        let (loads, total) = tick_loads(&before, &after);
+        // 30 + 10 busy of 100 ticks; then all u32::MAX ticks busy.
+        assert!((loads[0] - 40.0).abs() < 1e-9);
+        assert!((loads[1] - 100.0).abs() < 1e-9);
+        assert!(total.unwrap() > 99.0);
+        assert_eq!(tick_loads(&before, &after[..1]), (Vec::new(), None));
+        // No time passed: no total, cores at 0.
+        assert_eq!(tick_loads(&before, &before).1, None);
+    }
+
+    #[test]
+    fn counters_wrap() {
+        assert_eq!(wrapped_delta(u32::MAX, 4), 5);
+        assert_eq!(wrapped_delta(4, 10), 6);
+    }
+
+    #[test]
+    fn cores_from_counts() {
+        assert_eq!(cores_by_threads(3, 3), vec![vec![0], vec![1], vec![2]]);
+        assert_eq!(cores_by_threads(4, 2), vec![vec![0, 1], vec![2, 3]]);
+        assert_eq!(cores_by_threads(5, 2), Vec::<Vec<usize>>::new());
+        assert_eq!(cores_by_threads(8, 2), Vec::<Vec<usize>>::new());
+        assert_eq!(cores_by_threads(4, 0), Vec::<Vec<usize>>::new());
+    }
 
     /// A memory device structure (type 17) with `size`, and one string.
     fn memory_device(size: u16) -> Vec<u8> {

@@ -8,6 +8,13 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Added
+
+- First steps towards macOS and Linux (see `docs/PORTING.md`): Wallflex
+  now builds there, and `--sensors`, `--preview`, `--check` and `--info`
+  work (macOS reads CPU, RAM and network). It can't draw on the desktop
+  there yet. Nothing changes on Windows.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

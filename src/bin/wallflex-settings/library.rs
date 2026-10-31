@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn resolves_only_plain_names_inside() {
         let lib = Path::new(r"C:\lib");
-        let sky = PathBuf::from(r"C:\lib\Trips\sky.jpg");
+        let sky = lib.join("Trips").join("sky.jpg");
         assert_eq!(resolve(lib, "Trips/sky.jpg"), Some(sky.clone()));
         assert_eq!(resolve(lib, r"Trips\sky.jpg"), Some(sky));
         for bad in [

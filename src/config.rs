@@ -300,6 +300,7 @@ impl Settings {
     #[must_use]
     pub fn with_base_dir(mut self, dir: &Path) -> Self {
         let resolve = |path: &mut PathBuf| {
+            *path = crate::paths::native_separators(path);
             if path.is_relative() {
                 *path = dir.join(&*path);
             }
@@ -776,7 +777,7 @@ fn parse_anchor(text: &str) -> Result<Anchor, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use super::{
         Anchor, DEFAULT_CONFIG, ImageChoice, Layout, MonitorInfo, MonitorMatch,
@@ -870,14 +871,21 @@ mod tests {
 
     #[test]
     fn reads_backgrounds_and_pictures() {
-        let text = r##"
+        // An absolute path and a base folder as this system spells them.
+        let (city, base) = if cfg!(windows) {
+            (r"C:\walls\city.png", r"C:\config")
+        } else {
+            ("/walls/city.png", "/config")
+        };
+        let text = format!(
+            r##"
             background = "Transparent"
             image = 'pictures\sky.jpg'
             image_fit = "fit"
             [[layout]]
             monitor = "DISPLAY2"
             background = "#FFFFFF"
-            image = 'C:\walls\city.png'
+            image = '{city}'
             image_fit = "centre"
             image_zoom = 1.25
             image_offset = [10, -4.5]
@@ -886,10 +894,10 @@ mod tests {
             image = ""
             [[layout]]
             monitor = "*"
-        "##;
-        let settings =
-            parse(text).unwrap().with_base_dir(Path::new(r"C:\config"));
-        let sky = PathBuf::from(r"C:\config\pictures\sky.jpg");
+        "##
+        );
+        let settings = parse(&text).unwrap().with_base_dir(Path::new(base));
+        let sky = Path::new(base).join("pictures").join("sky.jpg");
         assert_eq!(settings.background, Background::Transparent);
         assert_eq!(settings.image.as_deref(), Some(sky.as_path()));
         assert_eq!(settings.image_fit, Fit::Contain);
@@ -906,7 +914,7 @@ mod tests {
         assert_eq!(
             own.image,
             Some(Wallpaper {
-                path: r"C:\walls\city.png".into(),
+                path: city.into(),
                 fit: Fit::Center,
                 zoom: Some(1.25),
                 offset: (10.0, -4.5),

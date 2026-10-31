@@ -1,6 +1,7 @@
 //! Opens the settings page: in an Edge app window (no tabs or address
 //! bar, so it feels like an app) or, failing that, the default browser.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -25,8 +26,7 @@ pub fn open(url: &str, browser: bool) {
             Err(error) => eprintln!("can't start {}: {error}", edge.display()),
         }
     }
-    // Explorer hands a URL to the default browser.
-    if let Err(error) = Command::new("explorer.exe").arg(url).spawn() {
+    if let Err(error) = open_with_system(OsStr::new(url)) {
         eprintln!("can't open the browser: {error}");
     }
 }
@@ -38,4 +38,29 @@ fn find_edge() -> Option<PathBuf> {
         .filter_map(std::env::var_os)
         .map(|root| PathBuf::from(root).join(EDGE))
         .find(|path| path.is_file())
+}
+
+/// The program that opens a file, folder or URL the way a double-click
+/// would: Explorer (which hands URLs to the default browser), `open` on
+/// macOS, `xdg-open` elsewhere.
+#[cfg(windows)]
+const SYSTEM_OPENER: &str = "explorer.exe";
+/// See the Windows version.
+#[cfg(target_os = "macos")]
+const SYSTEM_OPENER: &str = "open";
+/// See the Windows version.
+#[cfg(not(any(windows, target_os = "macos")))]
+const SYSTEM_OPENER: &str = "xdg-open";
+
+/// Opens `target` (a file, folder or URL) with the system's default
+/// app for it, without waiting.
+///
+/// # Errors
+///
+/// If the opener couldn't be started.
+pub fn open_with_system(target: &OsStr) -> std::io::Result<()> {
+    Command::new(SYSTEM_OPENER)
+        .arg(target)
+        .spawn()
+        .map(|_child| ())
 }

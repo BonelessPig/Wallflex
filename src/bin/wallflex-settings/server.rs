@@ -1,12 +1,13 @@
 //! The local server behind the settings page.
 //!
-//! It listens on `127.0.0.1` only, on a port Windows picks. Every API
+//! It listens on `127.0.0.1` only, on a port the system picks. Every API
 //! call must carry the random token from the page's address, and the
 //! `Host` header must name this server, so other web pages (or DNS
 //! tricks) can't read or change the settings through it.
 
 use std::ffi::OsStr;
 use std::net::{TcpListener, TcpStream};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,12 +21,14 @@ use crate::http::{
     MAX_BODY_BYTES, Request, Response, percent_decode, read_request,
 };
 use crate::library::{self, picture_type};
+use crate::window;
 
 /// The page.
 const PAGE: &str = include_str!("ui.html");
 /// The commented default settings, shown when there's no file yet.
 const DEFAULT_CONFIG: &str = include_str!("../../../config.default.toml");
 /// `CREATE_NO_WINDOW`: runs `wallflex.exe` without a console flashing.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// The monitor height previews are drawn for: 1 pixel per design unit.
 const PREVIEW_HEIGHT: &str = "1000";
@@ -311,13 +314,13 @@ impl Shared {
 
     /// Runs `wallflex.exe` with `args` and waits for it.
     fn run(&self, args: &[&OsStr]) -> Result<Ran, String> {
-        let output = Command::new(&self.wallflex)
-            .args(args)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|e| {
-                format!("can't run {}: {e}", self.wallflex.display())
-            })?;
+        let mut command = Command::new(&self.wallflex);
+        command.args(args);
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
+        let output = command.output().map_err(|e| {
+            format!("can't run {}: {e}", self.wallflex.display())
+        })?;
         Ok(Ran {
             ok: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
@@ -481,11 +484,11 @@ impl Shared {
     /// settings file, as wallflex reads them), for the page to show on
     /// its monitors.
     fn picture(&self, path: &str) -> Response {
-        let path = Path::new(path);
+        let path = crate::paths::native_separators(Path::new(path));
         let full = if path.is_relative() {
             self.config_dir().join(path)
         } else {
-            path.to_path_buf()
+            path
         };
         send_picture(&full)
     }
@@ -548,14 +551,15 @@ impl Shared {
         }
     }
 
-    /// Opens the library in Explorer, making it first if need be.
+    /// Opens the library in Explorer (or Finder, or the file manager),
+    /// making it first if need be.
     fn open_library(&self) -> Value {
         let folder = self.library_dir();
         let opened = std::fs::create_dir_all(&folder)
-            .and_then(|()| Command::new("explorer.exe").arg(&folder).spawn());
+            .and_then(|()| window::open_with_system(folder.as_os_str()));
         match opened {
-            // Explorer runs on its own; there's nothing to wait for.
-            Ok(_) => json!({ "ok": true }),
+            // The file manager runs on its own; nothing to wait for.
+            Ok(()) => json!({ "ok": true }),
             Err(error) => json!({
                 "ok": false,
                 "error": format!("can't open {}: {error}", folder.display()),

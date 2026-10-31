@@ -13,7 +13,7 @@ use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
 use super::{struct_size, to_rect};
 use crate::edid;
-use crate::geometry::Rect;
+pub use crate::monitor::Monitor;
 
 /// `MONITORINFO.dwFlags` bit for the primary monitor.
 const MONITORINFOF_PRIMARY: u32 = 1;
@@ -22,32 +22,6 @@ const MONITORINFOF_PRIMARY: u32 = 1;
 const MAX_SCREENS_PER_DISPLAY: u32 = 8;
 /// Room for an EDID with all its extension blocks.
 const EDID_MAX: usize = 32 * 1024;
-
-/// One monitor, in desktop coordinates (physical pixels). The primary
-/// monitor's top-left is (0, 0); others can be negative.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Monitor {
-    /// The whole monitor.
-    pub rect: Rect,
-    /// The part the taskbar and docked toolbars leave free.
-    pub work: Rect,
-    /// Windows name, e.g. `\\.\DISPLAY1`.
-    pub name: String,
-    /// Whether it's the primary monitor.
-    pub primary: bool,
-    /// The screen's width and height in millimetres, if the monitor
-    /// says.
-    pub size_mm: Option<(u32, u32)>,
-}
-
-impl Monitor {
-    /// Millimetres per pixel across, if the size is known.
-    pub fn pitch(&self) -> Option<f64> {
-        let (width_mm, _) = self.size_mm?;
-        let pixels = self.rect.width();
-        (pixels > 0).then(|| f64::from(width_mm) / f64::from(pixels))
-    }
-}
 
 /// Every monitor.
 pub fn list() -> Vec<Monitor> {

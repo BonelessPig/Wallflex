@@ -17,6 +17,8 @@
 
 mod http;
 mod library;
+#[path = "../../paths.rs"]
+mod paths;
 mod server;
 mod window;
 
@@ -27,8 +29,9 @@ use std::process::ExitCode;
 const USAGE: &str = "\
 Usage: wallflex-settings [options]
 
-Opens a window for editing Wallflex's settings
-(%APPDATA%\\Wallflex\\config.toml).
+Opens a window for editing Wallflex's settings (config.toml in
+%APPDATA%\\Wallflex on Windows, ~/Library/Application Support/Wallflex
+on macOS, ~/.config/wallflex elsewhere).
 
 Options:
   --config <FILE>  edit this settings file instead
@@ -85,15 +88,17 @@ fn main() -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let Some(config) = options.config.clone().or_else(default_config_path)
+    let Some(config) =
+        options.config.clone().or_else(paths::default_config_path)
     else {
-        eprintln!("wallflex-settings: can't find %APPDATA%");
+        eprintln!("wallflex-settings: can't find {}", paths::CONFIG_DIR_NAME);
         return ExitCode::FAILURE;
     };
+    let exe_name = format!("wallflex{}", std::env::consts::EXE_SUFFIX);
     let wallflex = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("wallflex.exe")))
-        .unwrap_or_else(|| PathBuf::from("wallflex.exe"));
+        .and_then(|exe| exe.parent().map(|dir| dir.join(&exe_name)))
+        .unwrap_or_else(|| PathBuf::from(&exe_name));
     let server = match server::Server::start(config, wallflex) {
         Ok(server) => server,
         Err(error) => {
@@ -108,12 +113,6 @@ fn main() -> ExitCode {
     }
     server.run();
     ExitCode::SUCCESS
-}
-
-/// `%APPDATA%\Wallflex\config.toml`, as Wallflex uses.
-fn default_config_path() -> Option<PathBuf> {
-    let app_data = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(app_data).join("Wallflex").join("config.toml"))
 }
 
 #[cfg(test)]

@@ -9,7 +9,9 @@ pub const USAGE: &str = "\
 Usage: wallflex [options]
 
 Draws CPU, network and GPU widgets on a solid background behind the
-desktop icons, laid out by %APPDATA%\\Wallflex\\config.toml.
+desktop icons, laid out by config.toml in the settings folder:
+%APPDATA%\\Wallflex on Windows, ~/Library/Application Support/Wallflex
+on macOS, ~/.config/wallflex elsewhere.
 
 Options:
   --color <RRGGBB>  background colour, overriding the config file

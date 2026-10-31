@@ -23,8 +23,9 @@ fork's core and the Workshop authors' files are not licensed to copy.
 - `cargo clippy --all-targets -- -D warnings`, with `pedantic` plus the
   MISRA-style lints in `Cargo.toml` (no unwrap/expect/panic, no unchecked
   indexing, overflow or `as` casts).
-- `unsafe` is denied everywhere except `src/win32/`, which opts in. Every
-  `unsafe` block needs a `// SAFETY:` comment saying why it is sound.
+- `unsafe` is denied everywhere except `src/win32/` and `src/macos/`,
+  which opt in. Every `unsafe` block needs a `// SAFETY:` comment
+  saying why it is sound.
 - Every item, private ones included, has a doc comment.
 - `clippy.toml` lets tests unwrap, expect, panic and index: a panic is
   how a test fails. Plain arithmetic is still linted in tests.
@@ -44,9 +45,27 @@ cargo test
 Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
 `PATH` if `cargo` isn't found.
 
+The macOS and Linux builds can't be run here (no Mac, WSL is off), but
+they can be checked: `rustup target add aarch64-apple-darwin
+x86_64-unknown-linux-gnu` (done), then `cargo clippy --target <target>
+--all-targets -- -D warnings` for each. CI runs the tests and a
+`--sensors` / `--preview` smoke test on all three systems.
+
 ## Structure
 
 - `src/main.rs`: entry point, dispatches on the command.
+- Other systems (`docs/PORTING.md` has the assessment and plan): only
+  Windows draws on the desktop. `src/platform.rs` is the one place
+  `main.rs` reaches the system; it re-exports the same items from
+  `win32` (Windows), `macos` or `linux` (anything else). Off Windows,
+  `--preview` is `src/preview.rs` (canvas + `src/font.rs`, text by
+  `fontdue` with a system font or `WALLFLEX_FONT`); `src/macos/` reads
+  CPU, RAM and network (Mach, `sysctl`, `getifaddrs`); `src/linux.rs`
+  reads nothing yet. Counter maths for them is in `sensors::counters`,
+  tested everywhere. `src/paths.rs` (shared with the settings app via
+  `#[path]`) gives the settings folder per system and reads `\` in
+  picture paths as `/` off Windows. `main.rs` allows dead code off
+  Windows until the app runs there.
 - `src/args.rs`, `src/color.rs`, `src/geometry.rs`: safe, unit-tested
   logic.
 - CPU columns follow the real core layout (`GetLogicalProcessorInformationEx`,
