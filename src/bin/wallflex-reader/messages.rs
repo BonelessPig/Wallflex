@@ -157,13 +157,13 @@ pub fn show(folder: &Path, name: &str) -> (String, bool) {
 }
 
 /// The `converted` answer for converting guide `name` in `folder` with
-/// pandoc (found on `path_var`): the new guide's name, or an `error`.
+/// pandoc (found in `dirs`): the new guide's name, or an `error`.
 pub fn converted(
     folder: &Path,
     name: &str,
-    path_var: Option<&std::ffi::OsStr>,
+    dirs: &[std::path::PathBuf],
 ) -> String {
-    match convert::convert_guide(folder, name, path_var) {
+    match convert::convert_guide(folder, name, dirs) {
         Ok(new) => json!({ "type": "converted", "path": new }),
         Err(error) => json!({ "type": "converted", "error": error }),
     }
@@ -332,8 +332,7 @@ mod tests {
 
     #[test]
     fn refuses_to_convert_outside_the_folder() {
-        let answer =
-            converted(std::path::Path::new(r"C:\g"), "../x.html", None);
+        let answer = converted(std::path::Path::new(r"C:\g"), "../x.html", &[]);
         assert!(answer.contains("\"error\""));
         assert!(!answer.contains("\"path\""));
     }

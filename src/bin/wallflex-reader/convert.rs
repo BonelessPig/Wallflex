@@ -26,6 +26,9 @@ const MAX_COMPLAINT_BYTES: u64 = 2048;
 const MAX_COPIES: u32 = 99;
 /// The program's file name on `PATH`.
 const PANDOC: &str = "pandoc.exe";
+/// The folder pandoc's installers use, under `%LOCALAPPDATA%` or
+/// `%ProgramFiles%`.
+const PANDOC_FOLDER: &str = "Pandoc";
 /// Where to get pandoc, for the message when it's missing.
 const INSTALL_HINT: &str = "Pandoc isn't installed (or isn't on PATH). \
                             Install it with: winget install \
@@ -109,11 +112,30 @@ fn arguments(plan: &Plan) -> Vec<OsString> {
     args
 }
 
-/// The first `pandoc.exe` in the absolute directories of `path_var`.
+/// Where to look for pandoc, in order: the directories of `path_var`,
+/// then pandoc's usual install folders under `local_app_data` (its
+/// per-user installer) and `program_files`. The usual folders matter
+/// because a program's `PATH` is fixed when it starts: one started
+/// before pandoc was installed (such as Explorer, and so everything
+/// started at sign-in) never sees the new entry.
+pub fn search_dirs(
+    path_var: Option<&OsStr>,
+    local_app_data: Option<&OsStr>,
+    program_files: Option<&OsStr>,
+) -> Vec<PathBuf> {
+    let on_path = path_var.map(std::env::split_paths).into_iter().flatten();
+    let usual = [local_app_data, program_files]
+        .into_iter()
+        .flatten()
+        .map(|base| Path::new(base).join(PANDOC_FOLDER));
+    on_path.chain(usual).collect()
+}
+
+/// The first `pandoc.exe` in the absolute directories of `dirs`.
 /// Relative entries are skipped, so a file in the current directory
 /// can't stand in for it.
-pub fn find_pandoc(path_var: &OsStr) -> Option<PathBuf> {
-    std::env::split_paths(path_var)
+pub fn find_pandoc(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter()
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(PANDOC))
         .find(|candidate| candidate.is_file())
@@ -192,31 +214,29 @@ pub fn run_limited(
     ))
 }
 
-/// Converts guide `name` in `folder`, finding pandoc on `path_var`.
-/// Returns the new guide's name.
+/// Converts guide `name` in `folder`, finding pandoc in `dirs` (see
+/// [`search_dirs`]). Returns the new guide's name.
 pub fn convert_guide(
     folder: &Path,
     name: &str,
-    path_var: Option<&OsStr>,
+    dirs: &[PathBuf],
 ) -> Result<String, String> {
     let plan = plan(folder, name)?;
-    let pandoc = path_var
-        .and_then(find_pandoc)
-        .ok_or_else(|| INSTALL_HINT.to_owned())?;
+    let pandoc = find_pandoc(dirs).ok_or_else(|| INSTALL_HINT.to_owned())?;
     convert(&pandoc, &plan)?;
     Ok(plan.name)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use super::{
         Plan, arguments, can_convert, convert_guide, find_pandoc, plan,
-        run_limited,
+        run_limited, search_dirs,
     };
     use crate::guides::Kind;
 
@@ -283,21 +303,40 @@ mod tests {
         let dir = scratch("path");
         fs::write(dir.join("pandoc.exe"), "").unwrap();
         let other = Path::new("somewhere-else").to_path_buf();
-        let both = std::env::join_paths([other.clone(), dir.clone()]).unwrap();
+        let both = [other.clone(), dir.clone()];
         assert_eq!(find_pandoc(&both), Some(dir.join("pandoc.exe")));
-        let relative = std::env::join_paths([other]).unwrap();
-        assert_eq!(find_pandoc(&relative), None);
+        assert_eq!(find_pandoc(&[other]), None);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn searches_path_then_the_usual_install_folders() {
+        let path = std::env::join_paths([r"C:\a", r"C:\b"]).unwrap();
+        let dirs = search_dirs(
+            Some(&path),
+            Some(OsStr::new(r"C:\Users\x\AppData\Local")),
+            Some(OsStr::new(r"C:\Program Files")),
+        );
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from(r"C:\a"),
+                PathBuf::from(r"C:\b"),
+                PathBuf::from(r"C:\Users\x\AppData\Local\Pandoc"),
+                PathBuf::from(r"C:\Program Files\Pandoc"),
+            ]
+        );
+        assert_eq!(search_dirs(None, None, None).len(), 0);
     }
 
     #[test]
     fn says_so_when_pandoc_is_missing() {
         let dir = scratch("missing");
         fs::write(dir.join("a.html"), "<p>x</p>").unwrap();
-        let empty = dir.as_os_str();
-        let error = convert_guide(&dir, "a.html", Some(empty)).unwrap_err();
+        let error = convert_guide(&dir, "a.html", std::slice::from_ref(&dir))
+            .unwrap_err();
         assert!(error.contains("winget"));
-        let none = convert_guide(&dir, "a.html", None).unwrap_err();
+        let none = convert_guide(&dir, "a.html", &[]).unwrap_err();
         assert!(none.contains("winget"));
         fs::remove_dir_all(&dir).unwrap();
     }

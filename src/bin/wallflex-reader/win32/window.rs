@@ -59,6 +59,7 @@ use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
 use super::webview::WebView;
 use super::{Event, Launch, with_reader};
+use crate::convert;
 use crate::messages::{self, Request};
 use crate::place::{
     self, Edge, Grab, MARGIN, MIN_SIZE, PANE_WIDTH, PANEL_SIZE, RESIZE_BORDER,
@@ -567,11 +568,15 @@ impl Reader {
             Request::Convert(name) => {
                 // Pandoc is quick on a guide and is stopped after
                 // `convert::TIME_LIMIT`, so this waits for it.
-                let path = std::env::var_os("PATH");
+                let dirs = convert::search_dirs(
+                    std::env::var_os("PATH").as_deref(),
+                    std::env::var_os("LOCALAPPDATA").as_deref(),
+                    std::env::var_os("ProgramFiles").as_deref(),
+                );
                 self.view.post(&messages::converted(
                     &self.folder,
                     &name,
-                    path.as_deref(),
+                    &dirs,
                 ));
             }
             Request::Folder => {

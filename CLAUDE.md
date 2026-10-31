@@ -133,7 +133,10 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   navigation (guides through the app, web links to the browser).
   `convert.rs`: the list's "-> MD" button (HTML and `.tex` guides, shown
   as text) runs `pandoc --sandbox -f html|latex -t gfm-raw_html` (found
-  on absolute `PATH` entries only, 20 s limit, run on the app thread)
+  on absolute `PATH` entries, then `%LOCALAPPDATA%\Pandoc` and
+  `%ProgramFiles%\Pandoc`, since a process's `PATH` is fixed when it
+  starts and Explorer's predates a new install; 20 s limit, run on the
+  app thread)
   into a sibling `.md` that is never overwritten. Pandoc isn't shipped
   (about 150 MB) and can't read PDFs.
   `place.rs`: floating in the work area's corner nearest the click,
