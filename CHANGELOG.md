@@ -15,8 +15,9 @@ patch number (0.x.**y**) for fixes only.
   text files in the `Guides` folder next to `config.toml`
   (`%APPDATA%\Wallflex\Guides`). The reader floats in the corner by the
   icon and hides when you click elsewhere, press Esc or click the icon
-  again; its pin button docks it full height to the side of the screen
-  instead, and maximised windows make room for it. Ctrl+K picks a guide.
+  again; its pin buttons dock it full height to the left or right side
+  of the screen instead (the side is remembered), and maximised windows
+  make room for it. Ctrl+K picks a guide.
   It's a separate, optional program (`wallflex-reader.exe`) using
   WebView2, so it only uses memory while it's open, and it exits two
   minutes after it's hidden.
@@ -26,6 +27,15 @@ patch number (0.x.**y**) for fixes only.
   and the line spacing. Changes show at once and are remembered.
   Markdown and text guides follow all of it; HTML and PDF guides keep
   their own look.
+- The reader has no title bar: the guide fills the window, and its
+  buttons (guides, Aa, folder, pin left, pin right, close) fan out
+  from a faint dot in the top-left corner when you point at it.
+
+### Fixed
+
+- Widgets move to stay clear when the work area changes, such as when
+  the guides reader is pinned to a side or the taskbar moves; before,
+  they stayed put until Wallflex restarted.
 
 ## [0.5.0] - 2026-10-25
 

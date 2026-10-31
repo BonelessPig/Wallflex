@@ -156,6 +156,20 @@ impl Surface {
         Ok(())
     }
 
+    /// Moves the widgets into the monitor's new work area (`work`, in
+    /// desktop pixels), repainting where they were and where they go.
+    /// A resting surface repaints all of it when it wakes.
+    pub fn set_work_area(&mut self, work: Rect, dashboard: &Dashboard) {
+        let corner = Point {
+            x: self.monitor.left,
+            y: self.monitor.top,
+        };
+        if self.painter.set_work(work.relative_to(corner)) {
+            // The old places come from where each widget was last drawn.
+            self.invalidate_widgets(dashboard);
+        }
+    }
+
     /// Asks Windows to repaint the whole window.
     pub fn invalidate(&self) {
         if self.resting {

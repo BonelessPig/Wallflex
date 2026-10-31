@@ -86,16 +86,6 @@ body {
   user-select: none;
   overflow: hidden;
 }
-header {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 42px;
-  padding: 0 6px 0 8px;
-  background: var(--bar);
-  border-bottom: 1px solid var(--rule);
-}
 button {
   font: inherit;
   color: inherit;
@@ -107,16 +97,6 @@ button {
 button:hover { background: var(--hover); }
 button:active { background: var(--press); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.icon {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 30px;
-  color: var(--quiet);
-}
-.icon:hover { color: var(--ink); }
-.icon[aria-pressed="true"] { color: var(--accent); }
 svg {
   width: 16px;
   height: 16px;
@@ -126,26 +106,105 @@ svg {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-#pick {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 8px;
-  text-align: left;
+/* The corner menu: a faint dot that fans out into round buttons on a
+   quarter circle while the pointer is over it. */
+#radial {
+  --reach: 112px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
 }
-#pick .book { flex: none; color: var(--quiet); }
-#title {
-  flex: 0 1 auto;
-  min-width: 0;
+#radial .disc {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 190px;
+  height: 190px;
+  border-bottom-right-radius: 100%;
+  background: radial-gradient(circle at 0 0, var(--bg) 55%, transparent 85%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+#radial.open .disc { opacity: 0.85; pointer-events: auto; }
+#hub {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 0 0 18px 0;
+}
+#hub:hover, #hub:active { background: none; }
+#hub::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--quiet);
+  opacity: 0.3;
+  transition: opacity 0.15s, transform 0.15s, background 0.15s;
+}
+#radial.open #hub::before {
+  opacity: 1;
+  transform: scale(1.4);
+  background: var(--accent);
+}
+.spoke {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--quiet);
+  background: var(--menu);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.3);
+  transition: transform 0.16s ease-in, opacity 0.12s, visibility 0s 0.16s;
+}
+#radial.open .spoke {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(calc(cos(var(--a)) * var(--reach)),
+    calc(sin(var(--a)) * var(--reach)));
+  transition: transform 0.2s cubic-bezier(0.2, 1.3, 0.4, 1) var(--d),
+    opacity 0.12s var(--d), visibility 0s;
+}
+.spoke:hover { background: var(--menu); color: var(--ink); border-color: var(--quiet); }
+.spoke:active { background: var(--press); }
+.spoke[aria-pressed="true"], .spoke[aria-expanded="true"] { color: var(--accent); }
+.spoke:focus-visible { outline-offset: 2px; }
+#aa { font-size: 13px; font-weight: 600; letter-spacing: -0.02em; }
+/* What the button under the pointer does, just outside the arc. */
+#caption {
+  position: absolute;
+  top: 120px;
+  left: 116px;
+  max-width: 240px;
+  padding: 3px 8px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-weight: 600;
+  color: var(--ink);
+  background: var(--menu);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
 }
-#pick .chevron { flex: none; width: 12px; height: 12px; color: var(--quiet); }
+#caption.on { opacity: 1; }
+#caption.title { font-weight: 600; }
 main { flex: 1; position: relative; min-height: 0; }
 iframe {
   display: block;
@@ -181,7 +240,7 @@ iframe {
 [hidden] { display: none !important; }
 #menu {
   position: absolute;
-  top: 46px;
+  top: 40px;
   left: 8px;
   right: 8px;
   max-height: min(70vh, 520px);
@@ -234,12 +293,10 @@ iframe {
 .item.current { color: var(--accent); font-weight: 600; }
 .item.active { background: var(--hover); }
 .none { padding: 10px 8px; color: var(--quiet); }
-#aa { width: 34px; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
-#aa[aria-expanded="true"], #pick[aria-expanded="true"] { background: var(--press); }
 #style {
   position: absolute;
-  top: 46px;
-  right: 8px;
+  top: 40px;
+  left: 8px;
   width: 300px;
   max-width: calc(100% - 16px);
   padding: 4px 14px 14px;
@@ -311,27 +368,39 @@ iframe {
 </style>
 </head>
 <body>
-<header>
-  <button id="pick" aria-haspopup="listbox" aria-expanded="false" title="Choose a guide (Ctrl+K)">
-    <svg class="book" viewBox="0 0 16 16"><path d="M8 4.2C6.6 3 4.4 2.7 2 3
+<div id="radial">
+  <div class="disc"></div>
+  <button id="hub" aria-expanded="false" aria-label="Menu"></button>
+  <button class="spoke" id="pick" style="--a: 0deg; --d: 0ms"
+    aria-haspopup="listbox" aria-expanded="false" data-tip="Guides">
+    <svg viewBox="0 0 16 16"><path d="M8 4.2C6.6 3 4.4 2.7 2 3
       v9.6c2.4-.3 4.6 0 6 1.2 1.4-1.2 3.6-1.5 6-1.2V3c-2.4-.3-4.6 0-6 1.2z
       M8 4.2v9.6"/></svg>
-    <span id="title">Guides</span>
-    <svg class="chevron" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg>
   </button>
-  <button class="icon" id="aa" aria-expanded="false" title="Theme, font and size">Aa</button>
-  <button class="icon" id="folder" title="Open the Guides folder">
+  <button class="spoke" id="aa" style="--a: 18deg; --d: 20ms"
+    aria-expanded="false" data-tip="Theme, font and size">Aa</button>
+  <button class="spoke" id="folder" style="--a: 36deg; --d: 40ms"
+    data-tip="Open the Guides folder">
     <svg viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.3 1.5H13
       c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/></svg>
   </button>
-  <button class="icon" id="pin" aria-pressed="false" title="Pin to the side of the screen">
-    <svg viewBox="0 0 16 16"><path d="M10 2.5l3.5 3.5-2.2.8-2.4 2.4.4 2.8
-      -1 1-2.4-2.4L3 13.5l-.5-.5 2.9-2.9L3 7.7l1-1 2.8.4 2.4-2.4z"/></svg>
+  <button class="spoke pin" id="pin-left" style="--a: 54deg; --d: 60ms"
+    data-side="left" aria-pressed="false">
+    <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/>
+      <rect x="3.5" y="4.5" width="3" height="7" rx=".5" fill="currentColor"
+      stroke="none"/></svg>
   </button>
-  <button class="icon" id="close" title="Close (Esc)">
+  <button class="spoke pin" id="pin-right" style="--a: 72deg; --d: 80ms"
+    data-side="right" aria-pressed="false">
+    <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/>
+      <rect x="9.5" y="4.5" width="3" height="7" rx=".5" fill="currentColor"
+      stroke="none"/></svg>
+  </button>
+  <button class="spoke" id="close" style="--a: 90deg; --d: 100ms" data-tip="Close (Esc)">
     <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
   </button>
-</header>
+  <div id="caption" aria-hidden="true"></div>
+</div>
 <main id="main">
   <div class="note" id="empty" hidden>
     <strong>No guides yet</strong>
@@ -397,10 +466,80 @@ let current = null;
 let shown = [];
 let active = -1;
 
-function setPinned(pinned) {
-  const pin = $("pin");
-  pin.setAttribute("aria-pressed", String(pinned));
-  pin.title = pinned ? "Unpin (float by the book icon)" : "Pin to the side of the screen";
+// A button's caption, also its accessible name.
+function setTip(button, tip) {
+  button.dataset.tip = tip;
+  button.setAttribute("aria-label", tip);
+  if (button === captioned) showCaption(button);
+}
+
+// The pin buttons: the side it's docked to unpins, the other docks
+// (or moves) there.
+function setPinned(pinned, side) {
+  for (const button of document.querySelectorAll(".pin")) {
+    const here = pinned && button.dataset.side === side;
+    const name = button.dataset.side === "left" ? "left" : "right";
+    button.setAttribute("aria-pressed", String(here));
+    let tip = "Pin to the " + name + " side";
+    if (here) tip = "Unpin (float by the book icon)";
+    else if (pinned) tip = "Move to the " + name + " side";
+    setTip(button, tip);
+  }
+}
+
+// The guides button's caption is the open guide's title.
+function setTitle(title) {
+  setTip($("pick"), title);
+  $("pick").setAttribute("aria-label", title + " (Ctrl+K: choose a guide)");
+}
+
+// The one caption, for the button under the pointer or keyboard focus.
+let captioned = null;
+
+function showCaption(button) {
+  captioned = button;
+  const caption = $("caption");
+  caption.textContent = button.dataset.tip;
+  caption.classList.toggle("title", button.id === "pick");
+  caption.classList.add("on");
+}
+
+function hideCaption(button) {
+  if (captioned !== button) return;
+  captioned = null;
+  $("caption").classList.remove("on");
+}
+
+for (const button of document.querySelectorAll(".spoke")) {
+  if (!button.hasAttribute("aria-label")) {
+    button.setAttribute("aria-label", button.dataset.tip || "");
+  }
+  button.addEventListener("mouseenter", () => showCaption(button));
+  button.addEventListener("mouseleave", () => hideCaption(button));
+  button.addEventListener("focus", () => {
+    if (button.matches(":focus-visible")) showCaption(button);
+  });
+  button.addEventListener("blur", () => hideCaption(button));
+}
+
+// The corner menu opens while the pointer or focus is on it, and closes
+// a moment after both leave, so a quick slip off it doesn't snap it shut.
+const FAN_CLOSE_DELAY_MS = 300;
+let fanTimer = 0;
+
+function setFan(open) {
+  clearTimeout(fanTimer);
+  $("radial").classList.toggle("open", open);
+  if (!open && captioned) hideCaption(captioned);
+  $("hub").setAttribute("aria-expanded", String(open));
+}
+
+function closeFanSoon() {
+  clearTimeout(fanTimer);
+  fanTimer = setTimeout(() => {
+    // Keyboard focus keeps it open; a click's focus doesn't.
+    if (!$("radial").querySelector(":focus-visible")) setFan(false);
+  }, FAN_CLOSE_DELAY_MS);
 }
 
 // The CSS variables a reading page gets for the current style.
@@ -509,12 +648,12 @@ function onList(message) {
   }
   guides = message.guides;
   $("where").textContent = message.where;
-  setPinned(message.pinned);
+  setPinned(message.pinned, message.side);
   const empty = guides.length === 0;
   $("empty").hidden = !empty;
   if (empty) {
     current = null;
-    $("title").textContent = "Guides";
+    setTitle("Guides");
     removeView();
     $("error").hidden = true;
     return;
@@ -532,7 +671,7 @@ function removeView() {
 
 function onShow(message) {
   current = message.path;
-  $("title").textContent = message.title;
+  setTitle(message.title);
   document.title = message.title;
   $("empty").hidden = true;
   removeView();
@@ -632,7 +771,15 @@ function choose(index) {
   if (guide && guide.path !== current) open(guide.path);
 }
 
+$("radial").addEventListener("mouseenter", () => setFan(true));
+$("radial").addEventListener("mouseleave", closeFanSoon);
+$("radial").addEventListener("focusin", () => setFan(true));
+$("radial").addEventListener("focusout", (event) => {
+  if (!$("radial").contains(event.relatedTarget)) setFan(false);
+});
+$("hub").addEventListener("click", () => setFan(!$("radial").classList.contains("open")));
 $("pick").addEventListener("click", () => {
+  setFan(false);
   if ($("menu").hidden) openMenu(); else closeMenu();
 });
 $("filter").addEventListener("input", fillMenu);
@@ -641,17 +788,28 @@ $("filter").addEventListener("keydown", (event) => {
   if (event.key === "ArrowUp") { setActive(active - 1); event.preventDefault(); }
   if (event.key === "Enter") { choose(active); event.preventDefault(); }
 });
-$("aa").addEventListener("click", () => toggleStylePanel($("style").hidden));
-$("folder").addEventListener("click", () => send({ type: "folder" }));
+$("aa").addEventListener("click", () => {
+  setFan(false);
+  toggleStylePanel($("style").hidden);
+});
+$("folder").addEventListener("click", () => {
+  setFan(false);
+  send({ type: "folder" });
+});
 $("open-folder").addEventListener("click", () => send({ type: "folder" }));
-$("pin").addEventListener("click", () => send({ type: "pin" }));
+for (const button of document.querySelectorAll(".pin")) {
+  button.addEventListener("click", () => send({ type: "pin", side: button.dataset.side }));
+}
 $("close").addEventListener("click", () => send({ type: "close" }));
 document.addEventListener("mousedown", (event) => {
   if (!$("menu").hidden && !event.target.closest("#menu, #pick")) closeMenu();
   if (!$("style").hidden && !event.target.closest("#style, #aa")) toggleStylePanel(false);
 });
 function escape() {
-  if (!$("menu").hidden) closeMenu();
+  if ($("radial").classList.contains("open")) {
+    setFan(false);
+    if ($("radial").contains(document.activeElement)) document.activeElement.blur();
+  } else if (!$("menu").hidden) closeMenu();
   else if (!$("style").hidden) toggleStylePanel(false);
   else send({ type: "close" });
 }
@@ -659,6 +817,7 @@ function escape() {
 // A click in the guide moves the focus there, and never reaches this
 // page: close the panels then too.
 window.addEventListener("blur", () => {
+  setFan(false);
   closeMenu();
   toggleStylePanel(false);
 });
@@ -678,11 +837,12 @@ if (webview) {
     const message = event.data;
     if (message.type === "list") onList(message);
     else if (message.type === "show") onShow(message);
-    else if (message.type === "pinned") setPinned(message.pinned);
+    else if (message.type === "pinned") setPinned(message.pinned, message.side);
     else if (message.type === "escape") escape();
   });
 }
 buildStylePanel();
+setPinned(false, null);
 send({ type: "ready" });
 </script>
 </body>

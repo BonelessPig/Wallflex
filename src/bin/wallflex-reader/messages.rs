@@ -1,12 +1,13 @@
 //! What the page and the app say to each other (JSON web messages), and
 //! which addresses the reader may open.
 //!
-//! The page asks: `{"type": "ready" | "list" | "pin" | "close" |
-//! "folder"}`, `{"type": "open", "path": NAME}` or `{"type": "style",
-//! "style": STYLE}`. The app answers with
-//! `list` (the guides, the last one shown and whether it's pinned),
-//! `show` (a guide: a reading page as `html`, a file to load as `url`,
-//! or an `error`), `pinned` and `escape` (Esc was pressed).
+//! The page asks: `{"type": "ready" | "list" | "close" | "folder"}`,
+//! `{"type": "open", "path": NAME}`, `{"type": "pin", "side": "left" |
+//! "right"}` or `{"type": "style", "style": STYLE}`. The app answers
+//! with `list` (the guides, the last one shown, whether it's pinned and
+//! to which side), `show` (a guide: a reading page as `html`, a file to
+//! load as `url`, or an `error`), `pinned` and `escape` (Esc was
+//! pressed).
 
 use std::path::Path;
 
@@ -14,6 +15,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::guides::{self, Kind};
+use crate::place::Edge;
 use crate::saved::Saved;
 use crate::style::Style;
 
@@ -26,8 +28,8 @@ pub enum Request {
     List,
     /// Show this guide.
     Open(String),
-    /// Switch between floating and docked.
-    Pin,
+    /// Dock against this side, or float again if already docked there.
+    Pin(Edge),
     /// Hide the window.
     Close,
     /// Open the guides folder in Explorer.
@@ -46,6 +48,8 @@ struct RawRequest {
     path: Option<String>,
     /// The reading style, for `style`.
     style: Option<Style>,
+    /// The side, for `pin`.
+    side: Option<Edge>,
 }
 
 /// Reads a request from the page's JSON; `None` if it isn't one.
@@ -55,7 +59,7 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "ready" => Request::Ready,
         "list" => Request::List,
         "open" => Request::Open(raw.path?),
-        "pin" => Request::Pin,
+        "pin" => Request::Pin(raw.side?),
         "close" => Request::Close,
         "folder" => Request::Folder,
         "style" => Request::Style(raw.style?),
@@ -65,7 +69,7 @@ pub fn parse_request(json: &str) -> Option<Request> {
 
 /// The `list` answer: every guide in `folder`, the one to show first
 /// (the last one shown if it's still there, else the first), whether
-/// the reader is pinned and the reading style.
+/// the reader is pinned (and to which side) and the reading style.
 pub fn list(folder: &Path, saved: &Saved) -> String {
     let names = guides::list(folder);
     let start = saved
@@ -89,6 +93,7 @@ pub fn list(folder: &Path, saved: &Saved) -> String {
         "guides": entries,
         "start": start,
         "pinned": saved.pinned,
+        "side": saved.side,
         "style": saved.style,
         "where": folder.display().to_string(),
     })
@@ -133,9 +138,9 @@ pub fn escape() -> String {
     json!({ "type": "escape" }).to_string()
 }
 
-/// The `pinned` answer.
-pub fn pinned(pinned: bool) -> String {
-    json!({ "type": "pinned", "pinned": pinned }).to_string()
+/// The `pinned` answer: whether it's docked, and the side it docks to.
+pub fn pinned(pinned: bool, side: Option<Edge>) -> String {
+    json!({ "type": "pinned", "pinned": pinned, "side": side }).to_string()
 }
 
 /// Says a guide has gone.
@@ -203,6 +208,7 @@ pub fn judge(uri: &str, top: bool) -> Navigation {
 #[cfg(test)]
 mod tests {
     use super::{Navigation, Request, judge, parse_request, show};
+    use crate::place::Edge;
 
     #[test]
     fn reads_requests() {
@@ -212,6 +218,12 @@ mod tests {
             Some(Request::Open("a.md".to_owned()))
         );
         assert_eq!(parse_request(r#"{"type":"open"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"pin","side":"right"}"#),
+            Some(Request::Pin(Edge::Right))
+        );
+        assert_eq!(parse_request(r#"{"type":"pin"}"#), None);
+        assert_eq!(parse_request(r#"{"type":"pin","side":"up"}"#), None);
         let style = r#"{"type":"style","style":{"theme":"dark","size":18}}"#;
         let Some(Request::Style(style)) = parse_request(style) else {
             panic!("not a style");

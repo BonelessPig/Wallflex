@@ -1,5 +1,6 @@
 //! What the reader remembers between runs, in `reader.json` next to
-//! Wallflex's settings: whether it's pinned, the last guide shown, how
+//! Wallflex's settings: whether it's pinned and to which side, the last
+//! guide shown, how
 //! far the page is zoomed (Ctrl and the mouse wheel) and the reading
 //! style (theme, font, size, spacing).
 
@@ -7,6 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::place::Edge;
 use crate::style::Style;
 
 /// The file's name, next to the settings file.
@@ -18,6 +20,9 @@ pub const FILE: &str = "reader.json";
 pub struct Saved {
     /// Docked as a pane rather than floating.
     pub pinned: bool,
+    /// The side it docks against; `None` until one is picked, meaning
+    /// the side nearer the book icon.
+    pub side: Option<Edge>,
     /// The last guide shown, by name.
     pub last: Option<String>,
     /// The page's zoom on top of the usual size (1 = as usual).
@@ -30,6 +35,7 @@ impl Default for Saved {
     fn default() -> Self {
         Self {
             pinned: false,
+            side: None,
             last: None,
             zoom: 1.0,
             style: Style::default(),
@@ -66,6 +72,7 @@ impl Saved {
 #[cfg(test)]
 mod tests {
     use super::Saved;
+    use crate::place::Edge;
     use crate::style::Style;
 
     #[test]
@@ -74,6 +81,7 @@ mod tests {
             .join(format!("wallflex-reader-{}.json", std::process::id()));
         let saved = Saved {
             pinned: true,
+            side: Some(Edge::Left),
             last: Some("Games/Setup.md".to_owned()),
             zoom: 1.25,
             style: Style {

@@ -6,6 +6,8 @@
 //! widgets, the window keeps its share of the monitor's height on
 //! bigger monitors, and grows with Windows' scaling if that's more.
 
+use serde::{Deserialize, Serialize};
+
 /// The panel's size on a 1080p monitor at 100% scaling.
 pub const PANEL_SIZE: (i32, i32) = (520, 720);
 /// The docked pane's width on a 1080p monitor at 100% scaling.
@@ -98,8 +100,10 @@ impl Rect {
     }
 }
 
-/// The side of the monitor a docked pane sits against.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The side of the monitor a docked pane sits against (`"left"` or
+/// `"right"` in messages and `reader.json`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Edge {
     /// The left side.
     Left,

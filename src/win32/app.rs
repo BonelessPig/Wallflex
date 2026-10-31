@@ -20,10 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     FindWindowW, GA_ROOT, GW_HWNDNEXT, GetAncestor, GetMessageW, GetWindow,
     IsWindow, KillTimer, MSG, PBT_APMRESUMEAUTOMATIC, PostMessageW,
-    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_SHOWNORMAL,
-    SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SPI_SETWORKAREA,
+    SW_SHOWNORMAL, SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    WindowFromPoint,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -509,6 +510,12 @@ unsafe extern "system" fn controller_proc(
             schedule_rebuild(hwnd, DISPLAY_SETTLE_MS);
             return LRESULT(0);
         }
+        WM_SETTINGCHANGE => {
+            if u32::try_from(wparam.0) == Ok(SPI_SETWORKAREA.0) {
+                on_work_area_change(hwnd);
+            }
+            return LRESULT(0);
+        }
         WM_POWERBROADCAST => {
             if u32::try_from(wparam.0) == Ok(PBT_APMRESUMEAUTOMATIC) {
                 schedule_rebuild(hwnd, DISPLAY_SETTLE_MS);
@@ -618,6 +625,32 @@ fn schedule_rebuild(hwnd: HWND, delay_ms: u32) {
     if unsafe { SetTimer(Some(hwnd), REBUILD_TIMER, delay_ms, None) } == 0 {
         // Let the next health check try again.
         set_rebuild_pending(false);
+    }
+}
+
+/// A monitor's work area changed (an app bar such as the guides reader
+/// docked or left, or the taskbar moved): moves the widgets to fit,
+/// without a rebuild. If the monitors themselves changed, rebuilds.
+fn on_work_area_change(hwnd: HWND) {
+    let monitors = monitors::list();
+    let matched = STATE.with(|state| {
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return false;
+        };
+        let state = &mut *state;
+        let mut matched = true;
+        for surface in &mut state.surfaces {
+            match monitors.iter().find(|m| m.rect == surface.monitor()) {
+                Some(monitor) => {
+                    surface.set_work_area(monitor.work, &state.dashboard);
+                }
+                None => matched = false,
+            }
+        }
+        matched
+    });
+    if !matched {
+        schedule_rebuild(hwnd, DISPLAY_SETTLE_MS);
     }
 }
 

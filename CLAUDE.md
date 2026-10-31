@@ -210,7 +210,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
     queries because the GPU engine counter (one instance per process
     per engine) is the expensive one. Health check every 5 s; rebuilds
     on config change, Explorer restart (`TaskbarCreated`), display change
-    and resume. A bad config is logged and the old settings kept.
+    and resume. A work-area change (`SPI_SETWORKAREA`: an app bar such as
+    the pinned reader, or the taskbar) just moves the widgets. A bad config is logged and the old settings kept.
   - Layered backdrops (transparent or a picture) don't draw the
     widgets into the surface. `layer.rs`: each widget gets its own
     per-pixel-alpha window (`UpdateLayeredWindowIndirect`, from the

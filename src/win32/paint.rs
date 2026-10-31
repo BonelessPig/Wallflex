@@ -178,6 +178,15 @@ impl Painter {
         })
     }
 
+    /// Takes the monitor's new work area (client pixels), after an app
+    /// bar or the taskbar took or gave back room. Returns whether it
+    /// changed; the widgets move on their next paint.
+    pub fn set_work(&mut self, work: Rect) -> bool {
+        let changed = self.work != work;
+        self.work = work;
+        changed
+    }
+
     /// How many widgets this monitor shows.
     pub fn widget_count(&self) -> usize {
         self.slots.len()

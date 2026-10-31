@@ -221,7 +221,11 @@ impl Reader {
         self.base_zoom = scale.zoom(screen.dpi);
         self.view.set_zoom(self.base_zoom * self.saved.zoom);
         let (rect, order) = if self.saved.pinned {
-            let edge = place::edge_for(screen.monitor, self.at);
+            let at = self.at;
+            let edge = *self
+                .saved
+                .side
+                .get_or_insert_with(|| place::edge_for(screen.monitor, at));
             let width = scale.apply(PANE_WIDTH);
             (self.dock(screen, edge, width), HWND_TOPMOST)
         } else {
@@ -380,12 +384,24 @@ impl Reader {
         match request {
             Request::Ready | Request::List => self.send_list(),
             Request::Open(name) => self.open(&name),
-            Request::Pin => {
-                self.saved.pinned = !self.saved.pinned;
+            Request::Pin(edge) => {
+                if self.saved.pinned && self.saved.side == Some(edge) {
+                    self.saved.pinned = false;
+                } else {
+                    if self.saved.pinned {
+                        // Changing sides: register again on the new one.
+                        self.remove_appbar();
+                    }
+                    self.saved.pinned = true;
+                    self.saved.side = Some(edge);
+                }
                 self.remember();
                 self.place();
                 bring_to_front(self.hwnd);
-                self.view.post(&messages::pinned(self.saved.pinned));
+                self.view.post(&messages::pinned(
+                    self.saved.pinned,
+                    self.saved.side,
+                ));
             }
             Request::Close => self.hide(false),
             Request::Style(style) => {
