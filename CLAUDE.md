@@ -135,8 +135,10 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   as text) runs `pandoc --sandbox -f html|latex -t gfm-raw_html` (found
   on absolute `PATH` entries, then `%LOCALAPPDATA%\Pandoc` and
   `%ProgramFiles%\Pandoc`, since a process's `PATH` is fixed when it
-  starts and Explorer's predates a new install; 20 s limit, run on the
-  app thread)
+  starts and Explorer's predates a new install; 20 s limit). It runs on
+  its own thread (one at a time), which queues the answer and posts
+  `WM_CONVERTED`; the UI thread then hands it to the page, since
+  WebView2 is single-threaded)
   into a sibling `.md` that is never overwritten. Pandoc isn't shipped
   (about 150 MB) and can't read PDFs.
   `place.rs`: floating in the work area's corner nearest the click,

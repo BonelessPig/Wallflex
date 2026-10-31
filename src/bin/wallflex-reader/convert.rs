@@ -341,6 +341,30 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn converts_with_real_pandoc_and_never_overwrites() {
+        let dirs = search_dirs(
+            std::env::var_os("PATH").as_deref(),
+            std::env::var_os("LOCALAPPDATA").as_deref(),
+            std::env::var_os("ProgramFiles").as_deref(),
+        );
+        if find_pandoc(&dirs).is_none() {
+            // Pandoc is optional; there's nothing to try without it.
+            return;
+        }
+        let dir = scratch("real");
+        fs::write(dir.join("Page.html"), "<h1>Hi</h1><p>x</p>").unwrap();
+        fs::write(dir.join("Page.md"), "mine").unwrap();
+        let first = convert_guide(&dir, "Page.html", &dirs).unwrap();
+        assert_eq!(first, "Page (2).md");
+        let second = convert_guide(&dir, "Page.html", &dirs).unwrap();
+        assert_eq!(second, "Page (3).md");
+        assert_eq!(fs::read_to_string(dir.join("Page.md")).unwrap(), "mine");
+        let text = fs::read_to_string(dir.join("Page (2).md")).unwrap();
+        assert!(text.contains("# Hi"), "{text}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn reports_a_failing_program() {

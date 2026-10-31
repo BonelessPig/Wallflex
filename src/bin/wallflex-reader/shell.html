@@ -872,6 +872,8 @@ function fillMenu() {
       convert.textContent = "→ MD";
       convert.addEventListener("click", (event) => {
         event.stopPropagation();
+        // One at a time: the app converts on a single thread.
+        if (document.querySelector(".convert.busy")) return;
         convert.classList.add("busy");
         convert.textContent = "…";
         // The app waits for pandoc, so let the page repaint first.

@@ -10,7 +10,10 @@
 
 use std::cell::Cell;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, PoisonError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_COLOR;
@@ -87,6 +90,8 @@ const WM_APPBAR: u32 = WM_APP + 1;
 const WM_DEACTIVATED: u32 = WM_APP + 2;
 /// Posted when the window gets the focus.
 const WM_ACTIVATED: u32 = WM_APP + 3;
+/// Posted when a conversion has finished on its thread.
+const WM_CONVERTED: u32 = WM_APP + 4;
 /// The low 16 bits of a message parameter.
 const LOW_WORD: usize = 0xFFFF;
 /// Bits in a word: where a message parameter's high word starts.
@@ -101,6 +106,11 @@ const THEME_KEY: PCWSTR =
 
 /// `TaskbarCreated`, sent when Explorer restarts (app bars are lost).
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+/// Whether a conversion is running (only one at a time).
+static CONVERTING: AtomicBool = AtomicBool::new(false);
+/// Answers from finished conversions, for the UI thread to pass on to
+/// the page (the browser may only be used from that thread).
+static ANSWERS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// How the window may be resized, in pixels: kept apart from the
 /// [`Reader`], since Windows asks while it's busy placing the window.
@@ -565,20 +575,7 @@ impl Reader {
                 self.saved.corner = corner;
                 self.remember();
             }
-            Request::Convert(name) => {
-                // Pandoc is quick on a guide and is stopped after
-                // `convert::TIME_LIMIT`, so this waits for it.
-                let dirs = convert::search_dirs(
-                    std::env::var_os("PATH").as_deref(),
-                    std::env::var_os("LOCALAPPDATA").as_deref(),
-                    std::env::var_os("ProgramFiles").as_deref(),
-                );
-                self.view.post(&messages::converted(
-                    &self.folder,
-                    &name,
-                    &dirs,
-                ));
-            }
+            Request::Convert(name) => self.convert(name),
             Request::Folder => {
                 // It's made at startup; this only matters if it was
                 // deleted since, and Explorer says so if it's missing.
@@ -642,6 +639,46 @@ impl Reader {
         start_move(self.hwnd, at);
     }
 
+    /// Starts converting guide `name` on its own thread, so a big file
+    /// doesn't freeze the window; the answer comes back through
+    /// [`WM_CONVERTED`].
+    fn convert(&self, name: String) {
+        if CONVERTING.swap(true, Ordering::AcqRel) {
+            let error = "Another guide is still being converted.";
+            self.view.post(&messages::conversion_failed(error));
+            return;
+        }
+        let folder = self.folder.clone();
+        let dirs = convert::search_dirs(
+            std::env::var_os("PATH").as_deref(),
+            std::env::var_os("LOCALAPPDATA").as_deref(),
+            std::env::var_os("ProgramFiles").as_deref(),
+        );
+        // A window handle can't cross threads; its address can.
+        let target = self.hwnd.0.addr();
+        let started = thread::Builder::new().name("convert".to_owned()).spawn(
+            move || {
+                let answer = messages::converted(&folder, &name, &dirs);
+                finish_conversion(target, answer);
+            },
+        );
+        if started.is_err() {
+            CONVERTING.store(false, Ordering::Release);
+            let error = "Can't start the conversion.";
+            self.view.post(&messages::conversion_failed(error));
+        }
+    }
+
+    /// Passes the page the answers of conversions that have finished.
+    fn send_conversions(&self) {
+        let answers = std::mem::take(
+            &mut *ANSWERS.lock().unwrap_or_else(PoisonError::into_inner),
+        );
+        for answer in answers {
+            self.view.post(&answer);
+        }
+    }
+
     /// Sends the page the guides.
     fn send_list(&self) {
         self.view.post(&messages::list(&self.folder, &self.saved));
@@ -663,6 +700,21 @@ impl Reader {
         // the same without them.
         let _ = self.saved.save(&self.saved_path);
     }
+}
+
+/// Called on a conversion's thread when it is done: leaves `answer` for
+/// the UI thread and wakes the window at address `target`.
+fn finish_conversion(target: usize, answer: String) {
+    ANSWERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(answer);
+    CONVERTING.store(false, Ordering::Release);
+    let hwnd = HWND(ptr::with_exposed_provenance_mut(target));
+    // SAFETY: posting to a window that may be gone is allowed; it then
+    // fails and the answer has nowhere to go anyway.
+    let _ =
+        unsafe { PostMessageW(Some(hwnd), WM_CONVERTED, WPARAM(0), LPARAM(0)) };
 }
 
 /// Handles the window's own messages; `None` passes one to the default
@@ -745,6 +797,10 @@ pub fn handle_message(
         }
         WM_APPBAR => {
             with_reader(|reader| reader.on_appbar(wparam, lparam));
+            Some(LRESULT(0))
+        }
+        WM_CONVERTED => {
+            with_reader(|reader| reader.send_conversions());
             Some(LRESULT(0))
         }
         WM_DPICHANGED | WM_DISPLAYCHANGE => {

@@ -170,6 +170,11 @@ pub fn converted(
     .to_string()
 }
 
+/// The `converted` answer for a conversion that couldn't start.
+pub fn conversion_failed(error: &str) -> String {
+    json!({ "type": "converted", "error": error }).to_string()
+}
+
 /// Tells the page Esc was pressed (it closes its guide list, or asks to
 /// close the window).
 pub fn escape() -> String {
