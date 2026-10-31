@@ -62,7 +62,7 @@ use super::{Event, Launch, with_reader};
 use crate::messages::{self, Request};
 use crate::place::{
     self, Edge, Grab, MARGIN, MIN_SIZE, PANE_WIDTH, PANEL_SIZE, RESIZE_BORDER,
-    Rect, Resizable, Scale, Vertical,
+    Rect, Resizable, SNAP_REACH, Scale, Vertical,
 };
 use crate::saved::Saved;
 
@@ -358,6 +358,9 @@ impl Reader {
         } else {
             let same_size = now.width() == self.placed.width()
                 && now.height() == self.placed.height();
+            if same_size && self.snap_to_side(now) {
+                return;
+            }
             if same_size || self.saved.spot.is_some() {
                 self.saved.spot = Some((now.left, now.top));
                 // It may have gone to another monitor: place it there.
@@ -370,6 +373,29 @@ impl Reader {
         }
         self.remember();
         self.place();
+    }
+
+    /// A floating window was moved to `now`: if it was pushed against a
+    /// side of its monitor, pins it to that side. Whether it did.
+    fn snap_to_side(&mut self, now: Rect) -> bool {
+        let Some(screen) = screen_at(now.middle()) else {
+            return false;
+        };
+        let scale = Scale::new(screen.dpi, screen.monitor.height());
+        let Some(edge) =
+            place::snap_edge(screen.monitor, now, scale.apply(SNAP_REACH))
+        else {
+            return false;
+        };
+        self.saved.pinned = true;
+        self.saved.side = Some(edge);
+        self.at = now.middle();
+        self.remember();
+        self.place();
+        bring_to_front(self.hwnd);
+        self.view
+            .post(&messages::pinned(self.saved.pinned, self.saved.side));
+        true
     }
 
     /// Registers the window as an app bar against `edge` of `screen`,

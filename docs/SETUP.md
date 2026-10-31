@@ -135,7 +135,9 @@ kept beside it and link to other guides.
   screen and keep it open while you work; windows you maximise make
   room for it. The other pin button moves it across; the lit one
   unpins it. The side is remembered. Dragging the dot also unpins it
-  and floats the window under the pointer.
+  and floats the window under the pointer; drag a floating window
+  against the left or right edge of the screen and let go to pin it
+  there.
 - Drag an edge or corner to resize the window (pinned, its inner
   edge). Each size is remembered.
 - The book button opens the list of guides (Ctrl+K); type to find

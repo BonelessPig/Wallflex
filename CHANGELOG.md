@@ -10,6 +10,8 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- Dragging the floating reader against the left or right edge of the
+  screen and letting go pins it to that side.
 - Dragging the reader's menu dot while it is pinned unpins it and floats
   the window with the dot under the pointer.
 - The reader's settings (gear) panel has a **Menu dot** choice that moves the dot

@@ -18,6 +18,10 @@ pub const MARGIN: i32 = 12;
 pub const MIN_SIZE: (i32, i32) = (300, 300);
 /// How wide the strip to grab for resizing is, likewise.
 pub const RESIZE_BORDER: i32 = 2;
+/// How near a side of its monitor a dragged window must end up to dock
+/// there, in the same units. Less than [`MARGIN`], so a window resting in
+/// its usual corner never counts.
+pub const SNAP_REACH: i32 = 4;
 /// How far from a corner grabbing the strip resizes both ways, as a
 /// multiple of the strip's width.
 const CORNER_REACH: i32 = 8;
@@ -274,6 +278,21 @@ pub fn floating(
     }
 }
 
+/// The side of `monitor` that `window`, just moved, has been pushed
+/// against (within `reach` pixels, going over counts), if any; the nearer
+/// side if both.
+pub fn snap_edge(monitor: Rect, window: Rect, reach: i32) -> Option<Edge> {
+    let left = window.left.saturating_sub(monitor.left);
+    let right = monitor.right.saturating_sub(window.right);
+    if left <= reach && left <= right {
+        Some(Edge::Left)
+    } else if right <= reach {
+        Some(Edge::Right)
+    } else {
+        None
+    }
+}
+
 /// Where a point `at` along a length `old` lands along a length `new`,
 /// so a control in a corner stays in that corner: the same distance from
 /// the near end, or from the far end if it was in the far half.
@@ -333,8 +352,36 @@ pub fn docked(work: Rect, edge: Edge, width: i32) -> Rect {
 mod tests {
     use super::{
         Edge, Grab, Rect, Resizable, Scale, Vertical, at_spot, carry, docked,
-        edge_for, floating, grab, inset,
+        edge_for, floating, grab, inset, snap_edge,
     };
+
+    #[test]
+    fn snaps_to_the_side_it_is_pushed_against() {
+        let window = |left: i32, right: i32| Rect {
+            left,
+            top: 100,
+            right,
+            bottom: 700,
+        };
+        let monitor = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        assert_eq!(snap_edge(monitor, window(2, 602), 4), Some(Edge::Left));
+        assert_eq!(snap_edge(monitor, window(-30, 570), 4), Some(Edge::Left));
+        assert_eq!(
+            snap_edge(monitor, window(1320, 1918), 4),
+            Some(Edge::Right)
+        );
+        assert_eq!(
+            snap_edge(monitor, window(1400, 1990), 4),
+            Some(Edge::Right)
+        );
+        assert_eq!(snap_edge(monitor, window(12, 612), 4), None);
+        assert_eq!(snap_edge(monitor, window(600, 1200), 4), None);
+    }
 
     #[test]
     fn carries_a_corner_control_to_the_same_corner() {
