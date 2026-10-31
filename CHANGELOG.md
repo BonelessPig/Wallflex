@@ -10,6 +10,8 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- Dragging the reader's menu dot while it is pinned unpins it and floats
+  the window with the dot under the pointer.
 - The reader's settings (gear) panel has a **Menu dot** choice that moves the dot
   (and its fan of buttons) to any corner. A bottom corner keeps it off
   the toolbar of Edge's PDF viewer, which it covered at top-left.

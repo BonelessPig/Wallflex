@@ -47,7 +47,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
     IDC_ARROW, KillTimer, LoadCursorW, MINMAXINFO, PostMessageW,
     PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
     SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, WA_INACTIVE,
     WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
     WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
@@ -523,10 +523,7 @@ impl Reader {
                 ));
             }
             Request::Close => self.hide(false),
-            Request::Move(at) if !self.saved.pinned => {
-                start_move(self.hwnd, at);
-            }
-            Request::Move(_) => {}
+            Request::Move(at) => self.drag(at),
             Request::Style(style) => {
                 self.saved.style = style.checked();
                 self.remember();
@@ -548,6 +545,60 @@ impl Reader {
                 super::shell_open(&HSTRING::from(self.folder.as_os_str()));
             }
         }
+    }
+
+    /// The menu dot is being dragged from `at` in the page. Floating,
+    /// the window follows the pointer. Pinned, it first unpins and
+    /// floats, put so the dot is under the pointer, then follows.
+    fn drag(&mut self, at: (i32, i32)) {
+        if !self.saved.pinned {
+            start_move(self.hwnd, at);
+            return;
+        }
+        let Some(before) = window_rect(self.hwnd) else {
+            return;
+        };
+        let sizing = SIZING.get();
+        let old = place::inset(before, sizing.sides, sizing.border);
+        self.saved.pinned = false;
+        self.remember();
+        self.at = super::pointer();
+        self.place();
+        self.view
+            .post(&messages::pinned(self.saved.pinned, self.saved.side));
+        let Some(after) = window_rect(self.hwnd) else {
+            return;
+        };
+        let sizing = SIZING.get();
+        let new = place::inset(after, sizing.sides, sizing.border);
+        // The dot keeps its corner, which is elsewhere in the new size.
+        let at = (
+            place::carry(at.0, old.width(), new.width()),
+            place::carry(at.1, old.height(), new.height()),
+        );
+        let pointer = super::pointer();
+        let left = pointer
+            .0
+            .saturating_sub(at.0)
+            .saturating_sub(new.left.saturating_sub(after.left));
+        let top = pointer
+            .1
+            .saturating_sub(at.1)
+            .saturating_sub(new.top.saturating_sub(after.top));
+        // SAFETY: plain values on our own window. If it fails the window
+        // stays where it was placed, and the drag still starts.
+        let _ = unsafe {
+            SetWindowPos(
+                self.hwnd,
+                None,
+                left,
+                top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        start_move(self.hwnd, at);
     }
 
     /// Sends the page the guides.

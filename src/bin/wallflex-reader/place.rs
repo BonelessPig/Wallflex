@@ -274,6 +274,17 @@ pub fn floating(
     }
 }
 
+/// Where a point `at` along a length `old` lands along a length `new`,
+/// so a control in a corner stays in that corner: the same distance from
+/// the near end, or from the far end if it was in the far half.
+pub fn carry(at: i32, old: i32, new: i32) -> i32 {
+    if at > old / 2 {
+        new.saturating_sub(old.saturating_sub(at)).max(0)
+    } else {
+        at
+    }
+}
+
 /// The floating panel, `size` big, with its top-left corner at `spot`
 /// (where it was dragged to), moved and shrunk as needed to stay inside
 /// `work` (the work area).
@@ -321,9 +332,17 @@ pub fn docked(work: Rect, edge: Edge, width: i32) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::{
-        Edge, Grab, Rect, Resizable, Scale, Vertical, at_spot, docked,
+        Edge, Grab, Rect, Resizable, Scale, Vertical, at_spot, carry, docked,
         edge_for, floating, grab, inset,
     };
+
+    #[test]
+    fn carries_a_corner_control_to_the_same_corner() {
+        assert_eq!(carry(10, 400, 600), 10);
+        assert_eq!(carry(380, 400, 600), 580);
+        assert_eq!(carry(380, 400, 100), 80);
+        assert_eq!(carry(390, 400, 5), 0);
+    }
 
     /// A 1920x1080 monitor's work area with a 48 px taskbar.
     const WORK: Rect = Rect {

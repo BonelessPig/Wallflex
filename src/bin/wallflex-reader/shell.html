@@ -163,8 +163,8 @@ body[data-corner="bottom-right"] #radial .disc {
   border-radius: 0 0 18px 0;
 }
 #hub:hover, #hub:active { background: none; }
-/* Floating, the dot also moves the window. */
-body:not(.pinned) #hub { cursor: move; }
+/* Dragging the dot moves the window; a pinned one floats first. */
+#hub { cursor: move; }
 #hub::before {
   content: "";
   width: 7px;
@@ -855,14 +855,15 @@ $("radial").addEventListener("focusin", () => setFan(true));
 $("radial").addEventListener("focusout", (event) => {
   if (!$("radial").contains(event.relatedTarget)) setFan(false);
 });
-// Dragging the dot moves a floating window (the app takes the mouse
-// from there); a click without moving opens the menu.
+// Dragging the dot moves the window (the app takes the mouse from
+// there, and unpins a pinned one first); a click without moving opens
+// the menu.
 const DRAG_START_PX = 4;
 let press = null;
 let dragged = false;
 $("hub").addEventListener("pointerdown", (event) => {
   dragged = false;
-  if (event.button !== 0 || document.body.classList.contains("pinned")) return;
+  if (event.button !== 0) return;
   // Where in the page it was pressed, in device pixels, so the window
   // keeps the dot under the pointer however late the move starts.
   const ratio = window.devicePixelRatio;
