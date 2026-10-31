@@ -152,10 +152,25 @@ begin
   end;
 end;
 
+{ Closes the guides reader. Its `--quit` is tried first; a reader from
+  before `--quit` existed rejects the option, so it is ended by name as
+  a fallback (it keeps nothing unsaved: its settings are written as they
+  change). }
+procedure QuitReader();
+var
+  Code: Integer;
+begin
+  QuitRunningCopy(ExpandConstant('{app}\{#ReaderExe}'));
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#ReaderExe}', '',
+    SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(QuitSettleMs);
+end;
+
 { Before files are copied: close the copy being upgraded. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+  QuitReader();
   if not QuitRunningCopy(ExpandConstant('{app}\{#AppExe}')) then
   begin
     Result := 'Wallflex is still running. Quit it from its tray icon, ' +
@@ -205,6 +220,7 @@ begin
   begin
     { Best effort: if it is still running, its exe stays behind. }
     QuitRunningCopy(ExpandConstant('{app}\{#AppExe}'));
+    QuitReader();
     RemoveStartup();
   end
   else if CurUninstallStep = usPostUninstall then

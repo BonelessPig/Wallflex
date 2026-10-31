@@ -15,6 +15,7 @@ Options:
                    book icon does
   --config <FILE>  Wallflex's settings file, to find the Guides folder
                    next to it (default %APPDATA%\\Wallflex\\config.toml)
+  --quit           close a running reader (exit code 0 if there was one)
   -h, --help       show this help";
 
 /// Command-line options.
@@ -24,6 +25,8 @@ pub struct Options {
     pub at: Option<(i32, i32)>,
     /// Wallflex's settings file, from `--config`.
     pub config: Option<PathBuf>,
+    /// Close the running copy instead of starting one.
+    pub quit: bool,
     /// Show the help.
     pub help: bool,
 }
@@ -51,6 +54,7 @@ pub fn parse<I: IntoIterator<Item = String>>(
                 let file = args.next().ok_or("--config needs a file")?;
                 options.config = Some(PathBuf::from(file));
             }
+            "--quit" => options.quit = true,
             "-h" | "--help" => options.help = true,
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -82,10 +86,12 @@ mod tests {
             Ok(Options {
                 at: Some((-1920, 1000)),
                 config: Some(PathBuf::from("a.toml")),
+                quit: false,
                 help: false,
             })
         );
         assert!(run(&["--help"]).unwrap().help);
+        assert!(run(&["--quit"]).unwrap().quit);
     }
 
     #[test]

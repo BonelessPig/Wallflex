@@ -29,9 +29,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW,
-    MB_ICONINFORMATION, MB_OK, MSG, MessageBoxW, SW_SHOWNORMAL, SendMessageW,
-    TranslateMessage, WM_COPYDATA,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos,
+    GetMessageW, MB_ICONINFORMATION, MB_OK, MSG, MessageBoxW, SW_SHOWNORMAL,
+    SendMessageW, TranslateMessage, WM_COPYDATA,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -54,6 +54,8 @@ const MUTEX: PCWSTR = w!("Local\\WallflexReader");
 const MUTEX: PCWSTR = w!("Local\\WallflexReaderDev");
 /// `WM_COPYDATA` tag for a point to open at (`X,Y` in UTF-8).
 const COPY_AT: usize = 0x5752_4154;
+/// `WM_COPYDATA` tag asking the running copy to exit.
+const COPY_QUIT: usize = 0x5752_5155;
 /// How many times a second copy looks for the first copy's window
 /// (which may still be starting).
 const FIND_TRIES: u32 = 30;
@@ -187,6 +189,31 @@ fn forward(at: Option<(i32, i32)>) -> Result<(), String> {
     Err("the running reader didn't answer".to_owned())
 }
 
+/// Asks the running copy to exit. False if none is running.
+pub fn quit() -> bool {
+    // SAFETY: the class name is a static string.
+    let Ok(hwnd) = (unsafe { FindWindowW(CLASS, PCWSTR::null()) }) else {
+        return false;
+    };
+    let data = COPYDATASTRUCT {
+        dwData: COPY_QUIT,
+        cbData: 0,
+        lpData: std::ptr::null_mut(),
+    };
+    let address = std::ptr::from_ref(&data).expose_provenance();
+    // SAFETY: `data` outlives the call, which returns once the window
+    // has handled it.
+    unsafe {
+        SendMessageW(
+            hwnd,
+            WM_COPYDATA,
+            Some(WPARAM(0)),
+            Some(LPARAM(address.cast_signed())),
+        );
+    }
+    true
+}
+
 /// Where the pointer is, in desktop pixels; (0, 0) if unknown.
 fn pointer() -> (i32, i32) {
     let mut point = POINT::default();
@@ -255,6 +282,11 @@ extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_COPYDATA {
+        if is_quit(lparam) {
+            // SAFETY: our own window; WM_DESTROY then ends the loop.
+            let _ = unsafe { DestroyWindow(hwnd) };
+            return LRESULT(1);
+        }
         if let Some(at) = copied_point(lparam) {
             with_reader(|reader| reader.toggle(at));
         }
@@ -265,6 +297,16 @@ extern "system" fn window_proc(
     }
     // SAFETY: passes the message on unchanged.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Whether the `WM_COPYDATA` in `lparam` is the request to exit.
+fn is_quit(lparam: LPARAM) -> bool {
+    let data = std::ptr::with_exposed_provenance::<COPYDATASTRUCT>(
+        lparam.0.cast_unsigned(),
+    );
+    // SAFETY: for WM_COPYDATA, lParam points to a COPYDATASTRUCT that's
+    // valid while the message is handled.
+    unsafe { data.as_ref() }.is_some_and(|d| d.dwData == COPY_QUIT)
 }
 
 /// The point a second copy sent with `WM_COPYDATA`, if that's what it is.

@@ -39,6 +39,14 @@ fn main() -> ExitCode {
         println!("{}", args::USAGE);
         return ExitCode::SUCCESS;
     }
+    if options.quit {
+        return if win32::quit() {
+            ExitCode::SUCCESS
+        } else {
+            eprintln!("wallflex-reader: no running copy found");
+            ExitCode::FAILURE
+        };
+    }
     let Some(config) = options.config.or_else(default_config_path) else {
         eprintln!("wallflex-reader: can't find %APPDATA%");
         return ExitCode::FAILURE;
