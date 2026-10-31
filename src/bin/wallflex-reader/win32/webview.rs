@@ -353,6 +353,7 @@ fn follow(verdict: Navigation) {
         Navigation::External(url) => super::open_external(&url),
         Navigation::Read(url) => super::handle(Event::OpenWeb(url)),
         Navigation::Back => super::handle(Event::WebBack),
+        Navigation::Save => super::handle(Event::WebSave),
         Navigation::Allow | Navigation::Block => {}
     }
 }

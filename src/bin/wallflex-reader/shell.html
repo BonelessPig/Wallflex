@@ -120,7 +120,7 @@ body { --sx: 1; --sy: 1; --left: 0; --right: auto; --top: 0; --bottom: auto; }
 body[data-corner$="right"] { --sx: -1; --left: auto; --right: 0; }
 body[data-corner^="bottom"] { --sy: -1; --top: auto; --bottom: 0; }
 #radial {
-  --reach: 112px;
+  --reach: 136px;
   position: absolute;
   top: var(--top);
   bottom: var(--bottom);
@@ -272,7 +272,7 @@ iframe {
 }
 #error { background: var(--bg); }
 [hidden] { display: none !important; }
-#menu {
+#menu, #toc {
   position: absolute;
   top: 40px;
   left: 8px;
@@ -287,7 +287,10 @@ iframe {
   overflow: hidden;
   z-index: 2;
 }
-body[data-corner^="bottom"] #menu { top: auto; bottom: 40px; }
+body[data-corner^="bottom"] #menu, body[data-corner^="bottom"] #toc {
+  top: auto;
+  bottom: 40px;
+}
 body[data-corner^="bottom"] #style { top: auto; bottom: 40px; }
 body[data-corner$="right"] #style { left: auto; right: 8px; }
 #filter {
@@ -302,7 +305,77 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
   outline: none;
 }
 #filter:focus { border-color: var(--accent); }
-#list { flex: 1; overflow: auto; padding: 0 6px 6px; }
+#list, #toc-list { flex: 1; overflow: auto; padding: 0 6px 6px; }
+#toc-list { padding-top: 0; }
+.toc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 4px;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.toc-head span { flex: 1; }
+.toc-head button {
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--quiet);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.toc-head button:hover { color: var(--accent); border-color: var(--accent); }
+:root { --rail-w: 190px; }
+#rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--rail-w);
+  display: none;
+  flex-direction: column;
+  background: var(--bg);
+  border-right: 1px solid var(--rule);
+  z-index: 1;
+}
+body.rail #rail { display: flex; }
+body.rail iframe { margin-left: var(--rail-w); width: calc(100% - var(--rail-w)); }
+body[data-corner="top-left"] #rail { padding-top: 44px; }
+body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
+@media (max-width: 520px) {
+  body.rail #rail { display: none; }
+  body.rail iframe { margin-left: 0; width: 100%; }
+}
+#rail-list { flex: 1; overflow: auto; padding: 0 4px 8px; }
+.toc-item.current { color: var(--accent); font-weight: 600; }
+#toc-tip {
+  position: fixed;
+  display: none;
+  max-width: 420px;
+  padding: 5px 8px;
+  background: var(--menu);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 12.5px;
+  pointer-events: none;
+  z-index: 5;
+}
+.toc-item {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toc-item:hover, .toc-item:focus-visible { background: var(--hover); }
 .group {
   padding: 8px 8px 4px;
   color: var(--quiet);
@@ -426,7 +499,11 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
       v9.6c2.4-.3 4.6 0 6 1.2 1.4-1.2 3.6-1.5 6-1.2V3c-2.4-.3-4.6 0-6 1.2z
       M8 4.2v9.6"/></svg>
   </button>
-  <button class="spoke" id="aa" style="--a: 18deg; --d: 20ms"
+  <button class="spoke" id="toc-button" style="--a: 15deg; --d: 20ms"
+    aria-expanded="false" data-tip="Contents">
+    <svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
+  </button>
+  <button class="spoke" id="aa" style="--a: 30deg; --d: 40ms"
     aria-expanded="false" data-tip="Theme, font, size and menu dot">
     <svg viewBox="0 0 24 24" style="stroke-width: 2"><circle cx="12" cy="12" r="3"/>
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0
@@ -440,24 +517,24 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
       2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2
       2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
-  <button class="spoke" id="folder" style="--a: 36deg; --d: 40ms"
+  <button class="spoke" id="folder" style="--a: 45deg; --d: 60ms"
     data-tip="Open the Guides folder">
     <svg viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.3 1.5H13
       c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/></svg>
   </button>
-  <button class="spoke pin" id="pin-left" style="--a: 54deg; --d: 60ms"
+  <button class="spoke pin" id="pin-left" style="--a: 60deg; --d: 80ms"
     data-side="left" aria-pressed="false">
     <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/>
       <rect x="3.5" y="4.5" width="3" height="7" rx=".5" fill="currentColor"
       stroke="none"/></svg>
   </button>
-  <button class="spoke pin" id="pin-right" style="--a: 72deg; --d: 80ms"
+  <button class="spoke pin" id="pin-right" style="--a: 75deg; --d: 100ms"
     data-side="right" aria-pressed="false">
     <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/>
       <rect x="9.5" y="4.5" width="3" height="7" rx=".5" fill="currentColor"
       stroke="none"/></svg>
   </button>
-  <button class="spoke" id="close" style="--a: 90deg; --d: 100ms" data-tip="Close (Esc)">
+  <button class="spoke" id="close" style="--a: 90deg; --d: 120ms" data-tip="Close (Esc)">
     <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
   </button>
   <div id="caption" aria-hidden="true"></div>
@@ -492,6 +569,17 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
     <div class="hint">PDFs keep their own toolbar along the top, so a bottom
       corner suits them.</div>
   </div>
+  <div id="rail">
+    <div class="toc-head"><span>Contents</span>
+      <button id="rail-unpin" title="Unpin the contents">Unpin</button></div>
+    <div id="rail-list"></div>
+  </div>
+  <div id="toc" hidden>
+    <div class="toc-head"><span>Contents</span>
+      <button id="toc-pin" title="Keep the contents in the left margin">Pin</button></div>
+    <div id="toc-list"></div>
+  </div>
+  <div id="toc-tip" role="tooltip"></div>
   <div id="menu" role="listbox" hidden>
     <input id="filter" placeholder="Find a guide, or paste a web address" spellcheck="false" autocomplete="off">
     <div id="list"></div>
@@ -731,6 +819,7 @@ function buildStylePanel() {
 }
 
 function toggleStylePanel(open) {
+  if (open) closeToc();
   $("style").hidden = !open;
   $("aa").setAttribute("aria-expanded", String(open));
   if (open) closeMenu();
@@ -742,6 +831,8 @@ function onList(message) {
     applyStyle();
   }
   setCorner(message.corner);
+  tocPinned = Boolean(message.contents);
+  refreshRail();
   guides = message.guides;
   $("where").textContent = message.where;
   setPinned(message.pinned, message.side);
@@ -787,6 +878,7 @@ function onShow(message) {
   } else {
     view.src = message.url;
   }
+  view.addEventListener("load", refreshRail);
   $("main").prepend(view);
 }
 
@@ -994,7 +1086,142 @@ function webBar(url, canGoBack) {
   const back = canGoBack
     ? '<a href="' + READ_BASE + '?back">← Back</a> · ' : "";
   return '<p class="webbar">' + back + host + ' · <a href="'
-    + esc(url) + '">Open in browser</a></p>';
+    + esc(url) + '">Open in browser</a> · <a href="' + READ_BASE
+    + '?save">Save as guide</a></p>';
+}
+
+/* ---- Saving a web page as a guide: cleaned HTML to Markdown ---------- */
+const MD_BLOCKS = new Set(["div", "section", "article", "main", "center",
+  "figure", "figcaption", "details", "summary", "dl", "dt", "dd"]);
+const MD_ESCAPED = /([\\`*_\[\]<>|])/g;
+
+function mdText(text) {
+  return text.replace(/\s+/g, " ").replace(MD_ESCAPED, "\\$1");
+}
+
+// A link as the original address (ours point at the reader).
+function mdAddress(href) {
+  const prefix = READ_BASE + "?u=";
+  let address = href;
+  if (href.startsWith(prefix)) {
+    try { address = decodeURIComponent(href.slice(prefix.length)); }
+    catch { return ""; }
+  }
+  return address.replace(/[()\s]/g, (c) => encodeURIComponent(c));
+}
+
+function mdWrap(marker, text) {
+  if (!text.trim()) return text;
+  const lead = text.match(/^\s*/)[0];
+  const trail = text.match(/\s*$/)[0];
+  return lead + marker + text.trim() + marker + trail;
+}
+
+function mdList(node, ordered, ctx) {
+  const items = [];
+  for (const child of node.children) {
+    if (child.localName !== "li") continue;
+    const mark = ordered ? (items.length + 1) + ". " : "- ";
+    const body = mdChildren(child, ctx).trim().replace(/\n{2,}/g, "\n");
+    items.push(mark + body.replace(/\n/g, "\n" + " ".repeat(mark.length)));
+  }
+  return items.length ? "\n\n" + items.join("\n") + "\n\n" : "";
+}
+
+function mdCell(cell, ctx) {
+  return mdChildren(cell, ctx).replace(/\s*\n+\s*/g, " ").trim();
+}
+
+function mdTable(node, ctx) {
+  const rows = [];
+  for (const row of node.querySelectorAll("tr")) {
+    const cells = [];
+    for (const cell of row.children) {
+      if (cell.localName !== "td" && cell.localName !== "th") continue;
+      cells.push(mdCell(cell, ctx));
+    }
+    while (cells.length && cells[cells.length - 1] === "") cells.pop();
+    if (cells.length) rows.push(cells);
+  }
+  if (!rows.length) return "";
+  const width = Math.max(...rows.map((r) => r.length));
+  const line = (r) => "| " + Array.from({ length: width },
+    (_, i) => r[i] || "").join(" | ") + " |";
+  const rule = "|" + " --- |".repeat(width);
+  return "\n\n" + [line(rows[0]), rule, ...rows.slice(1).map(line)]
+    .join("\n") + "\n\n";
+}
+
+function mdChildren(node, ctx) {
+  let out = "";
+  for (const child of node.childNodes) out += mdNode(child, ctx);
+  return out;
+}
+
+function mdNode(node, ctx) {
+  if (node.nodeType === Node.TEXT_NODE) return mdText(node.textContent);
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+  const tag = node.localName;
+  if (/^h[1-6]$/.test(tag)) {
+    const text = mdChildren(node, ctx).replace(/\s+/g, " ").trim();
+    return text ? "\n\n" + "#".repeat(Number(tag[1])) + " " + text + "\n\n" : "";
+  }
+  switch (tag) {
+    case "p": return "\n\n" + mdChildren(node, ctx).trim() + "\n\n";
+    case "br": return "  \n";
+    case "hr": return "\n\n---\n\n";
+    case "strong": case "b": return mdWrap("**", mdChildren(node, ctx));
+    case "em": case "i": case "cite": return mdWrap("*", mdChildren(node, ctx));
+    case "del": case "s": return mdWrap("~~", mdChildren(node, ctx));
+    case "code": return "`" + node.textContent.replace(/`/g, "'") + "`";
+    case "pre":
+      return "\n\n```\n" + node.textContent.replace(/\n$/, "") + "\n```\n\n";
+    case "a": {
+      const text = mdChildren(node, ctx).trim();
+      const href = mdAddress(node.getAttribute("href") || "");
+      return href && text ? "[" + text + "](" + href + ")" : text;
+    }
+    case "img": {
+      const src = node.getAttribute("src") || "";
+      return src ? "![" + mdText(node.getAttribute("alt") || "") + "]("
+        + mdAddress(src) + ")" : "";
+    }
+    case "ul": return mdList(node, false, ctx);
+    case "ol": return mdList(node, true, ctx);
+    case "blockquote":
+      return "\n\n" + mdChildren(node, ctx).trim().split("\n")
+        .map((l) => "> " + l).join("\n") + "\n\n";
+    case "table": return mdTable(node, ctx);
+    default: {
+      const inner = mdChildren(node, ctx);
+      return MD_BLOCKS.has(tag) ? "\n\n" + inner.trim() + "\n\n" : inner;
+    }
+  }
+}
+
+// Markdown for a page's cleaned body HTML, with where it came from.
+function toMarkdown(page, url) {
+  const doc = new DOMParser().parseFromString(page.body, "text/html");
+  const text = mdChildren(doc.body, {}).replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n").trim();
+  return "> Saved from " + url + "\n\n" + text + "\n";
+}
+
+let webPage = null;
+
+function saveWeb() {
+  if (!webPage) return;
+  send({ type: "save", title: webPage.title,
+    text: toMarkdown(webPage.page, webPage.url) });
+}
+
+function onSaved(message) {
+  if (message.error) {
+    showError("Can't save this page", message.error, true);
+    return;
+  }
+  send({ type: "list" });
+  showError("Saved as a guide", message.path, true);
 }
 
 function openWeb(address) {
@@ -1037,6 +1264,7 @@ function onWeb(message) {
   }
   backing = false;
   webUrl = message.url;
+  webPage = { title: page.title, url: message.url, page };
   const html = message.template
     .replace("<!--TITLE-->", () => esc(page.title))
     .replace("<!--CONTENT-->", () => webBar(message.url, webStack.length > 0)
@@ -1047,18 +1275,169 @@ function onWeb(message) {
 function open(path) {
   if (!path) return;
   webUrl = null;
+  webPage = null;
   webStack = [];
   send({ type: "open", path });
 }
 
 function openMenu() {
   toggleStylePanel(false);
+  closeToc();
   send({ type: "list" });
   $("menu").hidden = false;
   $("pick").setAttribute("aria-expanded", "true");
   $("filter").value = "";
   fillMenu();
   $("filter").focus();
+}
+
+/* ---- Contents: the headings of the page being read ------------------ */
+const MAX_TOC = 500;
+const TOC_INDENT_PX = 14;
+const TOC_SCROLL_MARGIN_PX = 24;
+const TIP_GAP_PX = 8;
+
+let tocPinned = false;
+let railItems = [];
+let railFrame = null;
+let railQueued = false;
+
+function readingDocument() {
+  const view = $("view");
+  return view && view.srcdoc ? view.contentDocument : null;
+}
+
+function closeToc() {
+  $("toc").hidden = true;
+  $("toc-button").setAttribute("aria-expanded", "false");
+}
+
+// The headings of the page shown, or null if the reader didn't draw it.
+function pageHeadings() {
+  const doc = readingDocument();
+  if (!doc) return null;
+  return [...doc.querySelectorAll("h1,h2,h3,h4")]
+    .filter((h) => h.textContent.trim()).slice(0, MAX_TOC);
+}
+
+function hideTip() {
+  $("toc-tip").style.display = "none";
+}
+
+// A long title is shown in full beside the pointer, like a tooltip.
+function showTip(item) {
+  if (item.scrollWidth <= item.clientWidth) return;
+  const tip = $("toc-tip");
+  const box = item.getBoundingClientRect();
+  tip.textContent = item.textContent;
+  tip.style.maxWidth = Math.min(420, window.innerWidth - box.left - TIP_GAP_PX) + "px";
+  tip.style.left = box.left + "px";
+  tip.style.top = box.top + "px";
+  tip.style.minHeight = box.height + "px";
+  tip.style.display = "block";
+}
+
+// Fills `list` with a button per heading; `picked` runs after a click.
+function fillHeadings(list, found, picked) {
+  list.textContent = "";
+  const items = [];
+  const top = Math.min(...found.map((h) => Number(h.localName[1])));
+  for (const heading of found) {
+    const item = document.createElement("button");
+    item.className = "toc-item";
+    item.textContent = heading.textContent.trim().replace(/\s+/g, " ");
+    const depth = Number(heading.localName[1]) - top;
+    item.style.paddingLeft = (8 + depth * TOC_INDENT_PX) + "px";
+    item.addEventListener("click", () => {
+      heading.scrollIntoView({ block: "start" });
+      picked();
+    });
+    item.addEventListener("mouseenter", () => showTip(item));
+    item.addEventListener("mouseleave", hideTip);
+    list.append(item);
+    items.push({ heading, item });
+  }
+  return items;
+}
+
+function fillToc() {
+  const found = pageHeadings();
+  if (found && found.length) {
+    fillHeadings($("toc-list"), found, closeToc);
+    return;
+  }
+  const none = document.createElement("div");
+  none.className = "none";
+  none.textContent = found ? "No headings on this page."
+    : "Contents are only shown for pages the reader draws.";
+  $("toc-list").textContent = "";
+  $("toc-list").append(none);
+}
+
+// Marks the section being read in the pinned list.
+function markCurrent() {
+  railQueued = false;
+  let now = null;
+  for (const entry of railItems) {
+    if (entry.heading.getBoundingClientRect().top <= TOC_SCROLL_MARGIN_PX) {
+      now = entry;
+    }
+  }
+  if (!now && railItems.length) now = railItems[0];
+  for (const entry of railItems) {
+    entry.item.classList.toggle("current", entry === now);
+  }
+  if (now) now.item.scrollIntoView({ block: "nearest" });
+}
+
+function queueMark() {
+  if (railQueued) return;
+  railQueued = true;
+  requestAnimationFrame(markCurrent);
+}
+
+// Shows or hides the pinned list to suit the page now showing.
+function refreshRail() {
+  hideTip();
+  if (railFrame) {
+    railFrame.removeEventListener("scroll", queueMark);
+    railFrame = null;
+  }
+  railItems = [];
+  const found = tocPinned ? pageHeadings() : null;
+  document.body.classList.toggle("rail", Boolean(found && found.length));
+  $("toc-button").setAttribute("aria-pressed", String(tocPinned));
+  if (!found || !found.length) return;
+  railItems = fillHeadings($("rail-list"), found, hideTip);
+  const view = $("view");
+  railFrame = view.contentWindow;
+  railFrame.addEventListener("scroll", queueMark, { passive: true });
+  markCurrent();
+}
+
+function setTocPinned(on) {
+  tocPinned = on;
+  closeToc();
+  refreshRail();
+  send({ type: "contents", on });
+}
+
+function toggleToc() {
+  if (tocPinned) {
+    setTocPinned(false);
+    return;
+  }
+  if (!$("toc").hidden) {
+    closeToc();
+    return;
+  }
+  toggleStylePanel(false);
+  closeMenu();
+  fillToc();
+  $("toc").hidden = false;
+  $("toc-button").setAttribute("aria-expanded", "true");
+  const first = $("toc-list").querySelector("button");
+  if (first) first.focus();
 }
 
 function closeMenu() {
@@ -1212,6 +1591,12 @@ $("filter").addEventListener("keydown", (event) => {
   if (event.key === "ArrowUp") { setActive(active - 1); event.preventDefault(); }
   if (event.key === "Enter") { choose(active); event.preventDefault(); }
 });
+$("toc-button").addEventListener("click", () => {
+  setFan(false);
+  toggleToc();
+});
+$("toc-pin").addEventListener("click", () => setTocPinned(true));
+$("rail-unpin").addEventListener("click", () => setTocPinned(false));
 $("aa").addEventListener("click", () => {
   setFan(false);
   toggleStylePanel($("style").hidden);
@@ -1230,6 +1615,7 @@ for (const button of document.querySelectorAll(".pin")) {
 $("close").addEventListener("click", () => send({ type: "close" }));
 document.addEventListener("mousedown", (event) => {
   if (!$("menu").hidden && !event.target.closest("#menu, #pick")) closeMenu();
+  if (!$("toc").hidden && !event.target.closest("#toc, #toc-button")) closeToc();
   if (!$("style").hidden && !event.target.closest("#style, #aa")) toggleStylePanel(false);
 });
 function escape() {
@@ -1237,6 +1623,7 @@ function escape() {
     setFan(false);
     if ($("radial").contains(document.activeElement)) document.activeElement.blur();
   } else if (!$("menu").hidden) closeMenu();
+  else if (!$("toc").hidden) closeToc();
   else if (!$("style").hidden) toggleStylePanel(false);
   else send({ type: "close" });
 }
@@ -1246,6 +1633,7 @@ function escape() {
 window.addEventListener("blur", () => {
   setFan(false);
   closeMenu();
+  closeToc();
   toggleStylePanel(false);
 });
 
@@ -1267,6 +1655,8 @@ if (webview) {
     else if (message.type === "converted") onConverted(message);
     else if (message.type === "web") onWeb(message);
     else if (message.type === "back") goBack();
+    else if (message.type === "save") saveWeb();
+    else if (message.type === "saved") onSaved(message);
     else if (message.type === "pinned") setPinned(message.pinned, message.side);
     else if (message.type === "escape") escape();
   });

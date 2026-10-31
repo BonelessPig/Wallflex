@@ -16,6 +16,17 @@ patch number (0.x.**y**) for fixes only.
   and press Enter. Links in the page open in reader mode too, with a
   Back link and "Open in browser" at the top. Pages are fetched with
   Windows' own `curl.exe`; scripts never run.
+- A web page in the reader has a **Save as guide** link that writes it
+  into the Guides folder as Markdown (never overwriting; the source
+  address is noted at the top). Markdown guides may now show pictures
+  from https addresses.
+- A **Contents** button in the reader's corner menu lists the headings
+  of the page or guide being read and jumps to the one you pick.
+- The contents list can be **pinned** (Pin in its panel; the Contents
+  button then unpins) as a column in the reader's left margin. It stays
+  on, marks the section you're reading, and a title too long for the
+  column shows in full when you point at it. Narrow windows keep the
+  popup instead. The choice is remembered.
 - The reader's guide list has a **-> MD** button on HTML and LaTeX
   guides that converts them to Markdown with pandoc (found on `PATH`;
   not included), writing a `.md` copy beside the original. LaTeX

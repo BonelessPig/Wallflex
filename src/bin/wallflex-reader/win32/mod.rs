@@ -85,6 +85,8 @@ pub enum Event {
     OpenWeb(String),
     /// A web page's back link was followed.
     WebBack,
+    /// A web page's save link was followed.
+    WebSave,
     /// Esc was pressed.
     Escape,
     /// The page's zoom changed (Ctrl and the mouse wheel, or the app).

@@ -153,6 +153,15 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   https address). Links become `https://read.wallflex/?u=<address>`,
   which `judge` turns into `Navigation::Read`; `?back` goes back
   through the page's own stack.
+  `?save` makes the page turn its cleaned DOM into Markdown (`toMarkdown`)
+  and send `save`; `web::save_guide` writes `Title.md` (or `Title (2).md`)
+  with `create_new`, never overwriting. The Contents spoke (`toggleToc`)
+  lists the h1-h4 of any reader-drawn page (`srcdoc` frame) and scrolls
+  the frame to the one picked.
+  Pinned (`contents` in `reader.json`, `Request::Contents`), the list is
+  `#rail`, a column that pushes the frame right (hidden under 520 px);
+  `markCurrent` follows the frame's scroll; `showTip` shows cut-off
+  titles in full.
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the

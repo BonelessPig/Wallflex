@@ -528,6 +528,7 @@ impl Reader {
             Event::Open(name) => self.open(&name),
             Event::OpenWeb(url) => self.fetch_web(&url),
             Event::WebBack => self.view.post(&messages::back()),
+            Event::WebSave => self.view.post(&messages::save()),
             // The page closes its guide list first, or asks to close.
             Event::Escape => self.view.post(&messages::escape()),
             Event::Zoomed(zoom) => {
@@ -582,6 +583,14 @@ impl Reader {
             }
             Request::Convert(name) => self.convert(name),
             Request::Web(url) => self.fetch_web(&url),
+            Request::Contents(on) => {
+                self.saved.contents = on;
+                self.remember();
+            }
+            Request::Save(title, text) => {
+                let answer = messages::saved(&self.folder, &title, &text);
+                self.view.post(&answer);
+            }
             Request::Folder => {
                 // It's made at startup; this only matters if it was
                 // deleted since, and Explorer says so if it's missing.

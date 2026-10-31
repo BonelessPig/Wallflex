@@ -55,6 +55,10 @@ pub enum Request {
     Convert(String),
     /// Fetch this web address for reader mode (not yet checked).
     Web(String),
+    /// Pin the contents list in the margin (or unpin it).
+    Contents(bool),
+    /// Save this Markdown as a new guide named after this title.
+    Save(String, String),
 }
 
 /// A request as the page sends it.
@@ -71,6 +75,12 @@ struct RawRequest {
     side: Option<Edge>,
     /// The menu dot's corner, for `corner`.
     corner: Option<Corner>,
+    /// Whether to turn something on, for `contents`.
+    on: Option<bool>,
+    /// The page's title, for `save`.
+    title: Option<String>,
+    /// The Markdown to save, for `save`.
+    text: Option<String>,
     /// The address, for `web`.
     url: Option<String>,
     /// Where the page was pressed, for `move`.
@@ -92,6 +102,8 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "corner" => Request::Corner(raw.corner?),
         "convert" => Request::Convert(raw.path?),
         "web" => Request::Web(raw.url?),
+        "save" => Request::Save(raw.title?, raw.text?),
+        "contents" => Request::Contents(raw.on?),
         _ => return None,
     })
 }
@@ -128,6 +140,7 @@ pub fn list(folder: &Path, saved: &Saved) -> String {
         "side": saved.side,
         "style": saved.style,
         "corner": saved.corner,
+        "contents": saved.contents,
         "where": folder.display().to_string(),
     })
     .to_string()
@@ -199,6 +212,21 @@ pub fn web(url: &str, fetched: Result<web::Page, String>) -> String {
     .to_string()
 }
 
+/// The `saved` answer for saving a web page as a guide in `folder`: the
+/// new guide's name, or an `error`.
+pub fn saved(folder: &Path, title: &str, markdown: &str) -> String {
+    match web::save_guide(folder, title, markdown) {
+        Ok(name) => json!({ "type": "saved", "path": name }),
+        Err(error) => json!({ "type": "saved", "error": error }),
+    }
+    .to_string()
+}
+
+/// Tells the page a web page's save link was followed.
+pub fn save() -> String {
+    json!({ "type": "save" }).to_string()
+}
+
 /// Tells the page a web page's back link was followed.
 pub fn back() -> String {
     json!({ "type": "back" }).to_string()
@@ -252,6 +280,8 @@ pub enum Navigation {
     Read(String),
     /// Stop it and go back to the web page before.
     Back,
+    /// Stop it and save the web page shown as a guide.
+    Save,
     /// Stop it.
     Block,
 }
@@ -277,6 +307,8 @@ pub fn judge(uri: &str, top: bool) -> Navigation {
     if lower.starts_with("https://read.wallflex/") {
         return if web::is_back(uri) {
             Navigation::Back
+        } else if web::is_save(uri) {
+            Navigation::Save
         } else {
             web::read_target(uri).map_or(Navigation::Block, Navigation::Read)
         };
@@ -338,6 +370,16 @@ mod tests {
             Some(Request::Web("a.org".to_owned()))
         );
         assert_eq!(parse_request(r#"{"type":"web"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"save","title":"T","text":"x"}"#),
+            Some(Request::Save("T".to_owned(), "x".to_owned()))
+        );
+        assert_eq!(parse_request(r#"{"type":"save","title":"T"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"contents","on":true}"#),
+            Some(Request::Contents(true))
+        );
+        assert_eq!(parse_request(r#"{"type":"contents"}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }

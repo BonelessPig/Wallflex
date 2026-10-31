@@ -34,7 +34,7 @@ pub const MAX_TEXT_BYTES: u64 = MAX_TEXT_MB * 1024 * 1024;
 const MAX_PART_CHARS: usize = 120;
 /// Characters Windows doesn't allow in a file name (besides control
 /// characters).
-const FORBIDDEN: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+pub const FORBIDDEN: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 /// Names Windows keeps for devices, with or without an extension.
 const RESERVED: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
@@ -46,7 +46,7 @@ const READING_CSS: &str = include_str!("reading.css");
 /// The reading pages' content security policy: no scripts, pictures
 /// and media only from the guides folder.
 const READING_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; \
-                           img-src https://guides.wallflex data:; \
+                           img-src https: data:; \
                            media-src https://guides.wallflex";
 
 /// A web reading page's content security policy: no scripts, pictures
@@ -194,6 +194,11 @@ pub fn folder_of(name: &str) -> &str {
 pub fn title(name: &str) -> &str {
     let file = name.rsplit_once('/').map_or(name, |(_, file)| file);
     file.rsplit_once('.').map_or(file, |(stem, _)| stem)
+}
+
+/// Whether `stem` plus `.md` makes a name [`resolve`] accepts.
+pub fn resolve_stem(stem: &str) -> bool {
+    resolve(Path::new(""), &format!("{stem}.md")).is_some()
 }
 
 /// A guide's address on the virtual host.

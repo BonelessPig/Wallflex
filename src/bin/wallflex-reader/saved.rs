@@ -41,6 +41,8 @@ pub struct Saved {
     pub style: Style,
     /// The corner the menu dot sits in.
     pub corner: Corner,
+    /// The contents list is pinned in the page's left margin.
+    pub contents: bool,
 }
 
 impl Default for Saved {
@@ -55,6 +57,7 @@ impl Default for Saved {
             zoom: 1.0,
             style: Style::default(),
             corner: Corner::default(),
+            contents: false,
         }
     }
 }
@@ -109,6 +112,7 @@ mod tests {
                 ..Style::default()
             },
             corner: Corner::BottomRight,
+            contents: true,
         };
         saved.save(&path).unwrap();
         let loaded = Saved::load(&path);

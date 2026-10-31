@@ -156,7 +156,10 @@ kept beside it and link to other guides.
 - Paste a web address into the guide list's box (Ctrl+K) and press
   Enter to read that page in reader mode: just the article, in your
   reading style, with pictures. Links in it open the same way; **Back**
-  and **Open in browser** are at the top. Pages that only build their
+  and **Open in browser** are at the top, with **Save as guide** to keep
+  the page in your Guides folder as Markdown. The **Contents** button in
+  the corner menu lists the page's headings and jumps to one. **Pin** keeps that list as a column in the left margin that follows
+  your place; point at a cut-off title to read it in full. Pages that only build their
   text with scripts (some apps) show nothing to read.
 
 The reader needs Microsoft Edge WebView2, which comes with Windows 11.

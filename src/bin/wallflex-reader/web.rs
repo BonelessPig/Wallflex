@@ -10,8 +10,8 @@
 //! the address to fetch next.
 
 use std::ffi::OsString;
-use std::io::Read;
-use std::path::PathBuf;
+use std::io::{ErrorKind, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +23,14 @@ use crate::guides;
 const READ_BASE: &str = "https://read.wallflex/";
 /// The link that goes back to the page before.
 const BACK_URL: &str = "https://read.wallflex/?back";
+/// The link that saves the page as a guide.
+const SAVE_URL: &str = "https://read.wallflex/?save";
+/// The longest title kept in a saved guide's file name, in characters.
+const MAX_TITLE_CHARS: usize = 100;
+/// The most copies of a saved page (`Title (2).md` ...) tried.
+const MAX_COPIES: u32 = 99;
+/// The name used when a page's title leaves nothing usable.
+const FALLBACK_TITLE: &str = "Web page";
 /// How long a download may take, in seconds.
 const TIME_LIMIT_SECS: u64 = 20;
 /// The biggest page taken, in bytes.
@@ -133,6 +141,84 @@ pub fn is_back(uri: &str) -> bool {
     uri.strip_prefix(BACK_URL).is_some_and(|rest| {
         rest.is_empty() || rest.starts_with('#') || rest.starts_with('&')
     })
+}
+
+/// Whether `uri` is the reading pages' "save as guide" link.
+pub fn is_save(uri: &str) -> bool {
+    uri.strip_prefix(SAVE_URL).is_some_and(|rest| {
+        rest.is_empty() || rest.starts_with('#') || rest.starts_with('&')
+    })
+}
+
+/// A guide file name (without the extension) made from a page's title:
+/// characters Windows refuses become spaces, runs of spaces one space,
+/// and it is cut to [`MAX_TITLE_CHARS`] and never empty or reserved.
+pub fn file_stem(title: &str) -> String {
+    let spaced: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || guides::FORBIDDEN.contains(&c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let words: Vec<&str> = spaced.split_whitespace().collect();
+    let joined = words.join(" ");
+    let cut: String = joined.chars().take(MAX_TITLE_CHARS).collect();
+    let stem = cut.trim_matches(['.', ' ']).to_owned();
+    if stem.is_empty() || !guides::resolve_stem(&stem) {
+        format!("{FALLBACK_TITLE} {stem}").trim().to_owned()
+    } else {
+        stem
+    }
+}
+
+/// Writes `markdown` as a new guide named after `title` in `folder`
+/// (`Title.md`, or `Title (2).md` if that is taken; nothing is ever
+/// overwritten). Returns the guide's name.
+pub fn save_guide(
+    folder: &Path,
+    title: &str,
+    markdown: &str,
+) -> Result<String, String> {
+    if u64::try_from(markdown.len())
+        .map_or(true, |n| n > guides::MAX_TEXT_BYTES)
+    {
+        return Err("That page is too big to save.".to_owned());
+    }
+    let stem = file_stem(title);
+    std::fs::create_dir_all(folder)
+        .map_err(|error| format!("Can't make the Guides folder: {error}"))?;
+    for copy in 1..=MAX_COPIES {
+        let name = if copy == 1 {
+            format!("{stem}.md")
+        } else {
+            format!("{stem} ({copy}).md")
+        };
+        let path = guides::resolve(folder, &name)
+            .ok_or("That page's title can't be used as a file name.")?;
+        let made = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path);
+        match made {
+            Ok(mut file) => {
+                return file
+                    .write_all(markdown.as_bytes())
+                    .map(|()| name)
+                    .map_err(|error| {
+                        // A half-written guide is worse than none.
+                        let _ = std::fs::remove_file(&path);
+                        format!("Can't save the page: {error}")
+                    });
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(format!("Can't save the page: {error}")),
+        }
+    }
+    Err("Too many saved copies of this page already.".to_owned())
 }
 
 /// Where the system's `curl.exe` is, if this Windows has one.
@@ -276,8 +362,33 @@ fn finish(ok: bool, said: &str, bytes: &[u8]) -> Result<Page, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Page, arguments, finish, is_back, normalize, read_target, trailer,
+        Page, arguments, file_stem, finish, is_back, is_save, normalize,
+        read_target, save_guide, trailer,
     };
+
+    #[test]
+    fn names_saved_pages() {
+        assert_eq!(file_stem("Abyssal whip"), "Abyssal whip");
+        assert_eq!(file_stem("  A: b/c  ?  d. "), "A b c d");
+        assert_eq!(file_stem(""), "Web page");
+        assert_eq!(file_stem("..."), "Web page");
+        assert_eq!(file_stem("CON"), "Web page CON");
+        assert_eq!(file_stem(&"x".repeat(300)).chars().count(), 100);
+        assert!(is_save("https://read.wallflex/?save"));
+        assert!(!is_save("https://read.wallflex/?saved"));
+    }
+
+    #[test]
+    fn saves_without_overwriting() {
+        let dir = std::env::temp_dir()
+            .join(format!("wallflex-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(save_guide(&dir, "Cow", "one").unwrap(), "Cow.md");
+        assert_eq!(save_guide(&dir, "Cow", "two").unwrap(), "Cow (2).md");
+        let first = std::fs::read_to_string(dir.join("Cow.md")).unwrap();
+        assert_eq!(first, "one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn accepts_web_addresses() {
