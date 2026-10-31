@@ -81,6 +81,10 @@ pub enum Event {
     Request(Request),
     /// A link to a guide was followed.
     Open(String),
+    /// A web page link was followed: show this address in reader mode.
+    OpenWeb(String),
+    /// A web page's back link was followed.
+    WebBack,
     /// Esc was pressed.
     Escape,
     /// The page's zoom changed (Ctrl and the mouse wheel, or the app).

@@ -351,6 +351,8 @@ fn follow(verdict: Navigation) {
     match verdict {
         Navigation::Guide(name) => super::handle(Event::Open(name)),
         Navigation::External(url) => super::open_external(&url),
+        Navigation::Read(url) => super::handle(Event::OpenWeb(url)),
+        Navigation::Back => super::handle(Event::WebBack),
         Navigation::Allow | Navigation::Block => {}
     }
 }

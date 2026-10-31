@@ -153,6 +153,11 @@ kept beside it and link to other guides.
   `Setup.md`), so they follow your reading style. It needs
   [pandoc](https://pandoc.org), which Wallflex doesn't include:
   `winget install JohnMacFarlane.Pandoc`. PDFs can't be converted.
+- Paste a web address into the guide list's box (Ctrl+K) and press
+  Enter to read that page in reader mode: just the article, in your
+  reading style, with pictures. Links in it open the same way; **Back**
+  and **Open in browser** are at the top. Pages that only build their
+  text with scripts (some apps) show nothing to read.
 
 The reader needs Microsoft Edge WebView2, which comes with Windows 11.
 It only uses memory while it's open and quits two minutes after it's

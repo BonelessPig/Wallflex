@@ -4,9 +4,11 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none';
   script-src 'unsafe-inline'; style-src 'unsafe-inline';
-  img-src https://guides.wallflex data:; media-src https://guides.wallflex;
+  img-src https: data:; media-src https://guides.wallflex;
   frame-src https://guides.wallflex about: https: http: mailto:">
-<!-- frame-src also decides where a guide's frame may navigate. Web and
+<!-- img-src allows https because web pages in reader mode show their
+  pictures in the guide frame, which inherits this policy (the page's own
+  policy still limits guides to the guides folder). frame-src also decides where a guide's frame may navigate. Web and
   mail links must pass it, or Edge shows "This content is blocked" in the
   frame; the app cancels each such navigation (messages::judge) and opens
   it in the default browser instead, so nothing but guides ever loads. -->
@@ -491,7 +493,7 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
       corner suits them.</div>
   </div>
   <div id="menu" role="listbox" hidden>
-    <input id="filter" placeholder="Find a guide" spellcheck="false" autocomplete="off">
+    <input id="filter" placeholder="Find a guide, or paste a web address" spellcheck="false" autocomplete="off">
     <div id="list"></div>
   </div>
 </main>
@@ -752,7 +754,7 @@ function onList(message) {
     $("error").hidden = true;
     return;
   }
-  if (!current || !guides.some((g) => g.path === current)) {
+  if (!webUrl && (!current || !guides.some((g) => g.path === current))) {
     open(message.start);
   }
   if (!$("menu").hidden) fillMenu();
@@ -810,8 +812,243 @@ function onConverted(message) {
   open(message.path);
 }
 
+/* ---- Web pages in reader mode ---------------------------------------
+   The app downloads the page and sends its HTML. It is parsed here into
+   an inert document (no scripts run, nothing loads), the article is cut
+   out and rebuilt from a short list of safe tags and attributes, and the
+   result goes into the same script-free reading frame as a guide. */
+const READ_BASE = "https://read.wallflex/";
+const MAX_DEPTH = 200;
+const MAX_STACK = 50;
+const MIN_ARTICLE_CHARS = 200;
+const MIN_PARAGRAPH_CHARS = 40;
+const MAX_PARAGRAPH_SCORE = 300;
+const MAX_IMAGE_PIXELS = 4000;
+const DROP = "script,style,noscript,template,iframe,object,embed,form,button,"
+  + "input,select,textarea,dialog,nav,footer,aside,svg,canvas,audio,video,"
+  + "link,meta,map,[hidden],[aria-hidden=true],[role=navigation],"
+  + ".mw-editsection,.mw-jump-link,.navbox,.vertical-navbox,.catlinks,"
+  + "#catlinks,.printfooter,.noprint,.mw-empty-elt,.toc,#toc,.sidebar,"
+  + ".advert,.ad-container";
+const ROOTS = ["#mw-content-text", "article", "[role=main]", "main",
+  "#content", ".post-content", ".entry-content", ".article-body"];
+const KEEP = new Set(("p div span a h1 h2 h3 h4 h5 h6 ul ol li dl dt dd "
+  + "table thead tbody tfoot tr th td caption colgroup col blockquote pre "
+  + "code em strong b i u s sub sup small mark abbr cite q br hr img "
+  + "figure figcaption details summary kbd samp var time del ins section "
+  + "article main center").split(" "));
+const ATTRIBUTES = {
+  a: ["title"], img: ["alt", "title"], td: ["colspan", "rowspan"],
+  th: ["colspan", "rowspan"], ol: ["start"], abbr: ["title"],
+};
+
+let webUrl = null;
+let webStack = [];
+let backing = false;
+
+function looksLikeAddress(text) {
+  return /^(https?:\/\/)?[^\s\/?#:]+\.[^\s]{2,}$/i.test(text.trim());
+}
+
+function esc(text) {
+  return text.replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+}
+
+function textLength(element) {
+  return (element.textContent || "").trim().length;
+}
+
+// The element holding the article: a known container, else the one
+// whose paragraphs hold the most text.
+function pickRoot(doc) {
+  for (const selector of ROOTS) {
+    const found = doc.querySelector(selector);
+    if (found && textLength(found) >= MIN_ARTICLE_CHARS) return found;
+  }
+  const scores = new Map();
+  for (const p of doc.querySelectorAll("p")) {
+    const length = textLength(p);
+    if (length < MIN_PARAGRAPH_CHARS) continue;
+    const score = Math.min(length, MAX_PARAGRAPH_SCORE);
+    const parent = p.parentElement;
+    if (!parent) continue;
+    scores.set(parent, (scores.get(parent) || 0) + score);
+    const grand = parent.parentElement;
+    if (grand) scores.set(grand, (scores.get(grand) || 0) + score / 2);
+  }
+  let best = doc.body;
+  let top = 0;
+  for (const [element, score] of scores) {
+    if (score > top) { top = score; best = element; }
+  }
+  return best;
+}
+
+// An address from a page's attribute, made absolute; null if it can't be.
+function resolveUrl(value, base) {
+  try { return new URL(value, base); } catch { return null; }
+}
+
+function cleanLink(value, base) {
+  const target = resolveUrl(value, base);
+  if (!target || !/^https?:$/.test(target.protocol)) return null;
+  const here = new URL(base);
+  const same = target.href.split("#")[0] === here.href.split("#")[0];
+  if (same) return target.hash ? target.hash : null;
+  return READ_BASE + "?u=" + encodeURIComponent(target.href);
+}
+
+function cleanImage(element, base) {
+  const value = element.getAttribute("src") || element.getAttribute("data-src")
+    || (element.getAttribute("srcset") || "").trim().split(/\s+/)[0];
+  const target = value && resolveUrl(value, base);
+  if (!target) return null;
+  if (target.protocol === "https:" || target.protocol === "http:") {
+    target.protocol = "https:";
+    return target.href;
+  }
+  return null;
+}
+
+function numberAttribute(element, name) {
+  const value = Number(element.getAttribute(name));
+  return Number.isInteger(value) && value > 0 && value <= MAX_IMAGE_PIXELS
+    ? value : null;
+}
+
+function hidden(element) {
+  return /display\s*:\s*none|visibility\s*:\s*hidden/i
+    .test(element.getAttribute("style") || "");
+}
+
+// Copies `node` into `parent` (a node of `out`) keeping only safe tags
+// and attributes; unknown tags are dropped but their contents stay.
+function copyNode(node, out, parent, base, depth) {
+  if (depth > MAX_DEPTH) return;
+  if (node.nodeType === Node.TEXT_NODE) {
+    parent.append(out.createTextNode(node.textContent));
+    return;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE || hidden(node)) return;
+  const tag = node.localName;
+  let target = parent;
+  if (KEEP.has(tag)) {
+    const copy = out.createElement(tag);
+    if (tag === "img") {
+      const src = cleanImage(node, base);
+      const tiny = numberAttribute(node, "width") === 1
+        || numberAttribute(node, "height") === 1;
+      if (!src || tiny) return;
+      copy.setAttribute("src", src);
+      copy.setAttribute("loading", "lazy");
+      for (const name of ["width", "height"]) {
+        const size = numberAttribute(node, name);
+        if (size) copy.setAttribute(name, String(size));
+      }
+    }
+    for (const name of ATTRIBUTES[tag] || []) {
+      const value = node.getAttribute(name);
+      if (value !== null) copy.setAttribute(name, value);
+    }
+    if (tag === "a") {
+      const link = cleanLink(node.getAttribute("href") || "", base);
+      if (link) copy.setAttribute("href", link);
+    }
+    const id = node.getAttribute("id");
+    if (id && /^[\w.:-]{1,200}$/.test(id)) copy.setAttribute("id", id);
+    parent.append(copy);
+    target = copy;
+  }
+  for (const child of node.childNodes) {
+    copyNode(child, out, target, base, depth + 1);
+  }
+}
+
+// { title, body } for a downloaded page, or null if it has no content.
+function readable(html, base) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll(DROP).forEach((element) => element.remove());
+  const heading = doc.querySelector("#firstHeading");
+  const root = pickRoot(doc);
+  const out = document.implementation.createHTMLDocument("");
+  for (const child of root.childNodes) {
+    copyNode(child, out, out.body, base, 0);
+  }
+  if (out.body.textContent.trim() === "" && !out.body.querySelector("img")) {
+    return null;
+  }
+  const first = out.body.querySelector("h1");
+  const title = ((heading && heading.textContent)
+    || (first && first.textContent) || doc.title
+    || new URL(base).hostname).trim();
+  if (!first) {
+    const h1 = out.createElement("h1");
+    h1.textContent = title;
+    out.body.prepend(h1);
+  }
+  return { title, body: out.body.innerHTML };
+}
+
+function webBar(url, canGoBack) {
+  const host = esc(new URL(url).hostname);
+  const back = canGoBack
+    ? '<a href="' + READ_BASE + '?back">← Back</a> · ' : "";
+  return '<p class="webbar">' + back + host + ' · <a href="'
+    + esc(url) + '">Open in browser</a></p>';
+}
+
+function openWeb(address) {
+  const text = address.trim();
+  if (!text) return;
+  closeMenu();
+  setTitle("Loading " + text.replace(/^https?:\/\//i, "") + "…");
+  send({ type: "web", url: text });
+}
+
+function goBack() {
+  const previous = webStack[webStack.length - 1];
+  if (!previous) return;
+  backing = true;
+  send({ type: "web", url: previous });
+}
+
+// The title to show again after a page failed to load.
+function restoreTitle() {
+  setTitle(webUrl ? document.title : (current || "Guides"));
+}
+
+function onWeb(message) {
+  let page = null;
+  if (!message.error) {
+    try { page = readable(message.html, message.url); } catch { page = null; }
+  }
+  if (!page) {
+    backing = false;
+    restoreTitle();
+    showError("Can't read this page", message.error
+      || "No article text was found. Pages built by scripts can't be read.",
+    true);
+    return;
+  }
+  if (backing) webStack.pop();
+  else if (webUrl && webUrl !== message.url) {
+    webStack.push(webUrl);
+    if (webStack.length > MAX_STACK) webStack.shift();
+  }
+  backing = false;
+  webUrl = message.url;
+  const html = message.template
+    .replace("<!--TITLE-->", () => esc(page.title))
+    .replace("<!--CONTENT-->", () => webBar(message.url, webStack.length > 0)
+      + page.body);
+  onShow({ path: message.url, title: page.title, html });
+}
+
 function open(path) {
-  if (path) send({ type: "open", path });
+  if (!path) return;
+  webUrl = null;
+  webStack = [];
+  send({ type: "open", path });
 }
 
 function openMenu() {
@@ -837,14 +1074,32 @@ function fillMenu() {
   });
   const list = $("list");
   list.textContent = "";
-  if (shown.length === 0) {
+  if (shown.length === 0 && !looksLikeAddress($("filter").value)) {
     const none = document.createElement("div");
     none.className = "none";
     none.textContent = guides.length ? "No guides match." : "No guides yet.";
     list.append(none);
   }
+  if (looksLikeAddress($("filter").value)) {
+    shown.push({ web: $("filter").value.trim(), path: "", title: "" });
+  }
   let folder = null;
   shown.forEach((guide, index) => {
+    if (guide.web) {
+      const row = document.createElement("button");
+      row.className = "item";
+      row.setAttribute("role", "option");
+      row.dataset.index = String(index);
+      const label = document.createElement("span");
+      label.textContent = "Read " + guide.web;
+      const tag = document.createElement("span");
+      tag.className = "kind";
+      tag.textContent = "WEB";
+      row.append(label, tag);
+      row.addEventListener("click", () => choose(index));
+      list.append(row);
+      return;
+    }
     if (guide.folder !== folder) {
       folder = guide.folder;
       if (folder) {
@@ -899,6 +1154,10 @@ function setActive(index) {
 
 function choose(index) {
   const guide = shown[index];
+  if (guide && guide.web) {
+    openWeb(guide.web);
+    return;
+  }
   closeMenu();
   if (guide && guide.path !== current) open(guide.path);
 }
@@ -1006,6 +1265,8 @@ if (webview) {
     if (message.type === "list") onList(message);
     else if (message.type === "show") onShow(message);
     else if (message.type === "converted") onConverted(message);
+    else if (message.type === "web") onWeb(message);
+    else if (message.type === "back") goBack();
     else if (message.type === "pinned") setPinned(message.pinned, message.side);
     else if (message.type === "escape") escape();
   });

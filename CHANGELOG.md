@@ -10,6 +10,12 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- The reader can show web pages in reader mode (an article without the
+  menus and ads, in your reading style). Open the guide list (Ctrl+K),
+  paste an address such as `oldschool.runescape.wiki/w/Abyssal_whip`
+  and press Enter. Links in the page open in reader mode too, with a
+  Back link and "Open in browser" at the top. Pages are fetched with
+  Windows' own `curl.exe`; scripts never run.
 - The reader's guide list has a **-> MD** button on HTML and LaTeX
   guides that converts them to Markdown with pandoc (found on `PATH`;
   not included), writing a `.md` copy beside the original. LaTeX

@@ -49,6 +49,13 @@ const READING_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; \
                            img-src https://guides.wallflex data:; \
                            media-src https://guides.wallflex";
 
+/// A web reading page's content security policy: no scripts, pictures
+/// from secure addresses only.
+const WEB_CSP: &str = concat!(
+    "default-src 'none'; style-src 'unsafe-inline'; ",
+    "img-src https: data:"
+);
+
 /// What kind of file a guide is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -225,7 +232,7 @@ fn percent_encode(part: &str) -> String {
 
 /// `part` with `%XX` escapes decoded; `None` if an escape is broken or
 /// the result isn't UTF-8.
-fn percent_decode(part: &str) -> Option<String> {
+pub fn percent_decode(part: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(part.len());
     let mut rest = part.as_bytes();
     while let Some((&byte, tail)) = rest.split_first() {
@@ -274,6 +281,26 @@ pub fn render(kind: Kind, name: &str, text: &str) -> String {
          </style></head><body class=\"{class}\"><main>{body}</main>\
          </body></html>",
         escape_html(title(name))
+    )
+}
+
+/// The reading page for a web page, with `<!--TITLE-->` and
+/// `<!--CONTENT-->` where the reader page puts the title (escaped) and
+/// the cleaned article. Like the guides' pages it has no scripts, but
+/// pictures may come from any secure address.
+pub fn web_template() -> String {
+    format!(
+        concat!(
+            "<!doctype html><html><head><meta charset=\"utf-8\">",
+            "<meta http-equiv=\"Content-Security-Policy\" ",
+            "content=\"{csp}\">",
+            "<meta name=\"referrer\" content=\"no-referrer\">",
+            "<title><!--TITLE--></title><style>{css}</style></head>",
+            "<body class=\"markdown web\"><main><!--CONTENT--></main>",
+            "</body></html>"
+        ),
+        csp = WEB_CSP,
+        css = READING_CSS
     )
 }
 

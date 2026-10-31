@@ -69,6 +69,7 @@ use crate::place::{
     Rect, Resizable, SNAP_REACH, Scale, Vertical,
 };
 use crate::saved::Saved;
+use crate::web;
 
 /// How long the window may stay hidden before the reader exits, in
 /// milliseconds.
@@ -108,7 +109,9 @@ const THEME_KEY: PCWSTR =
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 /// Whether a conversion is running (only one at a time).
 static CONVERTING: AtomicBool = AtomicBool::new(false);
-/// Answers from finished conversions, for the UI thread to pass on to
+/// Whether a web page is being fetched (only one at a time).
+static FETCHING: AtomicBool = AtomicBool::new(false);
+/// Answers from finished conversions and downloads, for the UI thread to pass on to
 /// the page (the browser may only be used from that thread).
 static ANSWERS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -523,6 +526,8 @@ impl Reader {
         match event {
             Event::Request(request) => self.on_request(request),
             Event::Open(name) => self.open(&name),
+            Event::OpenWeb(url) => self.fetch_web(&url),
+            Event::WebBack => self.view.post(&messages::back()),
             // The page closes its guide list first, or asks to close.
             Event::Escape => self.view.post(&messages::escape()),
             Event::Zoomed(zoom) => {
@@ -576,6 +581,7 @@ impl Reader {
                 self.remember();
             }
             Request::Convert(name) => self.convert(name),
+            Request::Web(url) => self.fetch_web(&url),
             Request::Folder => {
                 // It's made at startup; this only matters if it was
                 // deleted since, and Explorer says so if it's missing.
@@ -659,13 +665,49 @@ impl Reader {
         let started = thread::Builder::new().name("convert".to_owned()).spawn(
             move || {
                 let answer = messages::converted(&folder, &name, &dirs);
-                finish_conversion(target, answer);
+                finish_job(target, answer, &CONVERTING);
             },
         );
         if started.is_err() {
             CONVERTING.store(false, Ordering::Release);
             let error = "Can't start the conversion.";
             self.view.post(&messages::conversion_failed(error));
+        }
+    }
+
+    /// Starts fetching a web page for reader mode on its own thread; the
+    /// answer comes back through [`WM_CONVERTED`] like a conversion's.
+    fn fetch_web(&self, input: &str) {
+        let Some(url) = web::normalize(input) else {
+            let error =
+                Err("That isn't a web address the reader opens.".into());
+            self.view.post(&messages::web(input, error));
+            return;
+        };
+        if FETCHING.swap(true, Ordering::AcqRel) {
+            let error = Err("Another page is still loading.".into());
+            self.view.post(&messages::web(&url, error));
+            return;
+        }
+        // A window handle can't cross threads; its address can.
+        let target = self.hwnd.0.addr();
+        let address = url.clone();
+        let started =
+            thread::Builder::new()
+                .name("web".to_owned())
+                .spawn(move || {
+                    let root = std::env::var_os("SystemRoot");
+                    let fetched = web::fetch(&address, root);
+                    finish_job(
+                        target,
+                        messages::web(&address, fetched),
+                        &FETCHING,
+                    );
+                });
+        if started.is_err() {
+            FETCHING.store(false, Ordering::Release);
+            let error = Err("Can't start loading the page.".into());
+            self.view.post(&messages::web(&url, error));
         }
     }
 
@@ -702,14 +744,15 @@ impl Reader {
     }
 }
 
-/// Called on a conversion's thread when it is done: leaves `answer` for
-/// the UI thread and wakes the window at address `target`.
-fn finish_conversion(target: usize, answer: String) {
+/// Called on a background job's thread when it is done: leaves `answer`
+/// for the UI thread, frees the job's `busy` flag and wakes the window
+/// at address `target`.
+fn finish_job(target: usize, answer: String, busy: &AtomicBool) {
     ANSWERS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(answer);
-    CONVERTING.store(false, Ordering::Release);
+    busy.store(false, Ordering::Release);
     let hwnd = HWND(ptr::with_exposed_provenance_mut(target));
     // SAFETY: posting to a window that may be gone is allowed; it then
     // fails and the answer has nowhere to go anyway.

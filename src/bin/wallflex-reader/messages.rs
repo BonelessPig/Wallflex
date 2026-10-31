@@ -6,12 +6,15 @@
 //! "right"}`, `{"type": "move", "at": [X, Y]}`, `{"type": "style",
 //! "style": STYLE}`, `{"type": "corner", "corner": NAME}` or
 //! `{"type": "convert", "path": NAME}` (HTML or LaTeX to Markdown with
-//! pandoc). The app
+//! pandoc) or `{"type": "web", "url": ADDRESS}` (fetch a web page for
+//! reader mode). The app
 //! answers with `list` (the guides, the last one shown, whether it's
 //! pinned and to which side, the style and the menu dot's corner),
 //! `show` (a guide: a reading page as `html`, a file to load as `url`,
 //! or an `error`), `converted` (the new guide's `path`, or an `error`),
-//! `pinned` and `escape` (Esc was pressed).
+//! `web` (the page's `html` and final `url`, with the reading page's
+//! `template`, or an `error`), `back` (a web page's back link was
+//! followed), `pinned` and `escape` (Esc was pressed).
 
 use std::path::Path;
 
@@ -24,6 +27,7 @@ use crate::guides::{self, Kind};
 use crate::place::Edge;
 use crate::saved::Saved;
 use crate::style::Style;
+use crate::web;
 
 /// Something the page asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +53,8 @@ pub enum Request {
     Corner(Corner),
     /// Convert this HTML or LaTeX guide to Markdown with pandoc.
     Convert(String),
+    /// Fetch this web address for reader mode (not yet checked).
+    Web(String),
 }
 
 /// A request as the page sends it.
@@ -65,6 +71,8 @@ struct RawRequest {
     side: Option<Edge>,
     /// The menu dot's corner, for `corner`.
     corner: Option<Corner>,
+    /// The address, for `web`.
+    url: Option<String>,
     /// Where the page was pressed, for `move`.
     at: Option<(i32, i32)>,
 }
@@ -83,6 +91,7 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "style" => Request::Style(raw.style?),
         "corner" => Request::Corner(raw.corner?),
         "convert" => Request::Convert(raw.path?),
+        "web" => Request::Web(raw.url?),
         _ => return None,
     })
 }
@@ -175,6 +184,26 @@ pub fn conversion_failed(error: &str) -> String {
     json!({ "type": "converted", "error": error }).to_string()
 }
 
+/// The `web` answer for fetching `url`: the page and the template to
+/// put it in, or an `error`.
+pub fn web(url: &str, fetched: Result<web::Page, String>) -> String {
+    match fetched {
+        Ok(page) => json!({
+            "type": "web",
+            "url": page.url,
+            "html": page.html,
+            "template": guides::web_template(),
+        }),
+        Err(error) => json!({ "type": "web", "url": url, "error": error }),
+    }
+    .to_string()
+}
+
+/// Tells the page a web page's back link was followed.
+pub fn back() -> String {
+    json!({ "type": "back" }).to_string()
+}
+
 /// Tells the page Esc was pressed (it closes its guide list, or asks to
 /// close the window).
 pub fn escape() -> String {
@@ -219,6 +248,10 @@ pub enum Navigation {
     Guide(String),
     /// Stop it and open it in the default browser (or mail app).
     External(String),
+    /// Stop it and show this web address in reader mode.
+    Read(String),
+    /// Stop it and go back to the web page before.
+    Back,
     /// Stop it.
     Block,
 }
@@ -239,6 +272,13 @@ pub fn judge(uri: &str, top: bool) -> Navigation {
             None if top => Navigation::Block,
             // HTML, PDF and their pictures load in the frame.
             Some(_) | None => Navigation::Allow,
+        };
+    }
+    if lower.starts_with("https://read.wallflex/") {
+        return if web::is_back(uri) {
+            Navigation::Back
+        } else {
+            web::read_target(uri).map_or(Navigation::Block, Navigation::Read)
         };
     }
     let external = ["https:", "http:", "mailto:"]
@@ -293,6 +333,11 @@ mod tests {
             Some(Request::Convert("a.html".to_owned()))
         );
         assert_eq!(parse_request(r#"{"type":"convert"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"web","url":"a.org"}"#),
+            Some(Request::Web("a.org".to_owned()))
+        );
+        assert_eq!(parse_request(r#"{"type":"web"}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }
@@ -326,6 +371,18 @@ mod tests {
         assert_eq!(
             judge("https://example.com/", false),
             Navigation::External("https://example.com/".to_owned())
+        );
+        assert_eq!(
+            judge("https://read.wallflex/?u=https%3A%2F%2Fa.org%2F", false),
+            Navigation::Read("https://a.org/".to_owned())
+        );
+        assert_eq!(
+            judge("https://read.wallflex/?back", false),
+            Navigation::Back
+        );
+        assert_eq!(
+            judge("https://read.wallflex/?u=nope", false),
+            Navigation::Block
         );
         assert_eq!(judge("file:///C:/x", false), Navigation::Block);
         assert_eq!(judge("javascript:alert(1)", true), Navigation::Block);

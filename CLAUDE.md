@@ -141,6 +141,18 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   WebView2 is single-threaded)
   into a sibling `.md` that is never overwritten. Pandoc isn't shipped
   (about 150 MB) and can't read PDFs.
+  `web.rs`: reader mode for web pages. Typing an address in the list's
+  box sends `web`; a thread runs `%SystemRoot%\System32\curl.exe`
+  (http/https only, 20 s, 8 MB, 5 redirects; credentials, localhost and
+  private addresses refused, also for the final address) and the answer
+  rides the same `ANSWERS`/`WM_CONVERTED` path as conversions. The page
+  (`shell.html`, `readable`) parses the HTML in an inert `DOMParser`
+  document, picks the article (MediaWiki, `article`, `main`, else the
+  densest paragraphs), and rebuilds it from a tag/attribute whitelist
+  into `guides::web_template` (no scripts; images may come from any
+  https address). Links become `https://read.wallflex/?u=<address>`,
+  which `judge` turns into `Navigation::Read`; `?back` goes back
+  through the page's own stack.
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the

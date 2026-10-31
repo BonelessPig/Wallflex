@@ -18,6 +18,7 @@ mod messages;
 mod place;
 mod saved;
 mod style;
+mod web;
 mod win32;
 
 use std::path::PathBuf;

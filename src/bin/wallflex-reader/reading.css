@@ -145,3 +145,5 @@ body.text pre {
   border-radius: 6px;
 }
 ::-webkit-scrollbar-track { background: transparent; }
+
+.webbar { font-size: 0.85em; color: var(--quiet); margin: 0 0 1em; }
