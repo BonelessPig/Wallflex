@@ -107,25 +107,49 @@ svg {
   stroke-linejoin: round;
 }
 /* The corner menu: a faint dot that fans out into round buttons on a
-   quarter circle while the pointer is over it. */
+   quarter circle while the pointer is over it. It sits in the corner
+   `body[data-corner]` names (set from the settings); --sx and --sy point
+   the fan into the window. */
+body { --sx: 1; --sy: 1; --left: 0; --right: auto; --top: 0; --bottom: auto; }
+body[data-corner$="right"] { --sx: -1; --left: auto; --right: 0; }
+body[data-corner^="bottom"] { --sy: -1; --top: auto; --bottom: 0; }
 #radial {
   --reach: 112px;
   position: absolute;
-  top: 0;
-  left: 0;
+  top: var(--top);
+  bottom: var(--bottom);
+  left: var(--left);
+  right: var(--right);
+  width: 36px;
+  height: 36px;
   z-index: 3;
 }
 #radial .disc {
   position: absolute;
-  top: 0;
-  left: 0;
+  top: var(--top);
+  bottom: var(--bottom);
+  left: var(--left);
+  right: var(--right);
   width: 190px;
   height: 190px;
+  border-radius: 0;
   border-bottom-right-radius: 100%;
   background: radial-gradient(circle at 0 0, var(--bg) 55%, transparent 85%);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s;
+}
+body[data-corner="top-right"] #radial .disc {
+  border-radius: 0 0 0 100%;
+  background-image: radial-gradient(circle at 100% 0, var(--bg) 55%, transparent 85%);
+}
+body[data-corner="bottom-left"] #radial .disc {
+  border-radius: 0 100% 0 0;
+  background-image: radial-gradient(circle at 0 100%, var(--bg) 55%, transparent 85%);
+}
+body[data-corner="bottom-right"] #radial .disc {
+  border-radius: 100% 0 0 0;
+  background-image: radial-gradient(circle at 100% 100%, var(--bg) 55%, transparent 85%);
 }
 #radial.open .disc { opacity: 0.85; pointer-events: auto; }
 #hub {
@@ -176,8 +200,8 @@ body:not(.pinned) #hub { cursor: move; }
 #radial.open .spoke {
   opacity: 1;
   visibility: visible;
-  transform: translate(calc(cos(var(--a)) * var(--reach)),
-    calc(sin(var(--a)) * var(--reach)));
+  transform: translate(calc(cos(var(--a)) * var(--reach) * var(--sx)),
+    calc(sin(var(--a)) * var(--reach) * var(--sy)));
   transition: transform 0.2s cubic-bezier(0.2, 1.3, 0.4, 1) var(--d),
     opacity 0.12s var(--d), visibility 0s;
 }
@@ -185,7 +209,6 @@ body:not(.pinned) #hub { cursor: move; }
 .spoke:active { background: var(--press); }
 .spoke[aria-pressed="true"], .spoke[aria-expanded="true"] { color: var(--accent); }
 .spoke:focus-visible { outline-offset: 2px; }
-#aa { font-size: 13px; font-weight: 600; letter-spacing: -0.02em; }
 /* What the button under the pointer does, just outside the arc. */
 #caption {
   position: absolute;
@@ -205,6 +228,8 @@ body:not(.pinned) #hub { cursor: move; }
   pointer-events: none;
   transition: opacity 0.1s;
 }
+body[data-corner$="right"] #caption { left: auto; right: 116px; }
+body[data-corner^="bottom"] #caption { top: auto; bottom: 120px; }
 #caption.on { opacity: 1; }
 #caption.title { font-weight: 600; }
 main { flex: 1; position: relative; min-height: 0; }
@@ -255,6 +280,9 @@ iframe {
   overflow: hidden;
   z-index: 2;
 }
+body[data-corner^="bottom"] #menu { top: auto; bottom: 40px; }
+body[data-corner^="bottom"] #style { top: auto; bottom: 40px; }
+body[data-corner$="right"] #style { left: auto; right: 8px; }
 #filter {
   flex: none;
   margin: 8px;
@@ -341,7 +369,7 @@ iframe {
 .theme[aria-pressed="true"] { color: var(--ink); }
 .theme[aria-pressed="true"] .swatch { box-shadow: 0 0 0 2px var(--menu), 0 0 0 4px var(--accent); }
 .fonts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-.font, .seg button {
+.font, .corner, .seg button {
   padding: 7px 8px;
   border: 1px solid var(--rule);
   text-align: center;
@@ -350,7 +378,8 @@ iframe {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.font[aria-pressed="true"], .seg button[aria-pressed="true"] {
+.font[aria-pressed="true"], .corner[aria-pressed="true"],
+.seg button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -359,6 +388,7 @@ iframe {
 .size .small { font-size: 12px; }
 .size .big { font-size: 18px; }
 .size input { flex: 1; accent-color: var(--accent); }
+.hint { margin-top: 6px; color: var(--quiet); font-size: 11px; }
 .seg { display: flex; gap: 4px; }
 .seg button { flex: 1; font-size: 12px; }
 ::-webkit-scrollbar { width: 10px; }
@@ -380,7 +410,19 @@ iframe {
       M8 4.2v9.6"/></svg>
   </button>
   <button class="spoke" id="aa" style="--a: 18deg; --d: 20ms"
-    aria-expanded="false" data-tip="Theme, font and size">Aa</button>
+    aria-expanded="false" data-tip="Theme, font, size and menu dot">
+    <svg viewBox="0 0 24 24" style="stroke-width: 2"><circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0
+      1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0
+      1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2
+      2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0
+      0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0
+      0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0
+      1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0
+      1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0
+      2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2
+      2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
   <button class="spoke" id="folder" style="--a: 36deg; --d: 40ms"
     data-tip="Open the Guides folder">
     <svg viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.3 1.5H13
@@ -422,11 +464,15 @@ iframe {
     <div class="label">Text size <span id="size-value"></span></div>
     <div class="size">
       <button class="small" id="smaller" title="Smaller">A</button>
-      <input type="range" id="size" min="12" max="28" step="1" aria-label="Text size">
+      <input type="range" id="size" min="8" max="28" step="1" aria-label="Text size">
       <button class="big" id="bigger" title="Bigger">A</button>
     </div>
     <div class="label">Line spacing</div>
     <div class="seg" id="spacings"></div>
+    <div class="label">Menu dot</div>
+    <div class="fonts" id="corners"></div>
+    <div class="hint">PDFs keep their own toolbar along the top, so a bottom
+      corner suits them.</div>
   </div>
   <div id="menu" role="listbox" hidden>
     <input id="filter" placeholder="Find a guide" spellcheck="false" autocomplete="off">
@@ -460,7 +506,7 @@ const FONTS = {
   cascadia: ["Cascadia Mono", "'Cascadia Mono', Consolas, monospace"],
 };
 const SPACINGS = { compact: ["Compact", 1.45], normal: ["Normal", 1.65], airy: ["Airy", 1.9] };
-const SIZE_RANGE = [12, 28];
+const SIZE_RANGE = [8, 28];
 let style = { theme: "auto", font: "segoe", size: 16, spacing: "normal" };
 
 let guides = [];
@@ -488,6 +534,26 @@ function setPinned(pinned, side) {
     else if (pinned) tip = "Move to the " + name + " side";
     setTip(button, tip);
   }
+}
+
+// Which corner the menu dot sits in (the app reads it from the settings).
+const CORNERS = [
+  ["top-left", "Top left"], ["top-right", "Top right"],
+  ["bottom-left", "Bottom left"], ["bottom-right", "Bottom right"],
+];
+
+function setCorner(corner) {
+  const known = CORNERS.some(([value]) => value === corner);
+  document.body.dataset.corner = known ? corner : CORNERS[0][0];
+  document.querySelectorAll(".corner").forEach((button) => {
+    button.setAttribute("aria-pressed",
+      String(button.dataset.value === document.body.dataset.corner));
+  });
+}
+
+function chooseCorner(corner) {
+  setCorner(corner);
+  send({ type: "corner", corner });
 }
 
 // The guides button's caption is the open guide's title.
@@ -632,6 +698,14 @@ function buildStylePanel() {
     button.addEventListener("click", () => setStyle({ spacing: value }));
     $("spacings").append(button);
   }
+  for (const [value, label] of CORNERS) {
+    const button = document.createElement("button");
+    button.className = "corner";
+    button.dataset.value = value;
+    button.textContent = label;
+    button.addEventListener("click", () => chooseCorner(value));
+    $("corners").append(button);
+  }
   $("size").addEventListener("input", () => setStyle({ size: Number($("size").value) }));
   $("smaller").addEventListener("click", () => setStyle({ size: style.size - 1 }));
   $("bigger").addEventListener("click", () => setStyle({ size: style.size + 1 }));
@@ -649,6 +723,7 @@ function onList(message) {
     style = message.style;
     applyStyle();
   }
+  setCorner(message.corner);
   guides = message.guides;
   $("where").textContent = message.where;
   setPinned(message.pinned, message.side);
@@ -877,6 +952,7 @@ if (webview) {
   });
 }
 buildStylePanel();
+setCorner(null);
 setPinned(false, null);
 send({ type: "ready" });
 </script>

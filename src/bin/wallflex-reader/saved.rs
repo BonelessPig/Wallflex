@@ -2,13 +2,14 @@
 //! Wallflex's settings: whether it's pinned and to which side, the last
 //! guide shown, the sizes it was resized to, where the floating panel
 //! was dragged to, how far the page is zoomed
-//! (Ctrl and the mouse wheel) and the reading style (theme, font, size,
-//! spacing).
+//! (Ctrl and the mouse wheel), the reading style (theme, font, size,
+//! spacing) and the corner the menu dot sits in.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::corner::Corner;
 use crate::place::Edge;
 use crate::style::Style;
 
@@ -38,6 +39,8 @@ pub struct Saved {
     pub zoom: f64,
     /// How guides look.
     pub style: Style,
+    /// The corner the menu dot sits in.
+    pub corner: Corner,
 }
 
 impl Default for Saved {
@@ -51,6 +54,7 @@ impl Default for Saved {
             spot: None,
             zoom: 1.0,
             style: Style::default(),
+            corner: Corner::default(),
         }
     }
 }
@@ -84,6 +88,7 @@ impl Saved {
 #[cfg(test)]
 mod tests {
     use super::Saved;
+    use crate::corner::Corner;
     use crate::place::Edge;
     use crate::style::Style;
 
@@ -103,6 +108,7 @@ mod tests {
                 theme: "sepia".to_owned(),
                 ..Style::default()
             },
+            corner: Corner::BottomRight,
         };
         saved.save(&path).unwrap();
         let loaded = Saved::load(&path);

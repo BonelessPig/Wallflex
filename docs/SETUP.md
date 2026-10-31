@@ -124,9 +124,13 @@ kept beside it and link to other guides.
 - The window opens in the corner nearest the icon and hides when you
   click somewhere else, press Esc or click the icon again.
 - The guide fills the window. Its buttons hide behind the faint dot in
-  the top-left corner: point at it and they fan out (guides, Aa,
+  the top-left corner: point at it and they fan out (guides, settings,
   folder, pin left, pin right and close). Point at a button to see
   what it does.
+- The dot can sit in any corner: pick one under **Menu dot** in the
+  settings (gear) panel (remembered). PDFs are shown by Edge's viewer, whose
+  contents and zoom controls run along the top, so **a bottom corner is
+  recommended if you read PDFs**.
 - The pin buttons dock it full height to the left or right side of the
   screen and keep it open while you work; windows you maximise make
   room for it. The other pin button moves it across; the lit one
@@ -136,7 +140,7 @@ kept beside it and link to other guides.
 - The book button opens the list of guides (Ctrl+K); type to find
   one. Pointing at it shows the open guide's title.
   Ctrl and the mouse wheel zoom, and the zoom is remembered.
-- **Aa** picks a theme (Auto follows Windows; Light, Sepia, Dark or
+- The **gear** picks a theme (Auto follows Windows; Light, Sepia, Dark or
   Black), a font, the text size and the line spacing. Markdown and text
   guides follow it; HTML and PDF guides keep their own look.
 - Web links open in your usual browser.

@@ -21,7 +21,7 @@ pub const FONTS: [&str; 6] = [
 /// Line spacing choices.
 pub const SPACINGS: [&str; 3] = ["compact", "normal", "airy"];
 /// The smallest and largest text size, in CSS pixels.
-pub const SIZES: std::ops::RangeInclusive<u32> = 12..=28;
+pub const SIZES: std::ops::RangeInclusive<u32> = 8..=28;
 /// The text size to start with.
 const DEFAULT_SIZE: u32 = 16;
 
@@ -130,7 +130,7 @@ mod tests {
             }
             .checked()
             .size,
-            12
+            8
         );
     }
 

@@ -537,6 +537,10 @@ impl Reader {
                 // strips keep the old colour until the next repaint.
                 let _ = unsafe { InvalidateRect(Some(self.hwnd), None, true) };
             }
+            Request::Corner(corner) => {
+                self.saved.corner = corner;
+                self.remember();
+            }
             Request::Folder => {
                 // It's made at startup; this only matters if it was
                 // deleted since, and Explorer says so if it's missing.

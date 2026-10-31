@@ -10,6 +10,9 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- The reader's settings (gear) panel has a **Menu dot** choice that moves the dot
+  (and its fan of buttons) to any corner. A bottom corner keeps it off
+  the toolbar of Edge's PDF viewer, which it covered at top-left.
 - A `guides` widget: a book icon that opens your own guides in a
   borderless reader window on the desktop. Put Markdown, HTML, PDF or
   text files in the `Guides` folder next to `config.toml`
@@ -21,14 +24,14 @@ patch number (0.x.**y**) for fixes only.
   It's a separate, optional program (`wallflex-reader.exe`) using
   WebView2, so it only uses memory while it's open, and it exits two
   minutes after it's hidden.
-- The reader's **Aa** button sets how guides look: a theme (Auto, which
+- The reader's settings (gear) button sets how guides look: a theme (Auto, which
   follows Windows, Light, Sepia, Dark or Black), the font (Segoe UI,
   Sitka, Georgia, Verdana, Bahnschrift or Cascadia Mono), the text size
   and the line spacing. Changes show at once and are remembered.
   Markdown and text guides follow all of it; HTML and PDF guides keep
   their own look.
 - The reader has no title bar: the guide fills the window, and its
-  buttons (guides, Aa, folder, pin left, pin right, close) fan out
+  buttons (guides, settings, folder, pin left, pin right, close) fan out
   from a faint dot in the top-left corner when you point at it.
 - The reader can be resized: drag any edge or corner of the floating
   window, or the inner edge of the pinned one. Both sizes are

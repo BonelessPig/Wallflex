@@ -3,11 +3,12 @@
 //!
 //! The page asks: `{"type": "ready" | "list" | "close" | "folder"}`,
 //! `{"type": "open", "path": NAME}`, `{"type": "pin", "side": "left" |
-//! "right"}`, `{"type": "move", "at": [X, Y]}` or `{"type": "style",
-//! "style": STYLE}`. The app answers
-//! with `list` (the guides, the last one shown, whether it's pinned and
-//! to which side), `show` (a guide: a reading page as `html`, a file to
-//! load as `url`, or an `error`), `pinned` and `escape` (Esc was
+//! "right"}`, `{"type": "move", "at": [X, Y]}`, `{"type": "style",
+//! "style": STYLE}` or `{"type": "corner", "corner": NAME}`. The app
+//! answers with `list` (the guides, the last one shown, whether it's
+//! pinned and to which side, the style and the menu dot's corner),
+//! `show` (a guide: a reading page as `html`, a file to load as `url`,
+//! or an `error`), `pinned` and `escape` (Esc was
 //! pressed).
 
 use std::path::Path;
@@ -15,6 +16,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::corner::Corner;
 use crate::guides::{self, Kind};
 use crate::place::Edge;
 use crate::saved::Saved;
@@ -40,6 +42,8 @@ pub enum Request {
     Move((i32, i32)),
     /// Use and remember this reading style (not yet checked).
     Style(Style),
+    /// Remember that the menu dot sits in this corner.
+    Corner(Corner),
 }
 
 /// A request as the page sends it.
@@ -54,6 +58,8 @@ struct RawRequest {
     style: Option<Style>,
     /// The side, for `pin`.
     side: Option<Edge>,
+    /// The menu dot's corner, for `corner`.
+    corner: Option<Corner>,
     /// Where the page was pressed, for `move`.
     at: Option<(i32, i32)>,
 }
@@ -70,13 +76,15 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "folder" => Request::Folder,
         "move" => Request::Move(raw.at?),
         "style" => Request::Style(raw.style?),
+        "corner" => Request::Corner(raw.corner?),
         _ => return None,
     })
 }
 
 /// The `list` answer: every guide in `folder`, the one to show first
 /// (the last one shown if it's still there, else the first), whether
-/// the reader is pinned (and to which side) and the reading style.
+/// the reader is pinned (and to which side), the reading style and the
+/// corner the menu dot sits in.
 pub fn list(folder: &Path, saved: &Saved) -> String {
     let names = guides::list(folder);
     let start = saved
@@ -102,6 +110,7 @@ pub fn list(folder: &Path, saved: &Saved) -> String {
         "pinned": saved.pinned,
         "side": saved.side,
         "style": saved.style,
+        "corner": saved.corner,
         "where": folder.display().to_string(),
     })
     .to_string()
@@ -215,6 +224,7 @@ pub fn judge(uri: &str, top: bool) -> Navigation {
 #[cfg(test)]
 mod tests {
     use super::{Navigation, Request, judge, parse_request, show};
+    use crate::corner::Corner;
     use crate::place::Edge;
 
     #[test]
@@ -242,6 +252,12 @@ mod tests {
             Some(Request::Move((14, -3)))
         );
         assert_eq!(parse_request(r#"{"type":"move"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"corner","corner":"bottom-left"}"#),
+            Some(Request::Corner(Corner::BottomLeft))
+        );
+        assert_eq!(parse_request(r#"{"type":"corner","corner":"mid"}"#), None);
+        assert_eq!(parse_request(r#"{"type":"corner"}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }
