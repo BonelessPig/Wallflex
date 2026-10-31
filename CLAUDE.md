@@ -134,7 +134,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the
-  page is zoomed to match. It hides on focus loss (unless pinned),
+  page is zoomed to match. Resizing: the browser is inset by a thin
+  strip (painted the style's background) on the sides that resize, all
+  of them floating, the inner one pinned; `WM_NCHITTEST` answers there
+  (`place::grab`), and `WM_EXITSIZEMOVE` saves the size in 1080p units
+  (`panel`, `pane`) and places the window again. It hides on focus loss (unless pinned),
   checking `GetForegroundWindow` when the posted note arrives, since
   showing it bounces the focus. Hidden 2 minutes, it exits.
   `reader.json` next to the config keeps pinned, last guide, zoom and

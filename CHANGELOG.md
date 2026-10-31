@@ -30,6 +30,9 @@ patch number (0.x.**y**) for fixes only.
 - The reader has no title bar: the guide fills the window, and its
   buttons (guides, Aa, folder, pin left, pin right, close) fan out
   from a faint dot in the top-left corner when you point at it.
+- The reader can be resized: drag any edge or corner of the floating
+  window, or the inner edge of the pinned one. Both sizes are
+  remembered, and a pinned reader's new width is kept free for it.
 
 ### Fixed
 

@@ -14,6 +14,13 @@ pub const PANEL_SIZE: (i32, i32) = (520, 720);
 pub const PANE_WIDTH: i32 = 520;
 /// The floating panel's gap from the work area's edges, likewise.
 pub const MARGIN: i32 = 12;
+/// The smallest the window can be resized to, likewise.
+pub const MIN_SIZE: (i32, i32) = (300, 300);
+/// How wide the strip to grab for resizing is, likewise.
+pub const RESIZE_BORDER: i32 = 2;
+/// How far from a corner grabbing the strip resizes both ways, as a
+/// multiple of the strip's width.
+const CORNER_REACH: i32 = 8;
 /// DPI at 100% scaling.
 const BASE_DPI: i32 = 96;
 /// The monitor height sizes are given for.
@@ -57,6 +64,15 @@ impl Scale {
             .checked_div(i64::from(self.den))
             .unwrap_or_default();
         i32::try_from(scaled).unwrap_or(i32::MAX).max(1)
+    }
+
+    /// `pixels` unscaled: the size given that comes out as `pixels`.
+    pub fn unapply(self, pixels: i32) -> i32 {
+        let unscaled = i64::from(pixels)
+            .saturating_mul(i64::from(self.den))
+            .checked_div(i64::from(self.num))
+            .unwrap_or_default();
+        i32::try_from(unscaled).unwrap_or(i32::MAX).max(1)
     }
 
     /// How much to zoom the page on a monitor at `dpi`, which already
@@ -109,6 +125,122 @@ pub enum Edge {
     Left,
     /// The right side.
     Right,
+}
+
+/// Which of the window's sides can be dragged to resize it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resizable {
+    /// None (before it's first placed).
+    Not,
+    /// Every side and corner: the floating panel.
+    All,
+    /// Only this side: a docked pane's inner one.
+    Side(Edge),
+}
+
+impl Resizable {
+    /// The inner side of a pane docked against `edge`.
+    pub fn inner(edge: Edge) -> Self {
+        Self::Side(match edge {
+            Edge::Left => Edge::Right,
+            Edge::Right => Edge::Left,
+        })
+    }
+
+    /// Whether the `edge` side can be dragged.
+    fn across(self, edge: Edge) -> bool {
+        match self {
+            Self::Not => false,
+            Self::All => true,
+            Self::Side(side) => side == edge,
+        }
+    }
+
+    /// Whether the top and bottom can be dragged.
+    fn down(self) -> bool {
+        self == Self::All
+    }
+}
+
+/// The top or bottom of the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Vertical {
+    /// The top.
+    Top,
+    /// The bottom.
+    Bottom,
+}
+
+/// What a resize grab moves: a side, a corner (one of each), or nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Grab {
+    /// The left or right side.
+    pub across: Option<Edge>,
+    /// The top or bottom.
+    pub down: Option<Vertical>,
+}
+
+/// `window` less a `border` wide strip along each `resizable` side:
+/// where the browser goes, leaving the strips to grab.
+pub fn inset(window: Rect, resizable: Resizable, border: i32) -> Rect {
+    let take = |side: bool| if side { border } else { 0 };
+    let down = take(resizable.down());
+    Rect {
+        left: window
+            .left
+            .saturating_add(take(resizable.across(Edge::Left))),
+        top: window.top.saturating_add(down),
+        right: window
+            .right
+            .saturating_sub(take(resizable.across(Edge::Right))),
+        bottom: window.bottom.saturating_sub(down),
+    }
+}
+
+/// What a grab at `at` moves: a `resizable` side within `border` of it,
+/// plus the neighbouring one when it's near a corner.
+pub fn grab(
+    window: Rect,
+    resizable: Resizable,
+    border: i32,
+    at: (i32, i32),
+) -> Grab {
+    let near =
+        |from: i32, to: i32, reach: i32| from.saturating_sub(to).abs() < reach;
+    let across = |reach: i32| {
+        if resizable.across(Edge::Left) && near(at.0, window.left, reach) {
+            Some(Edge::Left)
+        } else if resizable.across(Edge::Right)
+            && near(at.0, window.right, reach)
+        {
+            Some(Edge::Right)
+        } else {
+            None
+        }
+    };
+    let down = |reach: i32| {
+        if !resizable.down() {
+            None
+        } else if near(at.1, window.top, reach) {
+            Some(Vertical::Top)
+        } else if near(at.1, window.bottom, reach) {
+            Some(Vertical::Bottom)
+        } else {
+            None
+        }
+    };
+    let corner = border.saturating_mul(CORNER_REACH);
+    match (across(border), down(border)) {
+        (Some(side), None) => Grab {
+            across: Some(side),
+            down: down(corner),
+        },
+        (None, Some(end)) => Grab {
+            across: across(corner),
+            down: Some(end),
+        },
+        (across, down) => Grab { across, down },
+    }
 }
 
 /// The floating panel, `size` big, in the corner of `work` (the work
@@ -169,7 +301,10 @@ pub fn docked(work: Rect, edge: Edge, width: i32) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{Edge, Rect, Scale, docked, edge_for, floating};
+    use super::{
+        Edge, Grab, Rect, Resizable, Scale, Vertical, docked, edge_for,
+        floating, grab, inset,
+    };
 
     /// A 1920x1080 monitor's work area with a 48 px taskbar.
     const WORK: Rect = Rect {
@@ -190,6 +325,8 @@ mod tests {
         let uhd_at_250 = Scale::new(240, 2160);
         assert_eq!(uhd_at_250.apply(520), 1300);
         assert_eq!(Scale::new(0, 0).apply(12), 12);
+        assert_eq!(at_150.unapply(780), 520);
+        assert_eq!(uhd_at_100.unapply(1040), 520);
     }
 
     #[test]
@@ -230,5 +367,52 @@ mod tests {
         let pane = docked(WORK, Edge::Right, 520);
         assert_eq!(pane, Rect { left: 1400, ..WORK });
         assert_eq!(docked(WORK, Edge::Left, 5_000).width(), 960);
+    }
+
+    #[test]
+    fn insets_the_resizable_sides() {
+        assert_eq!(
+            inset(WORK, Resizable::All, 6),
+            Rect {
+                left: 6,
+                top: 6,
+                right: 1914,
+                bottom: 1026
+            }
+        );
+        let pane = inset(WORK, Resizable::inner(Edge::Right), 6);
+        assert_eq!(pane, Rect { left: 6, ..WORK });
+        assert_eq!(inset(WORK, Resizable::Not, 6), WORK);
+    }
+
+    #[test]
+    fn grabs_sides_and_corners() {
+        let all = Resizable::All;
+        assert_eq!(grab(WORK, all, 6, (900, 500)), Grab::default());
+        assert_eq!(
+            grab(WORK, all, 6, (2, 500)),
+            Grab {
+                across: Some(Edge::Left),
+                down: None
+            }
+        );
+        // On the top strip, near the right corner: both ways.
+        assert_eq!(
+            grab(WORK, all, 6, (1910, 3)),
+            Grab {
+                across: Some(Edge::Right),
+                down: Some(Vertical::Top)
+            }
+        );
+        // A docked pane only gives its inner side.
+        let inner = Resizable::inner(Edge::Left);
+        assert_eq!(grab(WORK, inner, 6, (2, 500)), Grab::default());
+        assert_eq!(
+            grab(WORK, inner, 6, (1917, 2)),
+            Grab {
+                across: Some(Edge::Right),
+                down: None
+            }
+        );
     }
 }

@@ -3,7 +3,10 @@
 //! work area nearest the book icon and hides when it loses focus.
 //! Pinned, it's an app bar docked full height to the nearer side, so
 //! maximised windows leave room for it, and it stays until closed.
+//! Either way it can be resized: the panel from any side or corner, the
+//! pane from its inner side, by a thin strip left around the browser.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -19,8 +22,9 @@ use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromPoint,
+    DC_BRUSH, FillRect, GetMonitorInfoW, GetStockObject, HBRUSH, HDC,
+    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    SetDCBrushColor,
 };
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW,
@@ -35,13 +39,16 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DestroyWindow, GetClientRect,
-    GetForegroundWindow, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST,
-    HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_NCCALCSIZE, WM_SIZE, WM_TIMER, WNDCLASSW, WNDPROC, WS_CLIPCHILDREN,
+    GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, HTBOTTOM,
+    HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
+    HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW,
+    KillTimer, LoadCursorW, MINMAXINFO, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SW_HIDE, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetTimer,
+    SetWindowPos, ShowWindow, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE,
+    WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_NCCALCSIZE,
+    WM_NCHITTEST, WM_SIZE, WM_TIMER, WNDCLASSW, WNDPROC, WS_CLIPCHILDREN,
     WS_EX_TOOLWINDOW, WS_POPUP, WS_THICKFRAME,
 };
 use windows::core::{BOOL, HSTRING, PCWSTR, w};
@@ -49,7 +56,10 @@ use windows::core::{BOOL, HSTRING, PCWSTR, w};
 use super::webview::WebView;
 use super::{Event, Launch, with_reader};
 use crate::messages::{self, Request};
-use crate::place::{self, Edge, MARGIN, PANE_WIDTH, PANEL_SIZE, Rect, Scale};
+use crate::place::{
+    self, Edge, Grab, MARGIN, MIN_SIZE, PANE_WIDTH, PANEL_SIZE, RESIZE_BORDER,
+    Rect, Resizable, Scale, Vertical,
+};
 use crate::saved::Saved;
 
 /// How long the window may stay hidden before the reader exits, in
@@ -74,6 +84,8 @@ const WM_DEACTIVATED: u32 = WM_APP + 2;
 const WM_ACTIVATED: u32 = WM_APP + 3;
 /// The low 16 bits of a message parameter.
 const LOW_WORD: usize = 0xFFFF;
+/// Bits in a word: where a message parameter's high word starts.
+const WORD_BITS: u32 = 16;
 /// DPI at 100% scaling.
 const BASE_DPI: u32 = 96;
 /// `DWMWA_COLOR_NONE`: no window border.
@@ -84,6 +96,35 @@ const THEME_KEY: PCWSTR =
 
 /// `TaskbarCreated`, sent when Explorer restarts (app bars are lost).
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+
+/// How the window may be resized, in pixels: kept apart from the
+/// [`Reader`], since Windows asks while it's busy placing the window.
+#[derive(Clone, Copy)]
+struct Sizing {
+    /// The sides that can be dragged.
+    sides: Resizable,
+    /// The width of the strip along them.
+    border: i32,
+    /// The smallest size (0: Windows' own).
+    min: (i32, i32),
+    /// The largest width (0: no limit).
+    max_width: i32,
+}
+
+thread_local! {
+    /// The window's [`Sizing`], updated whenever it's placed.
+    static SIZING: Cell<Sizing> = const {
+        Cell::new(Sizing {
+            sides: Resizable::Not,
+            border: 0,
+            min: (0, 0),
+            max_width: 0,
+        })
+    };
+    /// The colour behind the browser (the reading style's background),
+    /// showing in the resize strips.
+    static BACKGROUND: Cell<COLORREF> = const { Cell::new(COLORREF(0)) };
+}
 
 /// A monitor, as far as placing the window cares.
 #[derive(Clone, Copy)]
@@ -118,6 +159,12 @@ pub struct Reader {
     hidden_at: Option<Instant>,
     /// The page's zoom for this monitor, before the user's own.
     base_zoom: f64,
+    /// How much bigger than given the window is on its monitor.
+    scale: Scale,
+    /// Where it was last placed.
+    placed: Rect,
+    /// Whether the user is resizing it.
+    sizing: bool,
 }
 
 impl Reader {
@@ -134,7 +181,8 @@ impl Reader {
     ) -> Result<Self, String> {
         let saved = Saved::load(&launch.saved);
         let ([r, g, b], dark) = saved.style.background(!light_theme());
-        let hwnd = create_window(instance, class, window_proc, [r, g, b])?;
+        set_background([r, g, b]);
+        let hwnd = create_window(instance, class, window_proc)?;
         style_window(hwnd, dark);
         let background = COREWEBVIEW2_COLOR {
             A: 255,
@@ -155,6 +203,9 @@ impl Reader {
             appbar: false,
             hidden_at: None,
             base_zoom: 1.0,
+            scale: Scale::new(BASE_DPI, 0),
+            placed: Rect::default(),
+            sizing: false,
         })
     }
 
@@ -218,6 +269,7 @@ impl Reader {
             return;
         };
         let scale = Scale::new(screen.dpi, screen.monitor.height());
+        self.scale = scale;
         self.base_zoom = scale.zoom(screen.dpi);
         self.view.set_zoom(self.base_zoom * self.saved.zoom);
         let (rect, order) = if self.saved.pinned {
@@ -226,7 +278,13 @@ impl Reader {
                 .saved
                 .side
                 .get_or_insert_with(|| place::edge_for(screen.monitor, at));
-            let width = scale.apply(PANE_WIDTH);
+            let width = scale.apply(self.saved.pane.unwrap_or(PANE_WIDTH));
+            SIZING.set(Sizing {
+                sides: Resizable::inner(edge),
+                border: scale.apply(RESIZE_BORDER),
+                min: (scale.apply(MIN_SIZE.0), 0),
+                max_width: screen.monitor.width() / 2,
+            });
             (self.dock(screen, edge, width), HWND_TOPMOST)
         } else {
             let had_appbar = self.appbar;
@@ -237,8 +295,15 @@ impl Reader {
             } else {
                 screen
             };
-            let size = (scale.apply(PANEL_SIZE.0), scale.apply(PANEL_SIZE.1));
+            let (width, height) = self.saved.panel.unwrap_or(PANEL_SIZE);
+            let size = (scale.apply(width), scale.apply(height));
             let margin = scale.apply(MARGIN);
+            SIZING.set(Sizing {
+                sides: Resizable::All,
+                border: scale.apply(RESIZE_BORDER),
+                min: (scale.apply(MIN_SIZE.0), scale.apply(MIN_SIZE.1)),
+                max_width: 0,
+            });
             (
                 place::floating(screen.work, self.at, size, margin),
                 HWND_NOTOPMOST,
@@ -257,7 +322,33 @@ impl Reader {
                 SWP_SHOWWINDOW,
             )
         };
+        self.placed = window_rect(self.hwnd).unwrap_or(rect);
         self.fit();
+    }
+
+    /// The user finished resizing the window: remembers its size (as on
+    /// a 1080p monitor) and places it again, so the panel goes back into
+    /// its corner and the pane's app bar takes the new width.
+    fn resized(&mut self) {
+        self.sizing = false;
+        let Some(now) = window_rect(self.hwnd) else {
+            return;
+        };
+        if !self.shown || now == self.placed {
+            return;
+        }
+        let width = self.scale.unapply(now.width());
+        if self.saved.pinned {
+            if now.width() == self.placed.width() {
+                return;
+            }
+            self.saved.pane = Some(width);
+        } else {
+            let height = self.scale.unapply(now.height());
+            self.saved.panel = Some((width, height));
+        }
+        self.remember();
+        self.place();
     }
 
     /// Registers the window as an app bar against `edge` of `screen`,
@@ -329,7 +420,11 @@ impl Reader {
     /// Handles an app bar notification.
     fn on_appbar(&mut self, wparam: WPARAM, lparam: LPARAM) {
         let code = u32::try_from(wparam.0).unwrap_or_default();
-        if code == ABN_POSCHANGED && self.shown && self.saved.pinned {
+        if code == ABN_POSCHANGED
+            && self.shown
+            && self.saved.pinned
+            && !self.sizing
+        {
             self.place();
         } else if code == ABN_FULLSCREENAPP {
             // Step behind a full-screen app, and back in front after.
@@ -353,12 +448,15 @@ impl Reader {
         }
     }
 
-    /// Fits the browser to the window.
+    /// Fits the browser to the window, less the resize strips.
     fn fit(&self) {
         let mut rect = RECT::default();
         // SAFETY: `rect` is a valid place for the call to write.
         if unsafe { GetClientRect(self.hwnd, &raw mut rect) }.is_ok() {
-            self.view.fit(rect.right, rect.bottom);
+            let sizing = SIZING.get();
+            let inner =
+                place::inset(from_win32(rect), sizing.sides, sizing.border);
+            self.view.fit(to_win32(inner));
         }
     }
 
@@ -407,8 +505,12 @@ impl Reader {
             Request::Style(style) => {
                 self.saved.style = style.checked();
                 self.remember();
-                let (_, dark) = self.saved.style.background(!light_theme());
+                let (rgb, dark) = self.saved.style.background(!light_theme());
                 style_window(self.hwnd, dark);
+                set_background(rgb);
+                // SAFETY: our own window; plain values. If it fails the
+                // strips keep the old colour until the next repaint.
+                let _ = unsafe { InvalidateRect(Some(self.hwnd), None, true) };
             }
             Request::Folder => {
                 // It's made at startup; this only matters if it was
@@ -454,6 +556,24 @@ pub fn handle_message(
     match msg {
         // No frame: the client area is the whole window.
         WM_NCCALCSIZE if wparam.0 != 0 => Some(LRESULT(0)),
+        // The strips around the browser resize the window.
+        WM_NCHITTEST => Some(hit_test(hwnd, lparam)),
+        WM_GETMINMAXINFO => {
+            limit_size(lparam);
+            Some(LRESULT(0))
+        }
+        WM_ENTERSIZEMOVE => {
+            with_reader(|reader| reader.sizing = true);
+            Some(LRESULT(0))
+        }
+        WM_EXITSIZEMOVE => {
+            with_reader(Reader::resized);
+            Some(LRESULT(0))
+        }
+        WM_ERASEBKGND => {
+            paint_background(hwnd, wparam);
+            Some(LRESULT(1))
+        }
         WM_ACTIVATE => {
             let inactive = wparam.0 & LOW_WORD
                 == usize::try_from(WA_INACTIVE).unwrap_or_default();
@@ -534,24 +654,18 @@ pub fn handle_message(
     }
 }
 
-/// Registers the window class and creates the hidden window, with
-/// `background` (RGB) behind the browser.
+/// Registers the window class and creates the hidden window. Its
+/// background is painted on `WM_ERASEBKGND`, from [`BACKGROUND`].
 fn create_window(
     instance: HINSTANCE,
     class: PCWSTR,
     window_proc: WNDPROC,
-    background: [u8; 3],
 ) -> Result<HWND, String> {
-    let [r, g, b] = background;
-    // SAFETY: plain values; the brush lives as long as the class.
-    let brush =
-        unsafe { CreateSolidBrush(COLORREF(u32::from_le_bytes([r, g, b, 0]))) };
     let window_class = WNDCLASSW {
         lpfnWndProc: window_proc,
         hInstance: instance,
         // SAFETY: loads a stock cursor.
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
-        hbrBackground: brush,
         lpszClassName: class,
         ..WNDCLASSW::default()
     };
@@ -582,6 +696,91 @@ fn create_window(
         )
     }
     .map_err(|e| e.message())
+}
+
+/// Sets the colour behind the browser to `rgb`.
+fn set_background([r, g, b]: [u8; 3]) {
+    BACKGROUND.set(COLORREF(u32::from_le_bytes([r, g, b, 0])));
+}
+
+/// Fills the window with [`BACKGROUND`], for `WM_ERASEBKGND` (whose
+/// `wparam` is the device context).
+fn paint_background(hwnd: HWND, wparam: WPARAM) {
+    let hdc = HDC(std::ptr::with_exposed_provenance_mut(wparam.0));
+    let mut rect = RECT::default();
+    // SAFETY: Windows hands us a valid DC for our window, and `rect` is a
+    // valid place to write. The stock DC brush needs no freeing. If a
+    // call fails, the strips just aren't painted this time.
+    unsafe {
+        if GetClientRect(hwnd, &raw mut rect).is_ok() {
+            let _ = SetDCBrushColor(hdc, BACKGROUND.get());
+            let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
+            let _ = FillRect(hdc, &raw const rect, brush);
+        }
+    }
+}
+
+/// What's under the point in `lparam` (screen coordinates): a resize
+/// strip, or the page.
+fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let sizing = SIZING.get();
+    let grabbed = window_rect(hwnd).map(|window| {
+        place::grab(window, sizing.sides, sizing.border, point(lparam))
+    });
+    let Grab { across, down } = grabbed.unwrap_or_default();
+    let code = match (across, down) {
+        (Some(Edge::Left), Some(Vertical::Top)) => HTTOPLEFT,
+        (Some(Edge::Right), Some(Vertical::Top)) => HTTOPRIGHT,
+        (Some(Edge::Left), Some(Vertical::Bottom)) => HTBOTTOMLEFT,
+        (Some(Edge::Right), Some(Vertical::Bottom)) => HTBOTTOMRIGHT,
+        (Some(Edge::Left), None) => HTLEFT,
+        (Some(Edge::Right), None) => HTRIGHT,
+        (None, Some(Vertical::Top)) => HTTOP,
+        (None, Some(Vertical::Bottom)) => HTBOTTOM,
+        (None, None) => HTCLIENT,
+    };
+    LRESULT(isize::try_from(code).unwrap_or_default())
+}
+
+/// The signed point packed into a mouse message's `lparam`.
+fn point(lparam: LPARAM) -> (i32, i32) {
+    let word = |shift: u32| {
+        let bits = lparam.0.cast_unsigned().checked_shr(shift).unwrap_or(0);
+        let low = u16::try_from(bits & LOW_WORD).unwrap_or_default();
+        i32::from(low.cast_signed())
+    };
+    (word(0), word(WORD_BITS))
+}
+
+/// Applies [`SIZING`]'s limits to the `MINMAXINFO` in `lparam`.
+fn limit_size(lparam: LPARAM) {
+    let sizing = SIZING.get();
+    let info = std::ptr::with_exposed_provenance_mut::<MINMAXINFO>(
+        lparam.0.cast_unsigned(),
+    );
+    // SAFETY: for WM_GETMINMAXINFO, lParam points to a MINMAXINFO that's
+    // ours to change until we return.
+    let Some(info) = (unsafe { info.as_mut() }) else {
+        return;
+    };
+    if sizing.min.0 > 0 {
+        info.ptMinTrackSize.x = sizing.min.0;
+    }
+    if sizing.min.1 > 0 {
+        info.ptMinTrackSize.y = sizing.min.1;
+    }
+    if sizing.max_width > 0 {
+        info.ptMaxTrackSize.x = sizing.max_width;
+    }
+}
+
+/// The window's rectangle on the desktop.
+fn window_rect(hwnd: HWND) -> Option<Rect> {
+    let mut rect = RECT::default();
+    // SAFETY: `rect` is a valid place for the call to write.
+    unsafe { GetWindowRect(hwnd, &raw mut rect) }
+        .is_ok()
+        .then(|| from_win32(rect))
 }
 
 /// Rounded corners, no border line, and the dark frame in dark mode.

@@ -213,14 +213,8 @@ impl WebView {
             unsafe { self.webview.PostWebMessageAsJson(&HSTRING::from(json)) };
     }
 
-    /// Fits the control to the window's client area, `width` x `height`.
-    pub fn fit(&self, width: i32, height: i32) {
-        let bounds = RECT {
-            left: 0,
-            top: 0,
-            right: width,
-            bottom: height,
-        };
+    /// Fits the control to `bounds` in the window's client area.
+    pub fn fit(&self, bounds: RECT) {
         // SAFETY: COM calls on a live interface. If they fail the page
         // keeps its old size until the next move.
         unsafe {

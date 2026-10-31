@@ -1,8 +1,8 @@
 //! What the reader remembers between runs, in `reader.json` next to
 //! Wallflex's settings: whether it's pinned and to which side, the last
-//! guide shown, how
-//! far the page is zoomed (Ctrl and the mouse wheel) and the reading
-//! style (theme, font, size, spacing).
+//! guide shown, the sizes it was resized to, how far the page is zoomed
+//! (Ctrl and the mouse wheel) and the reading style (theme, font, size,
+//! spacing).
 
 use std::path::Path;
 
@@ -25,6 +25,11 @@ pub struct Saved {
     pub side: Option<Edge>,
     /// The last guide shown, by name.
     pub last: Option<String>,
+    /// The floating panel's size, as on a 1080p monitor at 100%
+    /// scaling; `None` for the usual size.
+    pub panel: Option<(i32, i32)>,
+    /// The docked pane's width, likewise.
+    pub pane: Option<i32>,
     /// The page's zoom on top of the usual size (1 = as usual).
     pub zoom: f64,
     /// How guides look.
@@ -37,6 +42,8 @@ impl Default for Saved {
             pinned: false,
             side: None,
             last: None,
+            panel: None,
+            pane: None,
             zoom: 1.0,
             style: Style::default(),
         }
@@ -83,6 +90,8 @@ mod tests {
             pinned: true,
             side: Some(Edge::Left),
             last: Some("Games/Setup.md".to_owned()),
+            panel: Some((600, 800)),
+            pane: Some(400),
             zoom: 1.25,
             style: Style {
                 theme: "sepia".to_owned(),

@@ -131,6 +131,8 @@ kept beside it and link to other guides.
   screen and keep it open while you work; windows you maximise make
   room for it. The other pin button moves it across; the lit one
   unpins it. The side is remembered.
+- Drag an edge or corner to resize the window (pinned, its inner
+  edge). Each size is remembered.
 - The book button opens the list of guides (Ctrl+K); type to find
   one. Pointing at it shows the open guide's title.
   Ctrl and the mouse wheel zoom, and the zoom is remembered.
