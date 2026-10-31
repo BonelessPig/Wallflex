@@ -587,6 +587,10 @@ impl Reader {
                 self.saved.contents = on;
                 self.remember();
             }
+            Request::Rail(width) => {
+                self.saved.rail = (width > 0).then_some(width);
+                self.remember();
+            }
             Request::Save(title, text) => {
                 let answer = messages::saved(&self.folder, &title, &text);
                 self.view.post(&answer);

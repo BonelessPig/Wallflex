@@ -43,6 +43,9 @@ pub struct Saved {
     pub corner: Corner,
     /// The contents list is pinned in the page's left margin.
     pub contents: bool,
+    /// The pinned contents column's width in page pixels; `None` for
+    /// the usual width.
+    pub rail: Option<u32>,
 }
 
 impl Default for Saved {
@@ -58,6 +61,7 @@ impl Default for Saved {
             style: Style::default(),
             corner: Corner::default(),
             contents: false,
+            rail: None,
         }
     }
 }
@@ -113,6 +117,7 @@ mod tests {
             },
             corner: Corner::BottomRight,
             contents: true,
+            rail: Some(240),
         };
         saved.save(&path).unwrap();
         let loaded = Saved::load(&path);

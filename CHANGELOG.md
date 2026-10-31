@@ -26,10 +26,15 @@ patch number (0.x.**y**) for fixes only.
   in full when you point at it, and is remembered. Narrow windows hide
   the column. Hovering the button instead fans the main sections out
   around the corner; pointing at one with sub-sections opens a further
-  ring for them, and so on. Click a section to jump to it. It works for
+  ring for them, and so on (deeper than one level, the earlier rings
+  shrink to a chip for the section that led there). Click a section to
+  jump to it. It works for
   web pages and for Markdown and text guides.
-  Its text is 2 px bigger than the reading text size you set, and its
-  other sizes follow.
+  Its text is 1 px bigger than the reading text size you set, and its
+  other sizes follow (its rows are tighter in Compact line spacing and
+  looser in Airy).
+  Drag the column's right edge to resize it (double-click for the usual
+  width); the width is remembered.
 - In the pinned contents column, sections that have sub-sections get an
   arrow to fold or unfold them. Folded sections stay folded while you
   read the page, and the section holding your place is marked.

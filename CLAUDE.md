@@ -159,12 +159,18 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   unpins (`setTocPinned`; `contents` in `reader.json`,
   `Request::Contents`) the list of the page's h1-h4 (any reader-drawn
   `srcdoc` frame): `#rail`, a column that pushes the frame right (hidden
-  under 520 px); `markCurrent` follows the frame's scroll; `showTip`
-  shows cut-off titles in full.
+  under 520 px; `#rail-grip` resizes it, `rail` in `reader.json`); `markCurrent` follows the frame's scroll; `showTip`
+  grows a cut-off title in place (a same-size copy of the row, stretched
+  to one full line).
   `fillRail` builds it with fold arrows (`folded` keys, `applyFolds`).
   Hovering the spoke opens `#sun` (`renderSun`): the headings as a tree
-  (`headingTree`), each level a ring of pills around the menu dot, the
-  next ring centred on the pointed-at section's angle.
+  (`headingTree`), each level an arc of pills. Pills are wide, so rows
+  are spaced by height (`fitRows`; an ellipse around the dot for the
+  first ring, `firstRing`; a gentle bulge off the opening pill's tip for
+  later ones, `nextRing`), never by angle. Too many for the window end
+  in a "+N more" pill that pins the list. One level in, both tiers
+  show; deeper, earlier tiers shrink to a chip for the section leading
+  on, and the open ring takes the width left (`ringWidth`).
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the

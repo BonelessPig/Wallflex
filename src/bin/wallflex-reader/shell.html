@@ -314,19 +314,26 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.toc-head span { flex: 1; }
 .toc-head button {
   padding: 0 6px;
   border: 1px solid var(--rule);
   border-radius: 4px;
+  background: var(--menu);
   color: var(--quiet);
   font-size: calc(11px * var(--toc-scale));
   text-transform: none;
   letter-spacing: 0;
 }
-.toc-head button:hover { color: var(--accent); border-color: var(--accent); }
+.toc-head button:hover {
+  background: color-mix(in srgb, var(--menu) 88%, var(--ink));
+  color: var(--accent);
+  border-color: var(--accent);
+}
 :root {
-  --toc-scale: 1.44;
+  --toc-scale: 1.36;
+  --toc-leading: 1;
+  /* A solid shade of the page: darker on light themes, lighter on dark. */
+  --toc-shade: color-mix(in srgb, var(--bg) 90%, var(--ink));
   --rail-w: min(calc(190px * var(--toc-scale)), 40vw);
 }
 #rail {
@@ -342,6 +349,17 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
   z-index: 1;
 }
 body.rail #rail { display: flex; }
+#rail-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+#rail-grip:hover, #rail-grip.drag { background: var(--toc-shade); }
 body.rail iframe { margin-left: var(--rail-w); width: calc(100% - var(--rail-w)); }
 body[data-corner="top-left"] #rail { padding-top: 44px; }
 body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
@@ -353,7 +371,7 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
 .toc-item.current { color: var(--accent); font-weight: 600; }
 .toc-row { display: flex; align-items: center; }
 .toc-row .toc-item { flex: 1; min-width: 0; padding-left: 2px; }
-.toc-chev, .toc-spacer { flex: none; width: calc(18px * var(--toc-scale)); height: calc(22px * var(--toc-scale)); }
+.toc-chev, .toc-spacer { flex: none; width: calc(18px * var(--toc-scale)); align-self: stretch; }
 .toc-chev { padding: 0; color: var(--quiet); font-size: calc(10px * var(--toc-scale)); text-align: center; }
 .toc-chev::before { content: "\25BE"; }
 .toc-chev[aria-expanded="false"]::before { content: "\25B8"; }
@@ -363,15 +381,15 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
   position: absolute;
   display: block;
   max-width: calc(150px * var(--toc-scale));
-  height: calc(24px * var(--toc-scale));
+  height: calc(24px * var(--toc-scale) * var(--toc-leading));
   padding: 0 10px;
   border: 1px solid var(--rule);
-  border-radius: calc(12px * var(--toc-scale));
+  border-radius: calc(12px * var(--toc-scale) * var(--toc-leading));
   background: var(--menu);
   box-shadow: var(--shadow);
   color: var(--ink);
   font-size: calc(12.5px * var(--toc-scale));
-  line-height: calc(22px * var(--toc-scale));
+  line-height: calc(22px * var(--toc-scale) * var(--toc-leading));
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
@@ -380,31 +398,42 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
 }
 .pill.kids { padding-right: 14px; }
 .pill:hover, .pill.on { color: var(--accent); border-color: var(--accent); }
+.pill:hover { background: color-mix(in srgb, var(--menu) 88%, var(--ink)); }
+/* Fading out is slow at first and quickens: ease-in on an exponential. */
+#sun.fading {
+  opacity: 0;
+  transition: opacity 400ms cubic-bezier(0.7, 0, 0.84, 0);
+}
+#radial.fading .spoke, #radial.fading .disc {
+  opacity: 0;
+  transition: opacity 400ms cubic-bezier(0.7, 0, 0.84, 0);
+}
 #toc-tip {
   position: fixed;
   display: none;
-  max-width: 420px;
-  padding: 5px 8px;
-  background: var(--menu);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
   box-shadow: var(--shadow);
   color: var(--ink);
-  font-size: calc(12.5px * var(--toc-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
   z-index: 5;
 }
 .toc-item {
   display: block;
   width: 100%;
-  padding: 5px 8px;
+  padding: 4px 8px;
+  line-height: calc(1.3 * var(--toc-leading));
   font-size: calc(12.5px * var(--toc-scale));
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.toc-item:hover, .toc-item:focus-visible { background: var(--hover); }
+.toc-item:hover, .toc-item:focus-visible { background: var(--toc-shade); }
 .group {
   padding: 8px 8px 4px;
   color: var(--quiet);
@@ -599,7 +628,8 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
       corner suits them.</div>
   </div>
   <div id="rail">
-    <div class="toc-head"><span>Contents</span>
+    <div id="rail-grip" title="Drag to resize (double-click for the usual width)"></div>
+    <div class="toc-head">
       <button id="rail-fold" title="Fold all sections" aria-label="Fold all sections">&minus;</button>
       <button id="rail-unfold" title="Unfold all sections" aria-label="Unfold all sections">+</button>
       <button id="rail-unpin" title="Unpin the contents">Unpin</button></div>
@@ -726,11 +756,15 @@ for (const button of document.querySelectorAll(".spoke")) {
 
 // The corner menu opens while the pointer or focus is on it, and closes
 // a moment after both leave, so a quick slip off it doesn't snap it shut.
-const FAN_CLOSE_DELAY_MS = 300;
+// How long the corner menu and the contents rings take to fade out after
+// the pointer leaves; the CSS (#sun.fading, #radial.fading) uses the same
+// time. Coming back in time cancels it.
+const FAN_CLOSE_DELAY_MS = 400;
 let fanTimer = 0;
 
 function setFan(open) {
   clearTimeout(fanTimer);
+  $("radial").classList.remove("fading");
   $("radial").classList.toggle("open", open);
   if (!open && captioned) hideCaption(captioned);
   $("hub").setAttribute("aria-expanded", String(open));
@@ -738,10 +772,16 @@ function setFan(open) {
 
 function closeFanSoon() {
   clearTimeout(fanTimer);
+  if (sunOpen) return;
+  const radial = $("radial");
+  if (radial.classList.contains("open")) radial.classList.add("fading");
   fanTimer = setTimeout(() => {
-    if (sunOpen) return;
     // Keyboard focus keeps it open; a click's focus doesn't.
-    if (!$("radial").querySelector(":focus-visible")) setFan(false);
+    if (sunOpen || radial.querySelector(":focus-visible")) {
+      radial.classList.remove("fading");
+    } else {
+      setFan(false);
+    }
   }, FAN_CLOSE_DELAY_MS);
 }
 
@@ -773,14 +813,22 @@ function styleAttributes() {
   return ' data-theme="' + style.theme + '" style="' + css + '"';
 }
 
-// How much the contents' sizes are scaled: its text is two pixels
-// bigger than the reading text, and everything else follows.
+// How much the contents' sizes are scaled: its text is a pixel bigger
+// than the reading text, and everything else follows.
 function tocScale() {
   return (style.size + TOC_FONT_BONUS_PX) / TOC_DESIGN_FONT_PX;
 }
 
+// How loose the contents' rows are: the line spacing chosen for the
+// reading text, relative to the usual one (Compact packs them tighter).
+function tocLeading() {
+  const chosen = SPACINGS[style.spacing] || SPACINGS.normal;
+  return chosen[1] / SPACINGS.normal[1];
+}
+
 function applyStyle() {
   document.documentElement.dataset.theme = style.theme;
+  document.documentElement.style.setProperty("--toc-leading", String(tocLeading()));
   document.documentElement.style.setProperty("--toc-scale", String(tocScale()));
   closeSun();
   const view = $("view");
@@ -867,6 +915,8 @@ function onList(message) {
   }
   setCorner(message.corner);
   tocPinned = Boolean(message.contents);
+  railWidth = message.rail || null;
+  applyRailWidth();
   refreshRail();
   guides = message.guides;
   $("where").textContent = message.where;
@@ -1331,7 +1381,7 @@ const MAX_TOC = 500;
 const TOC_INDENT_PX = 14;
 const TOC_SCROLL_MARGIN_PX = 24;
 const TIP_GAP_PX = 8;
-const TIP_NARROW_PX = 220;
+const TIP_LINE_FALLBACK = 1.3;
 
 let tocPinned = false;
 let railItems = [];
@@ -1357,25 +1407,44 @@ function hideTip() {
   $("toc-tip").style.display = "none";
 }
 
-// A long title is shown in full beside the pointer, like a tooltip.
-function showTip(item) {
+// A cut-off title grows in place to its full length: a copy of the row,
+// the same height, font and padding, stretched out on one line over what
+// is beside it. It grows leftwards from a row that sits against the
+// right edge.
+function showTip(item, growLeft) {
   if (item.scrollWidth <= item.clientWidth) return;
   const tip = $("toc-tip");
   const box = item.getBoundingClientRect();
+  const look = getComputedStyle(item);
   tip.textContent = item.textContent;
-  tip.style.maxWidth = Math.min(420, window.innerWidth - box.left - TIP_GAP_PX) + "px";
-  if (window.innerWidth - box.left < TIP_NARROW_PX) {
-    // Near the right edge: grow leftwards instead.
-    tip.style.left = "auto";
-    tip.style.right = (window.innerWidth - box.right) + "px";
-    tip.style.maxWidth = Math.min(420, box.right - TIP_GAP_PX) + "px";
-  } else {
-    tip.style.right = "auto";
-    tip.style.left = box.left + "px";
+  for (const name of ["fontSize", "fontWeight", "borderRadius"]) {
+    tip.style[name] = look[name];
   }
+  // A row with a border (a pill) gets the same border, so nothing moves;
+  // one without (a contents row) gets none. The text keeps the row's own
+  // line height and is centred in what is inside the border, as a
+  // button centres it.
+  const border = parseFloat(look.borderTopWidth) || 0;
+  const line = parseFloat(look.lineHeight)
+    || parseFloat(look.fontSize) * TIP_LINE_FALLBACK;
+  tip.style.border = border
+    ? border + "px solid " + look.borderTopColor : "0";
+  tip.style.paddingLeft = look.paddingLeft;
+  tip.style.paddingRight = look.paddingRight;
+  tip.style.lineHeight = line + "px";
+  tip.style.paddingTop = Math.max(0, (box.height - 2 * border - line) / 2) + "px";
+  const opaque = !/^(rgba\(0, 0, 0, 0\)|transparent)$/.test(look.backgroundColor);
+  tip.style.background = opaque ? look.backgroundColor : "var(--menu)";
+  tip.style.height = box.height + "px";
   tip.style.top = box.top + "px";
-  tip.style.minHeight = box.height + "px";
+  // It stays where its row is: it grows only as far as the window allows
+  // (leftwards from a row against the right edge) and is cut off beyond.
+  const room = growLeft ? box.right - TIP_GAP_PX
+    : window.innerWidth - TIP_GAP_PX - box.left;
+  tip.style.maxWidth = Math.max(room, box.width) + "px";
   tip.style.display = "block";
+  const wide = Math.min(tip.offsetWidth, room);
+  tip.style.left = (growLeft ? box.right - wide : box.left) + "px";
 }
 
 // The pinned list: a row per heading, with a fold button on those that
@@ -1401,7 +1470,7 @@ function fillRail(found) {
       heading.scrollIntoView({ block: "start" });
       hideTip();
     });
-    item.addEventListener("mouseenter", () => showTip(item));
+    item.addEventListener("mouseenter", () => showTip(item, false));
     item.addEventListener("mouseleave", hideTip);
     const entry = { heading, item, row, depth, parent, kids: false,
       key: index + ":" + text };
@@ -1509,21 +1578,35 @@ function refreshRail() {
 }
 
 /* ---- Hovering Contents: rings of sections around the corner ---------
-   The main sections fan out on a ring around the menu dot; pointing at
-   one that has sub-sections opens the next ring outward, and so on. */
+   The main sections fan out on an arc around the menu dot; pointing at
+   one that has sub-sections opens an arc for them beside it, and so on.
+   The pills are wide, so what must not overlap is their heights: each
+   arc is laid out by even vertical steps, not even angles, on an ellipse
+   that is as tall as the window allows. One level in, both tiers are
+   shown; deeper, only the open tier is shown in full and the earlier
+   ones shrink to a chip for the section that leads on. Pill widths
+   share the room the window leaves. */
 // The contents' text is this much bigger than the reading text; the
 // sizes in the CSS were drawn for a 12.5 px font.
-const TOC_FONT_BONUS_PX = 2;
+const TOC_FONT_BONUS_PX = 1;
 const TOC_DESIGN_FONT_PX = 12.5;
-const PILL_PITCH_PX = 26;
+const PILL_PITCH_PX = 28;
+const PILL_HEIGHT_PX = 24;
+const PILL_GAP_PX = 3;
+const PILL_WIDTH_PX = 150;
+const PILL_MIN_WIDTH_PX = 60;
+const PILL_CHIP_WIDTH_PX = 44;
+const FAN_EDGE_PX = 165;
+const FIRST_OFFSET_PX = 24;
 const RING_FIRST_PX = 190;
-const RING_MAX_PX = 330;
-const RING_GAP_PX = 150;
-const RING_FILL_RAD = 1.45;
-const RING_EDGE_RAD = 0.05;
+const RING_FILL = 0.92;
+const RING_START = 0.71;
+const TIER_GAP_PX = 14;
+const TIER_AMP_PX = 30;
 const DOT_CENTRE_PX = 18;
-const SUN_CLOSE_MS = 250;
-const SUN_MARGIN_PX = 4;
+const SUN_CLOSE_MS = 400;
+const SUN_MARGIN_PX = 6;
+const SUN_SPACE_PX = 40;
 
 let sunTree = [];
 let sunPath = [];
@@ -1537,7 +1620,7 @@ function headingTree(found) {
   for (const heading of found) {
     const level = Number(heading.localName[1]);
     while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
-    const node = { heading, level, children: [], angle: 0,
+    const node = { heading, level, children: [],
       text: heading.textContent.trim().replace(/\s+/g, " ") };
     (stack.length ? stack[stack.length - 1].children : top).push(node);
     stack.push(node);
@@ -1549,13 +1632,102 @@ function sunItems(depth) {
   return depth === 0 ? sunTree : sunPath[depth - 1].children;
 }
 
-function placePill(pill, depth, node, radius, geometry) {
-  const x = geometry.x0 + geometry.sx * radius * Math.cos(node.angle);
-  const y = geometry.y0 + geometry.sy * radius * Math.sin(node.angle);
-  pill.style.left = x + "px";
-  pill.style.top = y + "px";
+// How many rows fit in `room` (one pill height plus a pitch per extra
+// row), and the pitch to use: squeezed, but never below `least`.
+function fitRows(count, sizes, room) {
+  const { pitch, height, least } = sizes;
+  if ((count - 1) * pitch + height <= room) return { count, pitch };
+  const squeezed = Math.max(least, (room - height) / Math.max(count - 1, 1));
+  const fits = Math.floor((room - height) / squeezed) + 1;
+  return { count: Math.max(Math.min(count, fits), 1), pitch: squeezed };
+}
+
+// The items to draw: all of them if they fit, else the first few and a
+// last pill that pins the full list.
+function limitItems(items, count) {
+  if (count >= items.length) return items;
+  const kept = items.slice(0, Math.max(count - 1, 1));
+  kept.push({ more: true, children: [],
+    text: "+" + (items.length - kept.length) + " more…" });
+  return kept;
+}
+
+// Rows for the first ring: on an ellipse around the menu dot, evenly
+// spaced down the page (away from the dot's corner), clear of the fan.
+function firstRing(items, geometry, sizes) {
+  const tall = Math.max(RING_FIRST_PX, Math.min(
+    geometry.height - SUN_SPACE_PX,
+    (items.length + 0.2) * sizes.pitch / RING_FILL));
+  const fit = fitRows(items.length, sizes, tall * RING_FILL);
+  const shown = limitItems(items, fit.count);
+  const span = (shown.length - 1) * fit.pitch;
+  const first = Math.max(fit.pitch * 0.6, Math.min(
+    tall * RING_START - span / 2, tall * RING_FILL - span));
+  const wide = FAN_EDGE_PX + FIRST_OFFSET_PX;
+  return shown.map((node, index) => {
+    const down = first + index * fit.pitch;
+    const ratio = Math.min(down / tall, 1);
+    const edge = down - sizes.height / 2;
+    const clear = Math.sqrt(Math.max(FAN_EDGE_PX * FAN_EDGE_PX - edge * edge, 0));
+    const across = Math.max(wide * Math.sqrt(1 - ratio * ratio), clear);
+    return { node, x: geometry.x0 + geometry.sx * across,
+      y: geometry.y0 + geometry.sy * down };
+  });
+}
+
+// Rows for a later ring: a gentle arc bulging away from the tip of the
+// pill that opened it, centred on that pill's height and slid to fit.
+function nextRing(items, tip, geometry, sizes, amp) {
+  const room = geometry.height - 2 * SUN_MARGIN_PX;
+  const fit = fitRows(items.length, sizes, room);
+  const shown = limitItems(items, fit.count);
+  const span = (shown.length - 1) * fit.pitch;
+  const low = SUN_MARGIN_PX + sizes.height / 2;
+  const high = geometry.height - SUN_MARGIN_PX - sizes.height / 2;
+  const top = Math.max(low, Math.min(tip.y - span / 2, high - span));
+  const reach = span / 2 + fit.pitch;
+  return shown.map((node, index) => {
+    const y = top + index * fit.pitch;
+    const ratio = Math.min(Math.abs(y - tip.y) / reach, 1);
+    const bulge = amp * Math.sqrt(1 - ratio * ratio);
+    return { node, y, x: tip.x + geometry.sx * (sizes.gap + bulge) };
+  });
+}
+
+function drawPill(row, depth, geometry, width) {
+  const node = row.node;
+  const pill = document.createElement("button");
+  pill.className = "pill" + (node.children.length ? " kids" : "")
+    + (sunPath[depth] === node ? " on" : "");
+  pill.textContent = node.text;
+  pill.style.left = row.x + "px";
+  pill.style.top = row.y + "px";
+  pill.style.maxWidth = width + "px";
   pill.style.transform = "translate(" + (geometry.sx < 0 ? "-100%" : "0")
     + ", -50%)";
+  pill.addEventListener("mouseenter", () => {
+    keepSun();
+    showTip(pill, geometry.sx < 0);
+    const path = sunPath.slice(0, depth);
+    if (node.children.length) path.push(node);
+    if (path.length !== sunPath.length || path[depth] !== sunPath[depth]) {
+      sunPath = path;
+      renderSun();
+    }
+  });
+  pill.addEventListener("mouseleave", () => {
+    hideTip();
+    closeSunSoon();
+  });
+  pill.addEventListener("click", () => {
+    if (node.more) setTocPinned(true);
+    else node.heading.scrollIntoView({ block: "start" });
+    closeSun();
+    setFan(false);
+  });
+  $("sun").append(pill);
+  keepInside(pill);
+  return pill;
 }
 
 // Keeps a pill inside the window by sliding it sideways.
@@ -1567,6 +1739,34 @@ function keepInside(pill) {
   else if (under > 0) pill.style.left = (parseFloat(pill.style.left) + under) + "px";
 }
 
+// Sizes for the pills, from the contents scale and the window: the
+// pills share the width left of the fan between two tiers.
+function sunSizes(geometry) {
+  const scale = tocScale();
+  const loose = tocLeading();
+  const room = geometry.width - FAN_EDGE_PX - FIRST_OFFSET_PX
+    - SUN_MARGIN_PX - (TIER_GAP_PX + TIER_AMP_PX) * scale;
+  return {
+    pitch: PILL_PITCH_PX * scale * loose,
+    height: PILL_HEIGHT_PX * scale * loose,
+    least: (PILL_HEIGHT_PX + PILL_GAP_PX) * scale * loose,
+    gap: TIER_GAP_PX * scale,
+    amp: TIER_AMP_PX * scale,
+    width: Math.max(PILL_MIN_WIDTH_PX,
+      Math.min(PILL_WIDTH_PX * scale, room / 2)),
+  };
+}
+
+// How wide a full ring's pills are: the shared width for the first ring,
+// else whatever room is left beside the pill that opened it.
+function ringWidth(depth, tip, geometry, sizes, amp) {
+  if (depth === 0) return sizes.width;
+  const edge = geometry.sx < 0 ? tip.x - SUN_MARGIN_PX
+    : geometry.width - SUN_MARGIN_PX - tip.x;
+  const left = edge - sizes.gap - amp;
+  return Math.max(PILL_MIN_WIDTH_PX, Math.min(PILL_WIDTH_PX * tocScale(), left));
+}
+
 function renderSun() {
   const sun = $("sun");
   sun.textContent = "";
@@ -1574,56 +1774,44 @@ function renderSun() {
   const geometry = {
     sx: corner.endsWith("right") ? -1 : 1,
     sy: corner.startsWith("bottom") ? -1 : 1,
+    width: window.innerWidth,
+    height: window.innerHeight,
   };
-  geometry.x0 = geometry.sx < 0 ? window.innerWidth - DOT_CENTRE_PX : DOT_CENTRE_PX;
-  geometry.y0 = geometry.sy < 0 ? window.innerHeight - DOT_CENTRE_PX : DOT_CENTRE_PX;
-  let radius = RING_FIRST_PX;
+  geometry.x0 = geometry.sx < 0 ? geometry.width - DOT_CENTRE_PX : DOT_CENTRE_PX;
+  geometry.y0 = geometry.sy < 0 ? geometry.height - DOT_CENTRE_PX : DOT_CENTRE_PX;
+  const sizes = sunSizes(geometry);
+  let tip = null;
+  let chip = false;
   for (let depth = 0; depth <= sunPath.length; depth++) {
     const items = sunItems(depth);
     if (!items.length) break;
-    const pitch = PILL_PITCH_PX * tocScale();
-    radius = Math.min(RING_MAX_PX * tocScale(),
-      Math.max(radius, items.length * pitch / RING_FILL_RAD));
-    const step = Math.min(pitch / radius, (Math.PI / 2) / items.length);
-    const middle = depth === 0 ? Math.PI / 4 : sunPath[depth - 1].angle;
-    const last = step * (items.length - 1);
-    const start = Math.max(RING_EDGE_RAD,
-      Math.min(middle - last / 2, Math.PI / 2 - RING_EDGE_RAD - last));
-    items.forEach((node, index) => {
-      node.angle = start + step * index;
-      const pill = document.createElement("button");
-      pill.className = "pill" + (node.children.length ? " kids" : "")
-        + (sunPath[depth] === node ? " on" : "");
-      pill.textContent = node.text;
-      placePill(pill, depth, node, radius, geometry);
-      pill.addEventListener("mouseenter", () => {
-        clearTimeout(sunTimer);
-        showTip(pill);
-        const path = sunPath.slice(0, depth);
-        if (node.children.length) path.push(node);
-        if (path.length !== sunPath.length || path[depth] !== sunPath[depth]) {
-          sunPath = path;
-          renderSun();
-        }
-      });
-      pill.addEventListener("mouseleave", () => {
-        hideTip();
-        closeSunSoon();
-      });
-      pill.addEventListener("click", () => {
-        node.heading.scrollIntoView({ block: "start" });
-        closeSun();
-        setFan(false);
-      });
-      sun.append(pill);
-      keepInside(pill);
-    });
-    radius += RING_GAP_PX * tocScale();
+    // No bulge beside a chip: there is little room across.
+    const amp = chip ? 0 : sizes.amp;
+    const rows = depth === 0 ? firstRing(items, geometry, sizes)
+      : nextRing(items, tip, geometry, sizes, amp);
+    // The open tier shows every section, and so does the tier above it
+    // one level in; deeper, earlier tiers keep only the section that
+    // leads on, as a small chip.
+    const open = depth === sunPath.length;
+    const full = open || (depth === 0 && sunPath.length === 1);
+    const width = full ? ringWidth(depth, tip, geometry, sizes, amp)
+      : PILL_CHIP_WIDTH_PX * tocScale();
+    let lead = null;
+    for (const row of rows) {
+      if (!full && sunPath[depth] !== row.node) continue;
+      const pill = drawPill(row, depth, geometry, width);
+      if (sunPath[depth] === row.node) lead = pill;
+    }
+    if (!lead) break;
+    chip = !full;
+    const box = lead.getBoundingClientRect();
+    tip = { x: geometry.sx < 0 ? box.left : box.right,
+      y: box.top + box.height / 2 };
   }
 }
 
 function openSun() {
-  clearTimeout(sunTimer);
+  keepSun();
   if (sunOpen) return;
   const found = pageHeadings();
   if (!found || !found.length) return;
@@ -1642,12 +1830,49 @@ function closeSun() {
   $("sun").hidden = true;
   $("sun").textContent = "";
   hideTip();
-  closeFanSoon();
+  // The fade was already spent on the rings; the fan follows at once
+  // unless the pointer is back on it.
+  const radial = $("radial");
+  if (!radial.matches(":hover") && !radial.querySelector(":focus-visible")) {
+    setFan(false);
+  } else {
+    radial.classList.remove("fading");
+  }
+  $("sun").classList.remove("fading");
 }
 
+// Starts fading the rings (and the corner menu with them, unless the
+// pointer is on it); they close when the fade is done.
 function closeSunSoon() {
   clearTimeout(sunTimer);
+  $("sun").classList.add("fading");
+  if (!$("radial").matches(":hover")) $("radial").classList.add("fading");
   sunTimer = setTimeout(closeSun, SUN_CLOSE_MS);
+}
+
+// Brings the rings back if they were fading.
+function keepSun() {
+  clearTimeout(sunTimer);
+  $("sun").classList.remove("fading");
+  $("radial").classList.remove("fading");
+}
+
+// The pinned column's width: the one dragged to, else the usual.
+const RAIL_MIN_PX = 110;
+const RAIL_MAX_SHARE = 0.6;
+let railWidth = null;
+let railDrag = false;
+
+function applyRailWidth() {
+  const root = document.documentElement.style;
+  if (railWidth) root.setProperty("--rail-w", railWidth + "px");
+  else root.removeProperty("--rail-w");
+}
+
+function dragRail(x) {
+  const most = Math.floor(window.innerWidth * RAIL_MAX_SHARE);
+  railWidth = Math.max(RAIL_MIN_PX, Math.min(Math.round(x), most));
+  applyRailWidth();
 }
 
 function setTocPinned(on) {
@@ -1815,6 +2040,28 @@ $("toc-button").addEventListener("click", () => {
 $("toc-button").addEventListener("mouseenter", openSun);
 $("toc-button").addEventListener("mouseleave", closeSunSoon);
 $("rail-unpin").addEventListener("click", () => setTocPinned(false));
+$("rail-grip").addEventListener("pointerdown", (event) => {
+  $("rail-grip").setPointerCapture(event.pointerId);
+  $("rail-grip").classList.add("drag");
+  document.body.style.userSelect = "none";
+  railDrag = true;
+  hideTip();
+});
+$("rail-grip").addEventListener("pointermove", (event) => {
+  if (railDrag) dragRail(event.clientX);
+});
+$("rail-grip").addEventListener("pointerup", () => {
+  if (!railDrag) return;
+  railDrag = false;
+  $("rail-grip").classList.remove("drag");
+  document.body.style.userSelect = "";
+  send({ type: "rail", width: railWidth || 0 });
+});
+$("rail-grip").addEventListener("dblclick", () => {
+  railWidth = null;
+  applyRailWidth();
+  send({ type: "rail", width: 0 });
+});
 $("rail-fold").addEventListener("click", () => foldAll(true));
 $("rail-unfold").addEventListener("click", () => foldAll(false));
 $("aa").addEventListener("click", () => {

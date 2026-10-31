@@ -162,7 +162,7 @@ kept beside it and link to other guides.
   margin that follows your place (click it again to unpin); point at a
   cut-off title to read it in full, and use the arrows to fold or unfold
   sections with sub-sections (the − and + buttons at the top do all of
-  them). Or just point at the button: the main
+  them). Drag the column's right edge to make it wider or narrower. Or just point at the button: the main
   sections fan out around the corner, and pointing at one opens a ring
   for its sub-sections. Click any to jump there.
 

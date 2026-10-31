@@ -57,6 +57,8 @@ pub enum Request {
     Web(String),
     /// Pin the contents list in the margin (or unpin it).
     Contents(bool),
+    /// Remember the pinned contents column's width (0 for the usual).
+    Rail(u32),
     /// Save this Markdown as a new guide named after this title.
     Save(String, String),
 }
@@ -75,6 +77,8 @@ struct RawRequest {
     side: Option<Edge>,
     /// The menu dot's corner, for `corner`.
     corner: Option<Corner>,
+    /// A width in page pixels, for `rail`.
+    width: Option<u32>,
     /// Whether to turn something on, for `contents`.
     on: Option<bool>,
     /// The page's title, for `save`.
@@ -104,6 +108,7 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "web" => Request::Web(raw.url?),
         "save" => Request::Save(raw.title?, raw.text?),
         "contents" => Request::Contents(raw.on?),
+        "rail" => Request::Rail(raw.width?),
         _ => return None,
     })
 }
@@ -141,6 +146,7 @@ pub fn list(folder: &Path, saved: &Saved) -> String {
         "style": saved.style,
         "corner": saved.corner,
         "contents": saved.contents,
+        "rail": saved.rail,
         "where": folder.display().to_string(),
     })
     .to_string()
@@ -380,6 +386,11 @@ mod tests {
             Some(Request::Contents(true))
         );
         assert_eq!(parse_request(r#"{"type":"contents"}"#), None);
+        assert_eq!(
+            parse_request(r#"{"type":"rail","width":240}"#),
+            Some(Request::Rail(240))
+        );
+        assert_eq!(parse_request(r#"{"type":"rail","width":-3}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }
