@@ -10,6 +10,9 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- The reader draws maths in Markdown guides (`$x^2$`, `$$...$$`), so
+  converted LaTeX shows its formulas instead of raw TeX. Unreadable
+  formulas stay as their source.
 - The reader can show web pages in reader mode (an article without the
   menus and ads, in your reading style). Open the guide list (Ctrl+K),
   paste an address such as `oldschool.runescape.wiki/w/Abyssal_whip`

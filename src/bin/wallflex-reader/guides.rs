@@ -325,10 +325,13 @@ fn markdown(text: &str, base: &str) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES;
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_MATH;
     let events: Vec<Event<'_>> = Parser::new_ext(text, options)
         .map(|event| match event {
             Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
+            Event::InlineMath(tex) => math_event(&tex, false),
+            Event::DisplayMath(tex) => math_event(&tex, true),
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
@@ -372,6 +375,25 @@ fn markdown(text: &str, base: &str) -> String {
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events);
     html
+}
+
+/// A `$...$` or `$$...$$` formula as `MathML`, which `WebView2` draws itself
+/// (so no script is needed). A formula that can't be converted stays as
+/// its TeX source in a code span, escaped like any other text.
+fn math_event(tex: &str, display: bool) -> Event<'static> {
+    let style = if display {
+        latex2mathml::DisplayStyle::Block
+    } else {
+        latex2mathml::DisplayStyle::Inline
+    };
+    if let Ok(mathml) = latex2mathml::latex_to_mathml(tex, style) {
+        return Event::Html(CowStr::from(mathml));
+    }
+    let escaped = tex
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    Event::Html(CowStr::from(format!("<code>{escaped}</code>")))
 }
 
 /// An id for each heading without one, in order: its text in lower
@@ -447,6 +469,19 @@ fn rebase<'a>(url: CowStr<'a>, base: &str) -> CowStr<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn math_becomes_mathml() {
+        let html = super::markdown(
+            "Let $x^2$ be.
+
+$$a+b$$
+",
+            "",
+        );
+        assert!(html.contains("<math"), "{html}");
+        assert!(!html.contains("$x^2$"), "{html}");
+    }
+
     use super::{
         Kind, folder_of, kind, list, name_from_url, render, resolve, slug,
         title, url,
