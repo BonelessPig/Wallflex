@@ -94,6 +94,9 @@ patch number (0.x.**y**) for fixes only.
 - Widgets move to stay clear when the work area changes, such as when
   the guides reader is pinned to a side or the taskbar moves; before,
   they stayed put until Wallflex restarted.
+- The installer now closes a running guides reader before upgrading or
+  uninstalling; before, it only quit Wallflex and the reader blocked
+  the update. `wallflex-reader --quit` closes a running reader.
 
 ## [0.5.0] - 2026-10-25
 
