@@ -3,7 +3,8 @@
 //!
 //! The page asks: `{"type": "ready" | "list" | "close" | "folder"}`,
 //! `{"type": "open", "path": NAME}`, `{"type": "pin", "side": "left" |
-//! "right"}` or `{"type": "style", "style": STYLE}`. The app answers
+//! "right"}`, `{"type": "move", "at": [X, Y]}` or `{"type": "style",
+//! "style": STYLE}`. The app answers
 //! with `list` (the guides, the last one shown, whether it's pinned and
 //! to which side), `show` (a guide: a reading page as `html`, a file to
 //! load as `url`, or an `error`), `pinned` and `escape` (Esc was
@@ -34,6 +35,9 @@ pub enum Request {
     Close,
     /// Open the guides folder in Explorer.
     Folder,
+    /// The menu dot is being dragged: move the floating window with the
+    /// mouse. It was pressed at this point in the page, in device pixels.
+    Move((i32, i32)),
     /// Use and remember this reading style (not yet checked).
     Style(Style),
 }
@@ -50,6 +54,8 @@ struct RawRequest {
     style: Option<Style>,
     /// The side, for `pin`.
     side: Option<Edge>,
+    /// Where the page was pressed, for `move`.
+    at: Option<(i32, i32)>,
 }
 
 /// Reads a request from the page's JSON; `None` if it isn't one.
@@ -62,6 +68,7 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "pin" => Request::Pin(raw.side?),
         "close" => Request::Close,
         "folder" => Request::Folder,
+        "move" => Request::Move(raw.at?),
         "style" => Request::Style(raw.style?),
         _ => return None,
     })
@@ -230,6 +237,11 @@ mod tests {
         };
         assert_eq!((style.theme.as_str(), style.size), ("dark", 18));
         assert_eq!(style.font, "segoe");
+        assert_eq!(
+            parse_request(r#"{"type":"move","at":[14,-3]}"#),
+            Some(Request::Move((14, -3)))
+        );
+        assert_eq!(parse_request(r#"{"type":"move"}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }

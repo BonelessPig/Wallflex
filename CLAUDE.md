@@ -138,7 +138,11 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   strip (painted the style's background) on the sides that resize, all
   of them floating, the inner one pinned; `WM_NCHITTEST` answers there
   (`place::grab`), and `WM_EXITSIZEMOVE` saves the size in 1080p units
-  (`panel`, `pane`) and places the window again. It hides on focus loss (unless pinned),
+  (`panel`, `pane`) and places the window again. Dragging the menu dot
+  (floating only) sends `move` with the press point; the app posts
+  `WM_NCLBUTTONDOWN`/`HTCAPTION` from there, so the dot stays under the
+  pointer, and saves the top-left as `spot` (used while the book icon
+  is on the same monitor; `place::at_spot` keeps it in the work area). It hides on focus loss (unless pinned),
   checking `GetForegroundWindow` when the posted note arrives, since
   showing it bounces the focus. Hidden 2 minutes, it exits.
   `reader.json` next to the config keeps pinned, last guide, zoom and

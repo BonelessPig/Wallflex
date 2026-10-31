@@ -5,6 +5,8 @@
 //! maximised windows leave room for it, and it stays until closed.
 //! Either way it can be resized: the panel from any side or corner, the
 //! pane from its inner side, by a thin strip left around the browser.
+//! The panel can also be moved by dragging the page's menu dot, and then
+//! stays where it was put.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -33,6 +35,7 @@ use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::Shell::{
     ABE_LEFT, ABE_RIGHT, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS,
     ABN_FULLSCREENAPP, ABN_POSCHANGED, APPBARDATA, SHAppBarMessage,
@@ -40,16 +43,17 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DestroyWindow, GetClientRect,
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, HTBOTTOM,
-    HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
-    HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW,
-    KillTimer, LoadCursorW, MINMAXINFO, PostMessageW, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SW_HIDE, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetTimer,
-    SetWindowPos, ShowWindow, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE,
-    WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_NCCALCSIZE,
-    WM_NCHITTEST, WM_SIZE, WM_TIMER, WNDCLASSW, WNDPROC, WS_CLIPCHILDREN,
-    WS_EX_TOOLWINDOW, WS_POPUP, WS_THICKFRAME,
+    HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
+    HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
+    IDC_ARROW, KillTimer, LoadCursorW, MINMAXINFO, PostMessageW,
+    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, WA_INACTIVE,
+    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
+    WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_SIZE, WM_TIMER,
+    WNDCLASSW, WNDPROC, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_THICKFRAME,
 };
 use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
@@ -298,16 +302,21 @@ impl Reader {
             let (width, height) = self.saved.panel.unwrap_or(PANEL_SIZE);
             let size = (scale.apply(width), scale.apply(height));
             let margin = scale.apply(MARGIN);
+            // Where it was dragged to, if that's on the clicked monitor.
+            let spot = self.saved.spot.filter(|&spot| {
+                screen_at(spot).is_some_and(|s| s.monitor == screen.monitor)
+            });
             SIZING.set(Sizing {
                 sides: Resizable::All,
                 border: scale.apply(RESIZE_BORDER),
                 min: (scale.apply(MIN_SIZE.0), scale.apply(MIN_SIZE.1)),
                 max_width: 0,
             });
-            (
-                place::floating(screen.work, self.at, size, margin),
-                HWND_NOTOPMOST,
-            )
+            let rect = match spot {
+                Some(spot) => place::at_spot(screen.work, spot, size),
+                None => place::floating(screen.work, self.at, size, margin),
+            };
+            (rect, HWND_NOTOPMOST)
         };
         // SAFETY: plain values on our own window. If it fails, the window
         // stays where it was.
@@ -326,9 +335,12 @@ impl Reader {
         self.fit();
     }
 
-    /// The user finished resizing the window: remembers its size (as on
-    /// a 1080p monitor) and places it again, so the panel goes back into
-    /// its corner and the pane's app bar takes the new width.
+    /// The user finished moving or resizing the window: remembers its
+    /// size (as on a 1080p monitor) and, for a panel that was moved (or
+    /// resized after being moved), where it is. Then places it again, so
+    /// a panel that wasn't moved goes back into its corner, a moved one
+    /// is pulled back inside the work area, and the pane's app bar takes
+    /// the new width.
     fn resized(&mut self) {
         self.sizing = false;
         let Some(now) = window_rect(self.hwnd) else {
@@ -344,8 +356,17 @@ impl Reader {
             }
             self.saved.pane = Some(width);
         } else {
-            let height = self.scale.unapply(now.height());
-            self.saved.panel = Some((width, height));
+            let same_size = now.width() == self.placed.width()
+                && now.height() == self.placed.height();
+            if same_size || self.saved.spot.is_some() {
+                self.saved.spot = Some((now.left, now.top));
+                // It may have gone to another monitor: place it there.
+                self.at = now.middle();
+            }
+            if !same_size {
+                let height = self.scale.unapply(now.height());
+                self.saved.panel = Some((width, height));
+            }
         }
         self.remember();
         self.place();
@@ -502,6 +523,10 @@ impl Reader {
                 ));
             }
             Request::Close => self.hide(false),
+            Request::Move(at) if !self.saved.pinned => {
+                start_move(self.hwnd, at);
+            }
+            Request::Move(_) => {}
             Request::Style(style) => {
                 self.saved.style = style.checked();
                 self.remember();
@@ -627,8 +652,9 @@ pub fn handle_message(
             Some(LRESULT(0))
         }
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
+            // Dragged onto another monitor: placed there once dropped.
             with_reader(|reader| {
-                if reader.shown {
+                if reader.shown && !reader.sizing {
                     reader.place();
                 }
             });
@@ -740,6 +766,47 @@ fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
         (None, None) => HTCLIENT,
     };
     LRESULT(isize::try_from(code).unwrap_or_default())
+}
+
+/// Moves the window with the mouse, as dragging a title bar would, from
+/// the point `at` in the browser (device pixels) where the drag began:
+/// the window follows the pointer from there, so what was pressed stays
+/// under it. The button is down in the browser, which holds the mouse,
+/// so it lets go and the window gets the press instead. Posted, since
+/// moving runs its own message loop and the reader is busy until this
+/// returns.
+fn start_move(hwnd: HWND, at: (i32, i32)) {
+    let Some(window) = window_rect(hwnd) else {
+        return;
+    };
+    let sizing = SIZING.get();
+    let browser = place::inset(window, sizing.sides, sizing.border);
+    let pressed = POINT {
+        x: browser.left.saturating_add(at.0),
+        y: browser.top.saturating_add(at.1),
+    };
+    let caption = usize::try_from(HTCAPTION).unwrap_or_default();
+    // SAFETY: plain values on our own window. If either fails, the
+    // window just doesn't move this time.
+    unsafe {
+        let _ = ReleaseCapture();
+        let _ = PostMessageW(
+            Some(hwnd),
+            WM_NCLBUTTONDOWN,
+            WPARAM(caption),
+            pack_point(pressed),
+        );
+    }
+}
+
+/// `at` packed into a mouse message's `lparam`, as 16-bit halves.
+fn pack_point(at: POINT) -> LPARAM {
+    let half = |value: i32| {
+        let low = i16::try_from(value).unwrap_or_default().cast_unsigned();
+        u32::from(low)
+    };
+    let packed = half(at.x) | half(at.y).checked_shl(WORD_BITS).unwrap_or(0);
+    LPARAM(isize::try_from(packed).unwrap_or_default())
 }
 
 /// The signed point packed into a mouse message's `lparam`.

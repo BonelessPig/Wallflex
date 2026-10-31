@@ -108,7 +108,7 @@ impl Rect {
     }
 
     /// The middle, rounded down.
-    fn middle(self) -> (i32, i32) {
+    pub fn middle(self) -> (i32, i32) {
         (
             self.left.saturating_add(self.width() / 2),
             self.top.saturating_add(self.height() / 2),
@@ -274,6 +274,25 @@ pub fn floating(
     }
 }
 
+/// The floating panel, `size` big, with its top-left corner at `spot`
+/// (where it was dragged to), moved and shrunk as needed to stay inside
+/// `work` (the work area).
+pub fn at_spot(work: Rect, spot: (i32, i32), size: (i32, i32)) -> Rect {
+    let width = size.0.min(work.width()).max(1);
+    let height = size.1.min(work.height()).max(1);
+    let keep = |at: i32, low: i32, high: i32, length: i32| {
+        at.min(high.saturating_sub(length)).max(low)
+    };
+    let left = keep(spot.0, work.left, work.right, width);
+    let top = keep(spot.1, work.top, work.bottom, height);
+    Rect {
+        left,
+        top,
+        right: left.saturating_add(width),
+        bottom: top.saturating_add(height),
+    }
+}
+
 /// The side of `monitor` nearer `at`.
 pub fn edge_for(monitor: Rect, at: (i32, i32)) -> Edge {
     if at.0 >= monitor.middle().0 {
@@ -302,8 +321,8 @@ pub fn docked(work: Rect, edge: Edge, width: i32) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::{
-        Edge, Grab, Rect, Resizable, Scale, Vertical, docked, edge_for,
-        floating, grab, inset,
+        Edge, Grab, Rect, Resizable, Scale, Vertical, at_spot, docked,
+        edge_for, floating, grab, inset,
     };
 
     /// A 1920x1080 monitor's work area with a 48 px taskbar.
@@ -358,6 +377,29 @@ mod tests {
         assert_eq!(panel.height(), 576);
         assert_eq!(panel.top, 12);
         assert_eq!(panel.right, -12);
+    }
+
+    #[test]
+    fn stays_where_it_was_dragged() {
+        let size = (520, 720);
+        let moved = at_spot(WORK, (700, 100), size);
+        assert_eq!(
+            moved,
+            Rect {
+                left: 700,
+                top: 100,
+                right: 1220,
+                bottom: 820
+            }
+        );
+        // Dragged partly off the work area: pulled back in.
+        let off = at_spot(WORK, (1700, -50), size);
+        assert_eq!((off.left, off.top), (1400, 0));
+        let under = at_spot(WORK, (-300, 900), size);
+        assert_eq!((under.left, under.bottom), (0, 1032));
+        // Too big for it: shrunk to fit.
+        let big = at_spot(WORK, (10, 10), (3000, 2000));
+        assert_eq!(big, WORK);
     }
 
     #[test]

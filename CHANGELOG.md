@@ -33,6 +33,10 @@ patch number (0.x.**y**) for fixes only.
 - The reader can be resized: drag any edge or corner of the floating
   window, or the inner edge of the pinned one. Both sizes are
   remembered, and a pinned reader's new width is kept free for it.
+- The floating reader can be moved: drag the dot in its top-left
+  corner (a click still opens the buttons). It stays where you put it,
+  also next time, unless you open it from a book icon on another
+  monitor.
 
 ### Fixed
 

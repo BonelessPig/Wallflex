@@ -1,6 +1,7 @@
 //! What the reader remembers between runs, in `reader.json` next to
 //! Wallflex's settings: whether it's pinned and to which side, the last
-//! guide shown, the sizes it was resized to, how far the page is zoomed
+//! guide shown, the sizes it was resized to, where the floating panel
+//! was dragged to, how far the page is zoomed
 //! (Ctrl and the mouse wheel) and the reading style (theme, font, size,
 //! spacing).
 
@@ -30,6 +31,9 @@ pub struct Saved {
     pub panel: Option<(i32, i32)>,
     /// The docked pane's width, likewise.
     pub pane: Option<i32>,
+    /// Where the floating panel's top-left corner was dragged to, in
+    /// desktop pixels; `None` for the corner nearest the book icon.
+    pub spot: Option<(i32, i32)>,
     /// The page's zoom on top of the usual size (1 = as usual).
     pub zoom: f64,
     /// How guides look.
@@ -44,6 +48,7 @@ impl Default for Saved {
             last: None,
             panel: None,
             pane: None,
+            spot: None,
             zoom: 1.0,
             style: Style::default(),
         }
@@ -92,6 +97,7 @@ mod tests {
             last: Some("Games/Setup.md".to_owned()),
             panel: Some((600, 800)),
             pane: Some(400),
+            spot: Some((-1200, 40)),
             zoom: 1.25,
             style: Style {
                 theme: "sepia".to_owned(),
