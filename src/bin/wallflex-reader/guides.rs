@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd,
+};
 
 /// The guides folder, next to the settings file.
 pub const FOLDER: &str = "Guides";
@@ -327,11 +329,12 @@ fn markdown(text: &str, base: &str) -> String {
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_MATH;
-    let events: Vec<Event<'_>> = Parser::new_ext(text, options)
+    let text = wrap_bare_environments(text);
+    let events: Vec<Event<'_>> = Parser::new_ext(&text, options)
         .map(|event| match event {
             Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
-            Event::InlineMath(tex) => math_event(&tex, false),
-            Event::DisplayMath(tex) => math_event(&tex, true),
+            Event::InlineMath(tex) => math_event(unquote(&tex), false),
+            Event::DisplayMath(tex) => math_event(unquote(&tex), true),
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
@@ -357,6 +360,7 @@ fn markdown(text: &str, base: &str) -> String {
             other => other,
         })
         .collect();
+    let events = fold_math_fences(events);
     let mut ids = heading_ids(&events).into_iter();
     let events = events.into_iter().map(|event| match event {
         Event::Start(Tag::Heading {
@@ -377,6 +381,165 @@ fn markdown(text: &str, base: &str) -> String {
     html
 }
 
+/// What the maths converter writes into its output for a command it
+/// doesn't know.
+const PARSE_ERROR: &str = "[PARSE ERROR";
+
+/// Style commands the converter lacks, and the ones it has that look
+/// closest.
+const COMMAND_ALIASES: [(&str, &str); 6] = [
+    (r"\mathcal", r"\mathscr"),
+    (r"\mathbbm", r"\mathbb"),
+    (r"\mathsf", r"\mathrm"),
+    (r"\mathtt", r"\mathrm"),
+    (r"\bm", r"\boldsymbol"),
+    (r"\textbf", r"\mathbf"),
+];
+
+/// `tex` with the commands in `COMMAND_ALIASES` swapped for ones the
+/// converter knows. Only whole commands change: `\mathcalx` stays.
+fn alias_commands(tex: &str) -> String {
+    let mut out = tex.to_owned();
+    for (from, to) in COMMAND_ALIASES {
+        let mut result = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(from) {
+            let (head, tail) = rest.split_at(at);
+            let after = &tail[from.len()..];
+            result.push_str(head);
+            let whole = !after.starts_with(|c: char| c.is_ascii_alphabetic());
+            result.push_str(if whole { to } else { from });
+            rest = after;
+        }
+        result.push_str(rest);
+        out = result;
+    }
+    out
+}
+
+/// Environments the converter doesn't know, with nothing to draw of their
+/// own: removed, leaving what they hold.
+const WRAPPER_ENVIRONMENTS: [&str; 8] = [
+    "equation",
+    "equation*",
+    "gather",
+    "gather*",
+    "multline",
+    "multline*",
+    "split",
+    "displaymath",
+];
+
+/// Environments the converter lacks that are `align` in all but name.
+const ALIGN_ENVIRONMENTS: [&str; 5] =
+    ["align*", "aligned", "alignedat", "eqnarray", "eqnarray*"];
+
+/// Commands that only matter on paper.
+const IGNORED_COMMANDS: [&str; 3] = [r"\nonumber", r"\notag", r"\displaystyle"];
+
+/// `tex` rewritten into what the converter reads: wrapper environments
+/// and `\label{..}` dropped, `aligned` as `align`, `cases` as an `align`
+/// behind a brace.
+fn normalize_tex(tex: &str) -> String {
+    let mut out = tex.to_owned();
+    for name in WRAPPER_ENVIRONMENTS {
+        out = out.replace(&format!(r"\begin{{{name}}}"), "");
+        out = out.replace(&format!(r"\end{{{name}}}"), "");
+    }
+    for name in IGNORED_COMMANDS {
+        out = out.replace(name, "");
+    }
+    out = drop_labels(&out);
+    for name in ALIGN_ENVIRONMENTS {
+        out = out.replace(&format!(r"\begin{{{name}}}"), r"\begin{align}");
+        out = out.replace(&format!(r"\end{{{name}}}"), r"\end{align}");
+    }
+    out = out.replace(r"\begin{cases}", r"\left\{\begin{align}");
+    out.replace(r"\end{cases}", r"\end{align}\right.")
+}
+
+/// `tex` without its `\label{..}` commands.
+fn drop_labels(tex: &str) -> String {
+    let mut out = String::with_capacity(tex.len());
+    let mut rest = tex;
+    while let Some(at) = rest.find(r"\label{") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        rest = after.split_once('}').map_or("", |(_, tail)| tail);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Markdown with each stretch of lines holding a LaTeX environment that
+/// pandoc left outside `$` (an `equation`, or a formula ending in
+/// `cases`) wrapped in `$$`, so it is drawn as maths. Fenced code is
+/// left alone.
+fn wrap_bare_environments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut lines = text.lines();
+    let mut fenced = false;
+    while let Some(line) = lines.next() {
+        let start = line.trim_start();
+        if start.starts_with("```") || start.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        if fenced || !line.contains(r"\begin{") || line.contains('$') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let mut formula = line.trim().to_owned();
+        while !formula.contains(r"\end{") {
+            let Some(next) = lines.next() else {
+                break;
+            };
+            formula.push(' ');
+            formula.push_str(next.trim());
+        }
+        out.push_str("\n$$");
+        out.push_str(&formula);
+        out.push_str("$$\n\n");
+    }
+    out
+}
+
+/// `tex` without the backticks pandoc wraps around it (`$`x`$`).
+fn unquote(tex: &str) -> &str {
+    let trimmed = tex.trim();
+    trimmed
+        .strip_prefix('`')
+        .and_then(|rest| rest.strip_suffix('`'))
+        .unwrap_or(trimmed)
+}
+
+/// Replaces each fenced block tagged `math` (pandoc's display maths)
+/// with the formula it holds.
+fn fold_math_fences(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+    let mut out = Vec::with_capacity(events.len());
+    let mut formula: Option<String> = None;
+    for event in events {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
+                if info.trim() == "math" =>
+            {
+                formula = Some(String::new());
+            }
+            Event::Text(ref text) if formula.is_some() => {
+                if let Some(tex) = &mut formula {
+                    tex.push_str(text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) if formula.is_some() => {
+                let tex = formula.take().unwrap_or_default();
+                out.push(math_event(&tex, true));
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// A `$...$` or `$$...$$` formula as `MathML`, which `WebView2` draws itself
 /// (so no script is needed). A formula that can't be converted stays as
 /// its TeX source in a code span, escaped like any other text.
@@ -386,7 +549,11 @@ fn math_event(tex: &str, display: bool) -> Event<'static> {
     } else {
         latex2mathml::DisplayStyle::Inline
     };
-    if let Ok(mathml) = latex2mathml::latex_to_mathml(tex, style) {
+    let tex = normalize_tex(&alias_commands(tex));
+    // The converter reports what it can't read inside its answer.
+    if let Ok(mathml) = latex2mathml::latex_to_mathml(&tex, style)
+        && !mathml.contains(PARSE_ERROR)
+    {
         return Event::Html(CowStr::from(mathml));
     }
     let escaped = tex
@@ -480,6 +647,52 @@ $$a+b$$
         );
         assert!(html.contains("<math"), "{html}");
         assert!(!html.contains("$x^2$"), "{html}");
+    }
+
+    #[test]
+    fn unknown_commands_fall_back_or_alias() {
+        let html = super::markdown(r"$\mathcal{L}=1$ $\nosuchthing$", "");
+        assert!(!html.contains("PARSE ERROR"), "{html}");
+        assert_eq!(html.matches("<math").count(), 1, "{html}");
+        assert!(html.contains("<code>"), "{html}");
+    }
+
+    #[test]
+    fn bare_environments_become_maths() {
+        let md = r"\begin{equation} \text{A}(Q) = \frac{Q}{2} \end{equation}
+where
+
+M_{ij} = \begin{cases} 0 & \text{if } i \geq j \\ -\infty & i < j \end{cases}
+After.
+";
+        let html = super::markdown(md, "");
+        assert_eq!(html.matches("<math").count(), 2, "{html}");
+        assert!(!html.contains("PARSE ERROR"), "{html}");
+        assert!(!html.contains("begin"), "{html}");
+    }
+
+    #[test]
+    fn attention_formula_converts() {
+        let md = r"\begin{equation} \text{MaskedAttn}(Q, K, V) = \text{softmax}\!\left(\frac{QK^T}{\sqrt{d_k}} + M\right) V \end{equation}
+";
+        let html = super::markdown(md, "");
+        assert_eq!(html.matches("<math").count(), 1, "{html}");
+        assert!(!html.contains("PARSE ERROR"), "{html}");
+        assert!(!html.contains("<code>"), "{html}");
+    }
+
+    #[test]
+    fn pandoc_maths_loses_its_backticks() {
+        let md = "Let $`x^2`$ be.
+
+``` math
+a+b
+```
+";
+        let html = super::markdown(md, "");
+        assert!(!html.contains('`'), "{html}");
+        assert!(!html.contains("<code"), "{html}");
+        assert_eq!(html.matches("<math").count(), 2, "{html}");
     }
 
     use super::{

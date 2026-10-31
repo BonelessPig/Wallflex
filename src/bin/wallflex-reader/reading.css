@@ -93,6 +93,10 @@ a {
   text-decoration-thickness: 1px;
 }
 strong { font-weight: 600; }
+math {
+  font-family: var(--font), "Cambria Math", math;
+  font-size: 1.05em;
+}
 mark { background: var(--mark); color: inherit; }
 code, pre, kbd {
   font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
