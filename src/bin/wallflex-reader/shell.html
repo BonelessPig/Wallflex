@@ -557,11 +557,11 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
       v9.6c2.4-.3 4.6 0 6 1.2 1.4-1.2 3.6-1.5 6-1.2V3c-2.4-.3-4.6 0-6 1.2z
       M8 4.2v9.6"/></svg>
   </button>
-  <button class="spoke" id="toc-button" style="--a: 15deg; --d: 20ms"
-    aria-pressed="false" data-tip="Contents: click to pin, hover to jump">
+  <button class="spoke" id="toc-button" style="--a: 22.5deg; --d: 20ms"
+    aria-pressed="false" aria-label="Contents">
     <svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
   </button>
-  <button class="spoke" id="aa" style="--a: 30deg; --d: 40ms"
+  <button class="spoke" id="aa" style="--a: 45deg; --d: 40ms"
     aria-expanded="false" data-tip="Theme, font, size and menu dot">
     <svg viewBox="0 0 24 24" style="stroke-width: 2"><circle cx="12" cy="12" r="3"/>
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0
@@ -575,24 +575,12 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
       2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2
       2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
-  <button class="spoke" id="folder" style="--a: 45deg; --d: 60ms"
+  <button class="spoke" id="folder" style="--a: 67.5deg; --d: 60ms"
     data-tip="Open the Guides folder">
     <svg viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.3 1.5H13
       c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z"/></svg>
   </button>
-  <button class="spoke pin" id="pin-left" style="--a: 60deg; --d: 80ms"
-    data-side="left" aria-pressed="false">
-    <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/>
-      <rect x="3.5" y="4.5" width="3" height="7" rx=".5" fill="currentColor"
-      stroke="none"/></svg>
-  </button>
-  <button class="spoke pin" id="pin-right" style="--a: 75deg; --d: 100ms"
-    data-side="right" aria-pressed="false">
-    <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/>
-      <rect x="9.5" y="4.5" width="3" height="7" rx=".5" fill="currentColor"
-      stroke="none"/></svg>
-  </button>
-  <button class="spoke" id="close" style="--a: 90deg; --d: 120ms" data-tip="Close (Esc)">
+  <button class="spoke" id="close" style="--a: 90deg; --d: 80ms" data-tip="Close (Esc)">
     <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
   </button>
   <div id="caption" aria-hidden="true"></div>
@@ -684,19 +672,10 @@ function setTip(button, tip) {
   if (button === captioned) showCaption(button);
 }
 
-// The pin buttons: the side it's docked to unpins, the other docks
-// (or moves) there.
-function setPinned(pinned, side) {
+// Whether the reader is docked as a pane (docking is by dragging it
+// against a side of the screen; dragging the menu dot floats it again).
+function setPinned(pinned) {
   document.body.classList.toggle("pinned", pinned);
-  for (const button of document.querySelectorAll(".pin")) {
-    const here = pinned && button.dataset.side === side;
-    const name = button.dataset.side === "left" ? "left" : "right";
-    button.setAttribute("aria-pressed", String(here));
-    let tip = "Pin to the " + name + " side";
-    if (here) tip = "Unpin (float)";
-    else if (pinned) tip = "Move to the " + name + " side";
-    setTip(button, tip);
-  }
 }
 
 // Which corner the menu dot sits in (the app reads it from the settings).
@@ -729,6 +708,8 @@ function setTitle(title) {
 let captioned = null;
 
 function showCaption(button) {
+  // The Contents button has no caption: its rings say what it does.
+  if (!button.dataset.tip) return;
   captioned = button;
   const caption = $("caption");
   caption.textContent = button.dataset.tip;
@@ -920,7 +901,7 @@ function onList(message) {
   refreshRail();
   guides = message.guides;
   $("where").textContent = message.where;
-  setPinned(message.pinned, message.side);
+  setPinned(message.pinned);
   const empty = guides.length === 0;
   $("empty").hidden = !empty;
   if (empty) {
@@ -1582,10 +1563,11 @@ function refreshRail() {
    one that has sub-sections opens an arc for them beside it, and so on.
    The pills are wide, so what must not overlap is their heights: each
    arc is laid out by even vertical steps, not even angles, on an ellipse
-   that is as tall as the window allows. One level in, both tiers are
-   shown; deeper, only the open tier is shown in full and the earlier
-   ones shrink to a chip for the section that leads on. Pill widths
-   share the room the window leaves. */
+   that is as tall as the window allows. The open tier and the tier of
+   its parent are shown in full; tiers above those keep only the section
+   that leads on. Nothing moves when a deeper tier opens: every tier has
+   the same width, worked out once from how many levels the page has, and
+   each is placed from the tip of the pill that opened it. */
 // The contents' text is this much bigger than the reading text; the
 // sizes in the CSS were drawn for a 12.5 px font.
 const TOC_FONT_BONUS_PX = 1;
@@ -1595,20 +1577,20 @@ const PILL_HEIGHT_PX = 24;
 const PILL_GAP_PX = 3;
 const PILL_WIDTH_PX = 150;
 const PILL_MIN_WIDTH_PX = 60;
-const PILL_CHIP_WIDTH_PX = 44;
 const FAN_EDGE_PX = 165;
 const FIRST_OFFSET_PX = 24;
 const RING_FIRST_PX = 190;
 const RING_FILL = 0.92;
 const RING_START = 0.71;
-const TIER_GAP_PX = 14;
-const TIER_AMP_PX = 30;
+const TIER_GAP_PX = 10;
+const TIER_AMP_PX = 14;
 const DOT_CENTRE_PX = 18;
 const SUN_CLOSE_MS = 400;
 const SUN_MARGIN_PX = 6;
 const SUN_SPACE_PX = 40;
 
 let sunTree = [];
+let sunLevels = 1;
 let sunPath = [];
 let sunOpen = false;
 let sunTimer = null;
@@ -1626,6 +1608,16 @@ function headingTree(found) {
     stack.push(node);
   }
   return top.length === 1 && top[0].children.length ? top[0].children : top;
+}
+
+// How many levels deep a tree goes.
+function treeLevels(nodes) {
+  if (!nodes.length) return 0;
+  let deepest = 0;
+  for (const node of nodes) {
+    deepest = Math.max(deepest, treeLevels(node.children));
+  }
+  return deepest + 1;
 }
 
 function sunItems(depth) {
@@ -1677,7 +1669,7 @@ function firstRing(items, geometry, sizes) {
 
 // Rows for a later ring: a gentle arc bulging away from the tip of the
 // pill that opened it, centred on that pill's height and slid to fit.
-function nextRing(items, tip, geometry, sizes, amp) {
+function nextRing(items, tip, geometry, sizes) {
   const room = geometry.height - 2 * SUN_MARGIN_PX;
   const fit = fitRows(items.length, sizes, room);
   const shown = limitItems(items, fit.count);
@@ -1689,7 +1681,7 @@ function nextRing(items, tip, geometry, sizes, amp) {
   return shown.map((node, index) => {
     const y = top + index * fit.pitch;
     const ratio = Math.min(Math.abs(y - tip.y) / reach, 1);
-    const bulge = amp * Math.sqrt(1 - ratio * ratio);
+    const bulge = sizes.amp * Math.sqrt(1 - ratio * ratio);
     return { node, y, x: tip.x + geometry.sx * (sizes.gap + bulge) };
   });
 }
@@ -1740,31 +1732,23 @@ function keepInside(pill) {
 }
 
 // Sizes for the pills, from the contents scale and the window: the
-// pills share the width left of the fan between two tiers.
+// pills of every tier share the width left of the fan.
 function sunSizes(geometry) {
   const scale = tocScale();
   const loose = tocLeading();
+  const gap = TIER_GAP_PX * scale;
+  const amp = TIER_AMP_PX * scale;
   const room = geometry.width - FAN_EDGE_PX - FIRST_OFFSET_PX
-    - SUN_MARGIN_PX - (TIER_GAP_PX + TIER_AMP_PX) * scale;
+    - SUN_MARGIN_PX - (sunLevels - 1) * (gap + amp);
   return {
     pitch: PILL_PITCH_PX * scale * loose,
     height: PILL_HEIGHT_PX * scale * loose,
     least: (PILL_HEIGHT_PX + PILL_GAP_PX) * scale * loose,
-    gap: TIER_GAP_PX * scale,
-    amp: TIER_AMP_PX * scale,
+    gap,
+    amp,
     width: Math.max(PILL_MIN_WIDTH_PX,
-      Math.min(PILL_WIDTH_PX * scale, room / 2)),
+      Math.min(PILL_WIDTH_PX * scale, room / sunLevels)),
   };
-}
-
-// How wide a full ring's pills are: the shared width for the first ring,
-// else whatever room is left beside the pill that opened it.
-function ringWidth(depth, tip, geometry, sizes, amp) {
-  if (depth === 0) return sizes.width;
-  const edge = geometry.sx < 0 ? tip.x - SUN_MARGIN_PX
-    : geometry.width - SUN_MARGIN_PX - tip.x;
-  const left = edge - sizes.gap - amp;
-  return Math.max(PILL_MIN_WIDTH_PX, Math.min(PILL_WIDTH_PX * tocScale(), left));
 }
 
 function renderSun() {
@@ -1781,29 +1765,21 @@ function renderSun() {
   geometry.y0 = geometry.sy < 0 ? geometry.height - DOT_CENTRE_PX : DOT_CENTRE_PX;
   const sizes = sunSizes(geometry);
   let tip = null;
-  let chip = false;
   for (let depth = 0; depth <= sunPath.length; depth++) {
     const items = sunItems(depth);
     if (!items.length) break;
-    // No bulge beside a chip: there is little room across.
-    const amp = chip ? 0 : sizes.amp;
     const rows = depth === 0 ? firstRing(items, geometry, sizes)
-      : nextRing(items, tip, geometry, sizes, amp);
-    // The open tier shows every section, and so does the tier above it
-    // one level in; deeper, earlier tiers keep only the section that
-    // leads on, as a small chip.
-    const open = depth === sunPath.length;
-    const full = open || (depth === 0 && sunPath.length === 1);
-    const width = full ? ringWidth(depth, tip, geometry, sizes, amp)
-      : PILL_CHIP_WIDTH_PX * tocScale();
+      : nextRing(items, tip, geometry, sizes);
+    // The open tier shows every section, and so does its parent's tier;
+    // tiers above those keep only the section that leads on.
+    const full = depth >= sunPath.length - 1;
     let lead = null;
     for (const row of rows) {
       if (!full && sunPath[depth] !== row.node) continue;
-      const pill = drawPill(row, depth, geometry, width);
+      const pill = drawPill(row, depth, geometry, sizes.width);
       if (sunPath[depth] === row.node) lead = pill;
     }
     if (!lead) break;
-    chip = !full;
     const box = lead.getBoundingClientRect();
     tip = { x: geometry.sx < 0 ? box.left : box.right,
       y: box.top + box.height / 2 };
@@ -1816,6 +1792,7 @@ function openSun() {
   const found = pageHeadings();
   if (!found || !found.length) return;
   sunTree = headingTree(found);
+  sunLevels = treeLevels(sunTree);
   sunPath = [];
   sunOpen = true;
   $("sun").hidden = false;
@@ -2076,9 +2053,6 @@ $("error-dismiss").addEventListener("click", () => {
   $("error").hidden = true;
 });
 $("open-folder").addEventListener("click", () => send({ type: "folder" }));
-for (const button of document.querySelectorAll(".pin")) {
-  button.addEventListener("click", () => send({ type: "pin", side: button.dataset.side }));
-}
 $("close").addEventListener("click", () => send({ type: "close" }));
 document.addEventListener("mousedown", (event) => {
   if (!$("menu").hidden && !event.target.closest("#menu, #pick")) closeMenu();
@@ -2122,13 +2096,13 @@ if (webview) {
     else if (message.type === "back") goBack();
     else if (message.type === "save") saveWeb();
     else if (message.type === "saved") onSaved(message);
-    else if (message.type === "pinned") setPinned(message.pinned, message.side);
+    else if (message.type === "pinned") setPinned(message.pinned);
     else if (message.type === "escape") escape();
   });
 }
 buildStylePanel();
 setCorner(null);
-setPinned(false, null);
+setPinned(false);
 send({ type: "ready" });
 </script>
 </body>

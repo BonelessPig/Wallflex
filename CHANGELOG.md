@@ -26,8 +26,8 @@ patch number (0.x.**y**) for fixes only.
   in full when you point at it, and is remembered. Narrow windows hide
   the column. Hovering the button instead fans the main sections out
   around the corner; pointing at one with sub-sections opens a further
-  ring for them, and so on (deeper than one level, the earlier rings
-  shrink to a chip for the section that led there). Click a section to
+  ring for them, and so on (rings above the parent's keep only the
+  section that led there; nothing moves as you go deeper). Click a section to
   jump to it. It works for
   web pages and for Markdown and text guides.
   Its text is 1 px bigger than the reading text size you set, and its
@@ -78,6 +78,13 @@ patch number (0.x.**y**) for fixes only.
   corner (a click still opens the buttons). It stays where you put it,
   also next time, unless you open it from a book icon on another
   monitor.
+
+### Removed
+
+- The reader's two pin buttons (dock left, dock right) are gone from
+  the corner menu. Dragging the window against a side of the screen
+  still docks it, and dragging the menu dot undocks it. The Contents
+  button no longer shows a caption.
 
 ### Fixed
 

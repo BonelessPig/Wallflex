@@ -168,9 +168,10 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   are spaced by height (`fitRows`; an ellipse around the dot for the
   first ring, `firstRing`; a gentle bulge off the opening pill's tip for
   later ones, `nextRing`), never by angle. Too many for the window end
-  in a "+N more" pill that pins the list. One level in, both tiers
-  show; deeper, earlier tiers shrink to a chip for the section leading
-  on, and the open ring takes the width left (`ringWidth`).
+  in a "+N more" pill that pins the list. The open tier and its
+  parent's tier show in full; tiers above keep only the section leading
+  on. Every tier has one width from the page's depth (`sunLevels`), so
+  nothing shifts under the pointer when a deeper tier opens.
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the
