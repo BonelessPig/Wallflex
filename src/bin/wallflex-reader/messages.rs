@@ -199,7 +199,10 @@ fn read_text(path: &Path) -> Result<String, String> {
         .map_err(|_| format!("{shown} isn't there any more."))?
         .len();
     if size > guides::MAX_TEXT_BYTES {
-        return Err(format!("{shown} is too big to show (over 4 MB)."));
+        return Err(format!(
+            "{shown} is too big to show (over {} MB).",
+            guides::MAX_TEXT_MB
+        ));
     }
     let bytes = std::fs::read(path)
         .map_err(|error| format!("Can't read {shown}: {error}"))?;

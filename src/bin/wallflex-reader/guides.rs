@@ -25,8 +25,11 @@ const BASE_URL: &str = "https://guides.wallflex/";
 const MAX_DEPTH: usize = 4;
 /// The most guides listed.
 const MAX_GUIDES: usize = 1_000;
+/// The biggest Markdown or text guide shown, in megabytes. Converted
+/// books run to tens of megabytes.
+pub const MAX_TEXT_MB: u64 = 32;
 /// The biggest Markdown or text guide shown, in bytes.
-pub const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_TEXT_BYTES: u64 = MAX_TEXT_MB * 1024 * 1024;
 /// The longest file or folder name accepted, in characters.
 const MAX_PART_CHARS: usize = 120;
 /// Characters Windows doesn't allow in a file name (besides control
