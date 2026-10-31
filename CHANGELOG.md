@@ -20,13 +20,20 @@ patch number (0.x.**y**) for fixes only.
   into the Guides folder as Markdown (never overwriting; the source
   address is noted at the top). Markdown guides may now show pictures
   from https addresses.
-- A **Contents** button in the reader's corner menu lists the headings
-  of the page or guide being read and jumps to the one you pick.
-- The contents list can be **pinned** (Pin in its panel; the Contents
-  button then unpins) as a column in the reader's left margin. It stays
-  on, marks the section you're reading, and a title too long for the
-  column shows in full when you point at it. Narrow windows keep the
-  popup instead. The choice is remembered.
+- A **Contents** button in the reader's corner menu. Clicking it pins
+  the page's headings as a column in the left margin (clicking again
+  unpins); the column follows your place, shows a title too long for it
+  in full when you point at it, and is remembered. Narrow windows hide
+  the column. Hovering the button instead fans the main sections out
+  around the corner; pointing at one with sub-sections opens a further
+  ring for them, and so on. Click a section to jump to it. It works for
+  web pages and for Markdown and text guides.
+  Its text is 2 px bigger than the reading text size you set, and its
+  other sizes follow.
+- In the pinned contents column, sections that have sub-sections get an
+  arrow to fold or unfold them. Folded sections stay folded while you
+  read the page, and the section holding your place is marked.
+  Buttons at the top of the column fold or unfold every section at once.
 - The reader's guide list has a **-> MD** button on HTML and LaTeX
   guides that converts them to Markdown with pandoc (found on `PATH`;
   not included), writing a `.md` copy beside the original. LaTeX

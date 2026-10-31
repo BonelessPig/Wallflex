@@ -158,9 +158,13 @@ kept beside it and link to other guides.
   reading style, with pictures. Links in it open the same way; **Back**
   and **Open in browser** are at the top, with **Save as guide** to keep
   the page in your Guides folder as Markdown. The **Contents** button in
-  the corner menu lists the page's headings and jumps to one. **Pin** keeps that list as a column in the left margin that follows
-  your place; point at a cut-off title to read it in full. Pages that only build their
-  text with scripts (some apps) show nothing to read.
+  the corner menu pins the page's headings as a column in the left
+  margin that follows your place (click it again to unpin); point at a
+  cut-off title to read it in full, and use the arrows to fold or unfold
+  sections with sub-sections (the − and + buttons at the top do all of
+  them). Or just point at the button: the main
+  sections fan out around the corner, and pointing at one opens a ring
+  for its sub-sections. Click any to jump there.
 
 The reader needs Microsoft Edge WebView2, which comes with Windows 11.
 It only uses memory while it's open and quits two minutes after it's

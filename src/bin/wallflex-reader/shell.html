@@ -272,7 +272,7 @@ iframe {
 }
 #error { background: var(--bg); }
 [hidden] { display: none !important; }
-#menu, #toc {
+#menu {
   position: absolute;
   top: 40px;
   left: 8px;
@@ -287,10 +287,7 @@ iframe {
   overflow: hidden;
   z-index: 2;
 }
-body[data-corner^="bottom"] #menu, body[data-corner^="bottom"] #toc {
-  top: auto;
-  bottom: 40px;
-}
+body[data-corner^="bottom"] #menu { top: auto; bottom: 40px; }
 body[data-corner^="bottom"] #style { top: auto; bottom: 40px; }
 body[data-corner$="right"] #style { left: auto; right: 8px; }
 #filter {
@@ -305,15 +302,14 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
   outline: none;
 }
 #filter:focus { border-color: var(--accent); }
-#list, #toc-list { flex: 1; overflow: auto; padding: 0 6px 6px; }
-#toc-list { padding-top: 0; }
+#list { flex: 1; overflow: auto; padding: 0 6px 6px; }
 .toc-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 8px 4px;
   color: var(--quiet);
-  font-size: 11px;
+  font-size: calc(11px * var(--toc-scale));
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -324,12 +320,15 @@ body[data-corner$="right"] #style { left: auto; right: 8px; }
   border: 1px solid var(--rule);
   border-radius: 4px;
   color: var(--quiet);
-  font-size: 11px;
+  font-size: calc(11px * var(--toc-scale));
   text-transform: none;
   letter-spacing: 0;
 }
 .toc-head button:hover { color: var(--accent); border-color: var(--accent); }
-:root { --rail-w: 190px; }
+:root {
+  --toc-scale: 1.44;
+  --rail-w: min(calc(190px * var(--toc-scale)), 40vw);
+}
 #rail {
   position: absolute;
   top: 0;
@@ -352,6 +351,35 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
 }
 #rail-list { flex: 1; overflow: auto; padding: 0 4px 8px; }
 .toc-item.current { color: var(--accent); font-weight: 600; }
+.toc-row { display: flex; align-items: center; }
+.toc-row .toc-item { flex: 1; min-width: 0; padding-left: 2px; }
+.toc-chev, .toc-spacer { flex: none; width: calc(18px * var(--toc-scale)); height: calc(22px * var(--toc-scale)); }
+.toc-chev { padding: 0; color: var(--quiet); font-size: calc(10px * var(--toc-scale)); text-align: center; }
+.toc-chev::before { content: "\25BE"; }
+.toc-chev[aria-expanded="false"]::before { content: "\25B8"; }
+.toc-chev:hover { color: var(--accent); }
+#sun { position: fixed; inset: 0; z-index: 4; pointer-events: none; }
+.pill {
+  position: absolute;
+  display: block;
+  max-width: calc(150px * var(--toc-scale));
+  height: calc(24px * var(--toc-scale));
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: calc(12px * var(--toc-scale));
+  background: var(--menu);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: calc(12.5px * var(--toc-scale));
+  line-height: calc(22px * var(--toc-scale));
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+.pill.kids { padding-right: 14px; }
+.pill:hover, .pill.on { color: var(--accent); border-color: var(--accent); }
 #toc-tip {
   position: fixed;
   display: none;
@@ -362,7 +390,7 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
   border-radius: 6px;
   box-shadow: var(--shadow);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--toc-scale));
   pointer-events: none;
   z-index: 5;
 }
@@ -370,6 +398,7 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
   display: block;
   width: 100%;
   padding: 5px 8px;
+  font-size: calc(12.5px * var(--toc-scale));
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
@@ -500,7 +529,7 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
       M8 4.2v9.6"/></svg>
   </button>
   <button class="spoke" id="toc-button" style="--a: 15deg; --d: 20ms"
-    aria-expanded="false" data-tip="Contents">
+    aria-pressed="false" data-tip="Contents: click to pin, hover to jump">
     <svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
   </button>
   <button class="spoke" id="aa" style="--a: 30deg; --d: 40ms"
@@ -571,14 +600,12 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
   </div>
   <div id="rail">
     <div class="toc-head"><span>Contents</span>
+      <button id="rail-fold" title="Fold all sections" aria-label="Fold all sections">&minus;</button>
+      <button id="rail-unfold" title="Unfold all sections" aria-label="Unfold all sections">+</button>
       <button id="rail-unpin" title="Unpin the contents">Unpin</button></div>
     <div id="rail-list"></div>
   </div>
-  <div id="toc" hidden>
-    <div class="toc-head"><span>Contents</span>
-      <button id="toc-pin" title="Keep the contents in the left margin">Pin</button></div>
-    <div id="toc-list"></div>
-  </div>
+  <div id="sun" hidden></div>
   <div id="toc-tip" role="tooltip"></div>
   <div id="menu" role="listbox" hidden>
     <input id="filter" placeholder="Find a guide, or paste a web address" spellcheck="false" autocomplete="off">
@@ -712,6 +739,7 @@ function setFan(open) {
 function closeFanSoon() {
   clearTimeout(fanTimer);
   fanTimer = setTimeout(() => {
+    if (sunOpen) return;
     // Keyboard focus keeps it open; a click's focus doesn't.
     if (!$("radial").querySelector(":focus-visible")) setFan(false);
   }, FAN_CLOSE_DELAY_MS);
@@ -745,8 +773,16 @@ function styleAttributes() {
   return ' data-theme="' + style.theme + '" style="' + css + '"';
 }
 
+// How much the contents' sizes are scaled: its text is two pixels
+// bigger than the reading text, and everything else follows.
+function tocScale() {
+  return (style.size + TOC_FONT_BONUS_PX) / TOC_DESIGN_FONT_PX;
+}
+
 function applyStyle() {
   document.documentElement.dataset.theme = style.theme;
+  document.documentElement.style.setProperty("--toc-scale", String(tocScale()));
+  closeSun();
   const view = $("view");
   const page = view && view.srcdoc && view.contentDocument;
   if (page && page.documentElement) styleElement(page.documentElement);
@@ -819,7 +855,6 @@ function buildStylePanel() {
 }
 
 function toggleStylePanel(open) {
-  if (open) closeToc();
   $("style").hidden = !open;
   $("aa").setAttribute("aria-expanded", String(open));
   if (open) closeMenu();
@@ -878,6 +913,7 @@ function onShow(message) {
   } else {
     view.src = message.url;
   }
+  folded = new Set();
   view.addEventListener("load", refreshRail);
   $("main").prepend(view);
 }
@@ -1282,7 +1318,6 @@ function open(path) {
 
 function openMenu() {
   toggleStylePanel(false);
-  closeToc();
   send({ type: "list" });
   $("menu").hidden = false;
   $("pick").setAttribute("aria-expanded", "true");
@@ -1296,20 +1331,18 @@ const MAX_TOC = 500;
 const TOC_INDENT_PX = 14;
 const TOC_SCROLL_MARGIN_PX = 24;
 const TIP_GAP_PX = 8;
+const TIP_NARROW_PX = 220;
 
 let tocPinned = false;
 let railItems = [];
+// Headings folded away in the pinned list, kept while the page stays.
+let folded = new Set();
 let railFrame = null;
 let railQueued = false;
 
 function readingDocument() {
   const view = $("view");
   return view && view.srcdoc ? view.contentDocument : null;
-}
-
-function closeToc() {
-  $("toc").hidden = true;
-  $("toc-button").setAttribute("aria-expanded", "false");
 }
 
 // The headings of the page shown, or null if the reader didn't draw it.
@@ -1331,47 +1364,105 @@ function showTip(item) {
   const box = item.getBoundingClientRect();
   tip.textContent = item.textContent;
   tip.style.maxWidth = Math.min(420, window.innerWidth - box.left - TIP_GAP_PX) + "px";
-  tip.style.left = box.left + "px";
+  if (window.innerWidth - box.left < TIP_NARROW_PX) {
+    // Near the right edge: grow leftwards instead.
+    tip.style.left = "auto";
+    tip.style.right = (window.innerWidth - box.right) + "px";
+    tip.style.maxWidth = Math.min(420, box.right - TIP_GAP_PX) + "px";
+  } else {
+    tip.style.right = "auto";
+    tip.style.left = box.left + "px";
+  }
   tip.style.top = box.top + "px";
   tip.style.minHeight = box.height + "px";
   tip.style.display = "block";
 }
 
-// Fills `list` with a button per heading; `picked` runs after a click.
-function fillHeadings(list, found, picked) {
+// The pinned list: a row per heading, with a fold button on those that
+// have sub-headings under them.
+function fillRail(found) {
+  const list = $("rail-list");
   list.textContent = "";
-  const items = [];
   const top = Math.min(...found.map((h) => Number(h.localName[1])));
-  for (const heading of found) {
+  const entries = [];
+  const open = [];
+  found.forEach((heading, index) => {
+    const depth = Number(heading.localName[1]) - top;
+    while (open.length && open[open.length - 1].depth >= depth) open.pop();
+    const parent = open.length ? open[open.length - 1] : null;
+    const text = heading.textContent.trim().replace(/\s+/g, " ");
+    const row = document.createElement("div");
+    row.className = "toc-row";
+    row.style.paddingLeft = (4 + depth * TOC_INDENT_PX * tocScale()) + "px";
     const item = document.createElement("button");
     item.className = "toc-item";
-    item.textContent = heading.textContent.trim().replace(/\s+/g, " ");
-    const depth = Number(heading.localName[1]) - top;
-    item.style.paddingLeft = (8 + depth * TOC_INDENT_PX) + "px";
+    item.textContent = text;
     item.addEventListener("click", () => {
       heading.scrollIntoView({ block: "start" });
-      picked();
+      hideTip();
     });
     item.addEventListener("mouseenter", () => showTip(item));
     item.addEventListener("mouseleave", hideTip);
-    list.append(item);
-    items.push({ heading, item });
+    const entry = { heading, item, row, depth, parent, kids: false,
+      key: index + ":" + text };
+    if (parent) parent.kids = true;
+    entries.push(entry);
+    open.push(entry);
+  });
+  for (const entry of entries) {
+    if (entry.kids) {
+      const chev = document.createElement("button");
+      chev.className = "toc-chev";
+      chev.setAttribute("aria-label", "Fold or unfold this section");
+      chev.addEventListener("click", () => {
+        if (folded.has(entry.key)) folded.delete(entry.key);
+        else folded.add(entry.key);
+        applyFolds(entries);
+        markCurrent();
+      });
+      entry.chev = chev;
+      entry.row.append(chev);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "toc-spacer";
+      entry.row.append(spacer);
+    }
+    entry.row.append(entry.item);
+    list.append(entry.row);
   }
-  return items;
+  applyFolds(entries);
+  return entries;
 }
 
-function fillToc() {
-  const found = pageHeadings();
-  if (found && found.length) {
-    fillHeadings($("toc-list"), found, closeToc);
-    return;
+// Folds every section that has sub-sections, or unfolds them all.
+function foldAll(fold) {
+  // A lone page title that holds everything stays open.
+  const roots = railItems.filter((entry) => entry.depth === 0).length;
+  const keep = (entry) => roots === 1 && entry.depth === 0;
+  folded = new Set(fold
+    ? railItems.filter((entry) => entry.kids && !keep(entry))
+      .map((entry) => entry.key)
+    : []);
+  applyFolds(railItems);
+  markCurrent();
+}
+
+// Hides the rows under folded headings.
+function applyFolds(entries) {
+  let skip = null;
+  for (const entry of entries) {
+    const isFolded = folded.has(entry.key);
+    if (entry.chev) {
+      entry.chev.setAttribute("aria-expanded", String(!isFolded));
+    }
+    if (skip !== null && entry.depth > skip) {
+      entry.row.hidden = true;
+      continue;
+    }
+    skip = null;
+    entry.row.hidden = false;
+    if (isFolded && entry.kids) skip = entry.depth;
   }
-  const none = document.createElement("div");
-  none.className = "none";
-  none.textContent = found ? "No headings on this page."
-    : "Contents are only shown for pages the reader draws.";
-  $("toc-list").textContent = "";
-  $("toc-list").append(none);
 }
 
 // Marks the section being read in the pinned list.
@@ -1384,6 +1475,8 @@ function markCurrent() {
     }
   }
   if (!now && railItems.length) now = railItems[0];
+  // Inside a folded section, the section that holds it is marked.
+  while (now && now.row.hidden && now.parent) now = now.parent;
   for (const entry of railItems) {
     entry.item.classList.toggle("current", entry === now);
   }
@@ -1408,36 +1501,159 @@ function refreshRail() {
   document.body.classList.toggle("rail", Boolean(found && found.length));
   $("toc-button").setAttribute("aria-pressed", String(tocPinned));
   if (!found || !found.length) return;
-  railItems = fillHeadings($("rail-list"), found, hideTip);
+  railItems = fillRail(found);
   const view = $("view");
   railFrame = view.contentWindow;
   railFrame.addEventListener("scroll", queueMark, { passive: true });
   markCurrent();
 }
 
-function setTocPinned(on) {
-  tocPinned = on;
-  closeToc();
-  refreshRail();
-  send({ type: "contents", on });
+/* ---- Hovering Contents: rings of sections around the corner ---------
+   The main sections fan out on a ring around the menu dot; pointing at
+   one that has sub-sections opens the next ring outward, and so on. */
+// The contents' text is this much bigger than the reading text; the
+// sizes in the CSS were drawn for a 12.5 px font.
+const TOC_FONT_BONUS_PX = 2;
+const TOC_DESIGN_FONT_PX = 12.5;
+const PILL_PITCH_PX = 26;
+const RING_FIRST_PX = 190;
+const RING_MAX_PX = 330;
+const RING_GAP_PX = 150;
+const RING_FILL_RAD = 1.45;
+const RING_EDGE_RAD = 0.05;
+const DOT_CENTRE_PX = 18;
+const SUN_CLOSE_MS = 250;
+const SUN_MARGIN_PX = 4;
+
+let sunTree = [];
+let sunPath = [];
+let sunOpen = false;
+let sunTimer = null;
+
+// Headings as a tree; a lone page title holding everything is skipped.
+function headingTree(found) {
+  const top = [];
+  const stack = [];
+  for (const heading of found) {
+    const level = Number(heading.localName[1]);
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+    const node = { heading, level, children: [], angle: 0,
+      text: heading.textContent.trim().replace(/\s+/g, " ") };
+    (stack.length ? stack[stack.length - 1].children : top).push(node);
+    stack.push(node);
+  }
+  return top.length === 1 && top[0].children.length ? top[0].children : top;
 }
 
-function toggleToc() {
-  if (tocPinned) {
-    setTocPinned(false);
-    return;
+function sunItems(depth) {
+  return depth === 0 ? sunTree : sunPath[depth - 1].children;
+}
+
+function placePill(pill, depth, node, radius, geometry) {
+  const x = geometry.x0 + geometry.sx * radius * Math.cos(node.angle);
+  const y = geometry.y0 + geometry.sy * radius * Math.sin(node.angle);
+  pill.style.left = x + "px";
+  pill.style.top = y + "px";
+  pill.style.transform = "translate(" + (geometry.sx < 0 ? "-100%" : "0")
+    + ", -50%)";
+}
+
+// Keeps a pill inside the window by sliding it sideways.
+function keepInside(pill) {
+  const box = pill.getBoundingClientRect();
+  const over = box.right - (window.innerWidth - SUN_MARGIN_PX);
+  const under = SUN_MARGIN_PX - box.left;
+  if (over > 0) pill.style.left = (parseFloat(pill.style.left) - over) + "px";
+  else if (under > 0) pill.style.left = (parseFloat(pill.style.left) + under) + "px";
+}
+
+function renderSun() {
+  const sun = $("sun");
+  sun.textContent = "";
+  const corner = document.body.dataset.corner || "";
+  const geometry = {
+    sx: corner.endsWith("right") ? -1 : 1,
+    sy: corner.startsWith("bottom") ? -1 : 1,
+  };
+  geometry.x0 = geometry.sx < 0 ? window.innerWidth - DOT_CENTRE_PX : DOT_CENTRE_PX;
+  geometry.y0 = geometry.sy < 0 ? window.innerHeight - DOT_CENTRE_PX : DOT_CENTRE_PX;
+  let radius = RING_FIRST_PX;
+  for (let depth = 0; depth <= sunPath.length; depth++) {
+    const items = sunItems(depth);
+    if (!items.length) break;
+    const pitch = PILL_PITCH_PX * tocScale();
+    radius = Math.min(RING_MAX_PX * tocScale(),
+      Math.max(radius, items.length * pitch / RING_FILL_RAD));
+    const step = Math.min(pitch / radius, (Math.PI / 2) / items.length);
+    const middle = depth === 0 ? Math.PI / 4 : sunPath[depth - 1].angle;
+    const last = step * (items.length - 1);
+    const start = Math.max(RING_EDGE_RAD,
+      Math.min(middle - last / 2, Math.PI / 2 - RING_EDGE_RAD - last));
+    items.forEach((node, index) => {
+      node.angle = start + step * index;
+      const pill = document.createElement("button");
+      pill.className = "pill" + (node.children.length ? " kids" : "")
+        + (sunPath[depth] === node ? " on" : "");
+      pill.textContent = node.text;
+      placePill(pill, depth, node, radius, geometry);
+      pill.addEventListener("mouseenter", () => {
+        clearTimeout(sunTimer);
+        showTip(pill);
+        const path = sunPath.slice(0, depth);
+        if (node.children.length) path.push(node);
+        if (path.length !== sunPath.length || path[depth] !== sunPath[depth]) {
+          sunPath = path;
+          renderSun();
+        }
+      });
+      pill.addEventListener("mouseleave", () => {
+        hideTip();
+        closeSunSoon();
+      });
+      pill.addEventListener("click", () => {
+        node.heading.scrollIntoView({ block: "start" });
+        closeSun();
+        setFan(false);
+      });
+      sun.append(pill);
+      keepInside(pill);
+    });
+    radius += RING_GAP_PX * tocScale();
   }
-  if (!$("toc").hidden) {
-    closeToc();
-    return;
-  }
-  toggleStylePanel(false);
-  closeMenu();
-  fillToc();
-  $("toc").hidden = false;
-  $("toc-button").setAttribute("aria-expanded", "true");
-  const first = $("toc-list").querySelector("button");
-  if (first) first.focus();
+}
+
+function openSun() {
+  clearTimeout(sunTimer);
+  if (sunOpen) return;
+  const found = pageHeadings();
+  if (!found || !found.length) return;
+  sunTree = headingTree(found);
+  sunPath = [];
+  sunOpen = true;
+  $("sun").hidden = false;
+  renderSun();
+}
+
+function closeSun() {
+  clearTimeout(sunTimer);
+  if (!sunOpen) return;
+  sunOpen = false;
+  sunPath = [];
+  $("sun").hidden = true;
+  $("sun").textContent = "";
+  hideTip();
+  closeFanSoon();
+}
+
+function closeSunSoon() {
+  clearTimeout(sunTimer);
+  sunTimer = setTimeout(closeSun, SUN_CLOSE_MS);
+}
+
+function setTocPinned(on) {
+  tocPinned = on;
+  refreshRail();
+  send({ type: "contents", on });
 }
 
 function closeMenu() {
@@ -1593,10 +1809,14 @@ $("filter").addEventListener("keydown", (event) => {
 });
 $("toc-button").addEventListener("click", () => {
   setFan(false);
-  toggleToc();
+  closeSun();
+  setTocPinned(!tocPinned);
 });
-$("toc-pin").addEventListener("click", () => setTocPinned(true));
+$("toc-button").addEventListener("mouseenter", openSun);
+$("toc-button").addEventListener("mouseleave", closeSunSoon);
 $("rail-unpin").addEventListener("click", () => setTocPinned(false));
+$("rail-fold").addEventListener("click", () => foldAll(true));
+$("rail-unfold").addEventListener("click", () => foldAll(false));
 $("aa").addEventListener("click", () => {
   setFan(false);
   toggleStylePanel($("style").hidden);
@@ -1615,7 +1835,6 @@ for (const button of document.querySelectorAll(".pin")) {
 $("close").addEventListener("click", () => send({ type: "close" }));
 document.addEventListener("mousedown", (event) => {
   if (!$("menu").hidden && !event.target.closest("#menu, #pick")) closeMenu();
-  if (!$("toc").hidden && !event.target.closest("#toc, #toc-button")) closeToc();
   if (!$("style").hidden && !event.target.closest("#style, #aa")) toggleStylePanel(false);
 });
 function escape() {
@@ -1623,7 +1842,6 @@ function escape() {
     setFan(false);
     if ($("radial").contains(document.activeElement)) document.activeElement.blur();
   } else if (!$("menu").hidden) closeMenu();
-  else if (!$("toc").hidden) closeToc();
   else if (!$("style").hidden) toggleStylePanel(false);
   else send({ type: "close" });
 }
@@ -1633,7 +1851,7 @@ function escape() {
 window.addEventListener("blur", () => {
   setFan(false);
   closeMenu();
-  closeToc();
+  closeSun();
   toggleStylePanel(false);
 });
 
