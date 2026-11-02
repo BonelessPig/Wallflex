@@ -10,6 +10,25 @@ patch number (0.x.**y**) for fixes only.
 
 ### Added
 
+- The reader's guide list has a Claude entry that shows claude.ai in a
+  second browser view (sign in once; it's kept with the reader's other
+  browser data). The Contents column then lists Claude's sidebar: New
+  chat, Chats, Projects and Artifacts. Leaving Claude closes the view.
+  Sign in with email; Google refuses sign-in from embedded browsers.
+  Claude takes the reader's style: light or dark to suit the theme, the
+  theme's page and text colours (labels and icons too), and the reading
+  font, size and line spacing for messages and code. On light themes
+  code is darkened, since Claude colours it for the account's own mode.
+  Claude's other text (thinking steps, labels, the reply box) takes the
+  reading font and is scaled to match the reading size, with its
+  padding and spacing (in Claude's compact layout). Contents shows or
+  hides the sidebar list; hidden, Claude's own sidebar has room to
+  show. The corner menu (with its fading backdrop),
+  guide list, Aa panel and contents rings open over Claude, as they do
+  over guides.
+- `tools\package.ps1` checks the reader's and settings pages' scripts
+  with `node --check` (a syntax error blanks the whole page).
+
 - The reader draws maths in Markdown guides (`$x^2$`, `$$...$$`), so
   converted LaTeX shows its formulas instead of raw TeX. Unreadable
   formulas stay as their source.
@@ -88,6 +107,8 @@ patch number (0.x.**y**) for fixes only.
   the corner menu. Dragging the window against a side of the screen
   still docks it, and dragging the menu dot undocks it. The Contents
   button no longer shows a caption.
+- The contents list's Unpin button. Press the Contents button in the
+  corner menu again to unpin it.
 
 ### Fixed
 

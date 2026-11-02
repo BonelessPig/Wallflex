@@ -27,9 +27,10 @@ use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    DC_BRUSH, FillRect, GetMonitorInfoW, GetStockObject, HBRUSH, HDC,
-    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
-    SetDCBrushColor,
+    CombineRgn, CreateRectRgn, CreateRoundRectRgn, DC_BRUSH, DeleteObject,
+    FillRect, GetMonitorInfoW, GetStockObject, HBRUSH, HDC, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, RGN_DIFF,
+    SetDCBrushColor, SetWindowRgn,
 };
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW,
@@ -47,21 +48,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DestroyWindow, GetClientRect,
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, HTBOTTOM,
     HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
-    HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
+    HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
     IDC_ARROW, KillTimer, LoadCursorW, MINMAXINFO, PostMessageW,
     PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
-    WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_SIZE, WM_TIMER,
-    WNDCLASSW, WNDPROC, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_POPUP,
+    SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow,
+    WA_INACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_ERASEBKGND,
+    WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCHITTEST,
+    WM_NCLBUTTONDOWN, WM_SIZE, WM_TIMER, WNDCLASSW, WNDPROC, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TOOLWINDOW, WS_POPUP,
     WS_THICKFRAME,
 };
 use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
-use super::webview::WebView;
+use super::webview::{Site, WebView};
 use super::{Event, Launch, with_reader};
+use crate::claude::{self, Hole, Section};
 use crate::convert;
 use crate::messages::{self, Request};
 use crate::place::{
@@ -93,6 +96,8 @@ const WM_DEACTIVATED: u32 = WM_APP + 2;
 const WM_ACTIVATED: u32 = WM_APP + 3;
 /// Posted when a conversion has finished on its thread.
 const WM_CONVERTED: u32 = WM_APP + 4;
+/// Posted when the Claude view's control has been made.
+pub(super) const WM_SITE_READY: u32 = WM_APP + 5;
 /// The low 16 bits of a message parameter.
 const LOW_WORD: usize = 0xFFFF;
 /// Bits in a word: where a message parameter's high word starts.
@@ -183,6 +188,23 @@ pub struct Reader {
     placed: Rect,
     /// Whether the user is resizing it.
     sizing: bool,
+    /// The Claude view, while the page is on Claude.
+    site: Option<Site>,
+    /// Where the page wants it (left, top, right, bottom) and whether
+    /// it wants it showing.
+    site_spot: ([i32; 4], bool),
+    /// Where the page's menu and panels are over it (see
+    /// [`claude::Hole`]), measured from the page's corner.
+    site_holes: Vec<Hole>,
+    /// The child window the Claude view sits in, kept on top of the
+    /// page's own browser (two browsers side by side in one window
+    /// don't keep their order, and the page's covered Claude's).
+    site_host: Option<HWND>,
+    /// The script giving claude.ai the reading style, once the page has
+    /// sent one.
+    site_look: Option<String>,
+    /// While the view is being made: the section to show once it is.
+    site_wait: Option<Section>,
 }
 
 impl Reader {
@@ -224,11 +246,20 @@ impl Reader {
             scale: Scale::new(BASE_DPI, 0),
             placed: Rect::default(),
             sizing: false,
+            site: None,
+            site_spot: ([0; 4], false),
+            site_holes: Vec::new(),
+            site_wait: None,
+            site_host: None,
+            site_look: None,
         })
     }
 
     /// Closes the browser, before the reader exits.
     pub fn close(self) {
+        if let Some(site) = &self.site {
+            site.close();
+        }
         self.view.close();
     }
 
@@ -256,6 +287,7 @@ impl Reader {
         self.hidden_at = None;
         self.place();
         self.view.set_visible(true);
+        self.place_site();
         self.shown = true;
         bring_to_front(self.hwnd);
         self.send_list();
@@ -272,6 +304,9 @@ impl Reader {
         // SAFETY: plain values; the result only says if it was visible.
         let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
         self.view.set_visible(false);
+        if let Some(site) = &self.site {
+            site.set_visible(false);
+        }
         self.hidden_at = deactivated.then(Instant::now);
         // SAFETY: plain values. If the timer can't start, the reader
         // just stays until it's closed some other way.
@@ -290,6 +325,9 @@ impl Reader {
         self.scale = scale;
         self.base_zoom = scale.zoom(screen.dpi);
         self.view.set_zoom(self.base_zoom * self.saved.zoom);
+        if let Some(site) = &self.site {
+            site.set_zoom(self.base_zoom * self.saved.zoom);
+        }
         let (rect, order) = if self.saved.pinned {
             let at = self.at;
             let edge = *self
@@ -519,6 +557,129 @@ impl Reader {
                 place::inset(from_win32(rect), sizing.sides, sizing.border);
             self.view.fit(to_win32(inner));
         }
+        self.place_site();
+    }
+
+    /// Puts the Claude view where the page asked, which is measured
+    /// from the browser's corner, and shows it if the page wants it and
+    /// the window is showing.
+    fn place_site(&self) {
+        let (Some(site), Some(host)) = (&self.site, self.site_host) else {
+            return;
+        };
+        let mut client = RECT::default();
+        // SAFETY: `client` is a valid place for the call to write.
+        if unsafe { GetClientRect(self.hwnd, &raw mut client) }.is_err() {
+            return;
+        }
+        let sizing = SIZING.get();
+        let inner =
+            place::inset(from_win32(client), sizing.sides, sizing.border);
+        let ([left, top, right, bottom], wanted) = self.site_spot;
+        let width = right.saturating_sub(left).max(0);
+        let height = bottom.saturating_sub(top).max(0);
+        let visible = self.shown && wanted;
+        let show = if visible {
+            SWP_SHOWWINDOW
+        } else {
+            SWP_HIDEWINDOW
+        };
+        // SAFETY: our own child window; plain values. If it fails the
+        // view stays where it was until the next placing.
+        let _ = unsafe {
+            SetWindowPos(
+                host,
+                Some(HWND_TOP),
+                inner.left.saturating_add(left),
+                inner.top.saturating_add(top),
+                width,
+                height,
+                SWP_NOACTIVATE | show,
+            )
+        };
+        cut_holes(
+            host,
+            [width, height],
+            &claude::local_holes(self.site_spot.0, &self.site_holes),
+        );
+        site.fit(RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        });
+        site.set_visible(visible);
+    }
+
+    /// Opens a part of claude.ai, starting the view if needed. The
+    /// browser makes it in its own time (it can't be waited for inside a
+    /// page request), and [`Self::finish_site`] shows the part then.
+    fn open_claude(&mut self, section: Section) {
+        if let Some(site) = &self.site {
+            site.navigate(section.url());
+        } else if self.site_wait.is_some() {
+            self.site_wait = Some(section);
+        } else {
+            let host = match self.site_host {
+                Some(host) => host,
+                None => match create_host(self.hwnd) {
+                    Ok(host) => {
+                        self.site_host = Some(host);
+                        host
+                    }
+                    Err(error) => {
+                        self.view.post(&messages::conversion_failed(&error));
+                        return;
+                    }
+                },
+            };
+            match self.view.begin_site(host, self.hwnd) {
+                Ok(()) => self.site_wait = Some(section),
+                Err(error) => {
+                    self.view.post(&messages::conversion_failed(&error));
+                }
+            }
+        }
+    }
+
+    /// The Claude view's control is ready: sets it up and shows the
+    /// part asked for.
+    fn finish_site(&mut self) {
+        let Some(section) = self.site_wait.take() else {
+            // Left Claude meanwhile: the view isn't wanted.
+            if let Ok(site) = WebView::finish_site() {
+                site.close();
+            }
+            return;
+        };
+        match WebView::finish_site() {
+            Ok(site) => {
+                site.set_zoom(self.base_zoom * self.saved.zoom);
+                if let Some(script) = &self.site_look {
+                    site.restyle(script.clone());
+                }
+                site.navigate(section.url());
+                self.site = Some(site);
+                self.place_site();
+            }
+            Err(error) => {
+                self.view.post(&messages::conversion_failed(&error));
+            }
+        }
+    }
+
+    /// Closes the Claude view, freeing its memory.
+    fn close_claude(&mut self) {
+        if let Some(site) = self.site.take() {
+            site.close();
+        }
+        self.site_spot.1 = false;
+        self.site_wait = None;
+        if let Some(host) = self.site_host.take() {
+            // SAFETY: our own child window, no longer used. If it can't
+            // be destroyed it goes with the reader's window.
+            let _ = unsafe { DestroyWindow(host) };
+        }
     }
 
     /// Acts on what the page or browser reported.
@@ -594,6 +755,25 @@ impl Reader {
             Request::Save(title, text) => {
                 let answer = messages::saved(&self.folder, &title, &text);
                 self.view.post(&answer);
+            }
+            Request::Claude(section) => self.open_claude(section),
+            Request::ClaudeView(rect, show, holes) => {
+                let appeared = show && !self.site_spot.1;
+                self.site_spot = (rect, show);
+                self.site_holes = holes;
+                self.place_site();
+                if let (true, Some(site)) = (appeared, &self.site) {
+                    site.focus();
+                }
+            }
+            Request::ClaudeOff => self.close_claude(),
+            Request::ClaudeStyle(css, mode) => {
+                if let Some(script) = claude::style_script(&css, mode) {
+                    if let Some(site) = &self.site {
+                        site.restyle(script.clone());
+                    }
+                    self.site_look = Some(script);
+                }
             }
             Request::Folder => {
                 // It's made at startup; this only matters if it was
@@ -833,7 +1013,10 @@ pub fn handle_message(
             // Focusing the page while hidden would activate the window.
             with_reader(|reader| {
                 if reader.shown {
-                    reader.view.focus();
+                    match &reader.site {
+                        Some(site) if reader.site_spot.1 => site.focus(),
+                        _ => reader.view.focus(),
+                    }
                 }
             });
             Some(LRESULT(0))
@@ -853,6 +1036,10 @@ pub fn handle_message(
         }
         WM_APPBAR => {
             with_reader(|reader| reader.on_appbar(wparam, lparam));
+            Some(LRESULT(0))
+        }
+        WM_SITE_READY => {
+            with_reader(Reader::finish_site);
             Some(LRESULT(0))
         }
         WM_CONVERTED => {
@@ -935,6 +1122,69 @@ fn create_window(
 /// Sets the colour behind the browser to `rgb`.
 fn set_background([r, g, b]: [u8; 3]) {
     BACKGROUND.set(COLORREF(u32::from_le_bytes([r, g, b, 0])));
+}
+
+/// Cuts `holes` (measured from its corner) out of the Claude view's
+/// window, so the page underneath shows there and takes the clicks; no
+/// holes gives it back its whole rectangle. `size` is the window's width
+/// and height: GDI refuses a region much larger than the screen (one of
+/// `i32::MAX` fails, and then nothing was cut).
+fn cut_holes(host: HWND, [width, height]: [i32; 2], holes: &[Hole]) {
+    if holes.is_empty() {
+        // SAFETY: our own child window; no region means the whole
+        // window. If it fails, the old holes stay until the next call.
+        let _ = unsafe { SetWindowRgn(host, None, true) };
+        return;
+    }
+    // SAFETY: GDI regions we make and free here, except `shape`, which
+    // Windows owns once `SetWindowRgn` takes it.
+    unsafe {
+        let shape = CreateRectRgn(0, 0, width, height);
+        if shape.is_invalid() {
+            return;
+        }
+        for &[left, top, right, bottom, round] in holes {
+            // The region's right and bottom edges are outside it.
+            let hole = CreateRoundRectRgn(
+                left,
+                top,
+                right.saturating_add(1),
+                bottom.saturating_add(1),
+                round,
+                round,
+            );
+            // A hole that fails to cut only leaves the view whole there.
+            let _ = CombineRgn(Some(shape), Some(shape), Some(hole), RGN_DIFF);
+            // Freeing can only fail for a bad handle, which leaks nothing.
+            let _ = DeleteObject(hole.into());
+        }
+        if SetWindowRgn(host, Some(shape), true) == 0 {
+            // Still ours when it wasn't taken; as above.
+            let _ = DeleteObject(shape.into());
+        }
+    }
+}
+
+/// Makes the (hidden) child window the Claude view sits in.
+fn create_host(parent: HWND) -> Result<HWND, String> {
+    // SAFETY: a system class and plain values; `parent` is our window.
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+            0,
+            0,
+            0,
+            0,
+            Some(parent),
+            None,
+            None,
+            None,
+        )
+    }
+    .map_err(|error| error.message())
 }
 
 /// Fills the window with [`BACKGROUND`], for `WM_ERASEBKGND` (whose

@@ -172,6 +172,59 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   parent's tier show in full; tiers above keep only the section leading
   on. Every tier has one width from the page's depth (`sunLevels`), so
   nothing shifts under the pointer when a deeper tier opens.
+  `claude.rs` + the page's Claude entry: a second WebView2 controller
+  (`Site` in `win32/webview.rs`, made on first use, closed on leaving)
+  laid over `#claude-slot`, inside its own `STATIC` child window raised
+  to `HWND_TOP` (two controllers side by side in one parent don't keep
+  their order: the page's covered Claude's, which loaded but showed
+  blank). It's made asynchronously (`begin_site`, `WM_SITE_READY`):
+  waiting for it inside a page request blocked every other event.
+  The page's `claudeStyle` turns the reading style into CSS for Claude's
+  design-system variables (`--cds-surface-*`, `--cds-text-primary`,
+  `--font-claude-response`, `--cds-font-size-prose`, ...; set on
+  `html, html *` with `!important`, since Claude sets them on many
+  elements and some inline) and a light/dark mode; `claude::style_script`
+  inserts it as a `<style>`'s text and holds `<html data-mode>` with a
+  MutationObserver on every element that has one (Claude's sidebar and
+  other parts carry their own, from the account's setting); `Site`
+  reruns it on each `DOMContentLoaded`. Secondary/muted text is the
+  theme's ink faded toward the page; code blocks are resized and, on
+  light themes, darkened by a filter (their token colours follow the
+  account's mode). These
+  names come from claude.ai's live CSS (Nov 2026) and may change.
+  Claude's interface text (`--cds-font-size-body`, `-caption`,
+  `--cmp-font-size` for the reply box, ...) is fixed in rem, so
+  `CLAUDE_TEXT_PX` scales each from the reading size in Claude's own
+  proportion to its 16px messages, and its root size (rem: padding,
+  gaps, control heights) is the reading size. Its sidebar sizes rows in
+  px (`--df-row-font`, `--df-row-h`, ...), scaled the same way
+  (`CLAUDE_SIDEBAR_PX`). Icons are sized by `width`/`height`
+  attributes in px, so the usual square sizes are restated in rem
+  (`CLAUDE_ICON_PX`). `style_script` also holds `data-density` at
+  Claude's own `compact`. Claude marks a few parts with the opposite of
+  the account's mode (the incognito frame, drawn in the text colour,
+  and its buttons); `style_script` keeps that relation (it remembers
+  the value Claude wrote, `wallflexWas`), and the style gives
+  `[data-mode=<opposite>]` the page and ink swapped. Its interface font (`--font-ui`, `--font-sans`, `--font-anthropic-sans`)
+  is the reading font too. The page reports the slot's
+  rectangle and `holes` (`syncClaude`, `claudeHoles`): rounded
+  rectangles where its fan's buttons, caption, list, Aa panel, rings
+  and tip are; `cut_holes` cuts them out of the host window with a
+  window region, so those show and take clicks over Claude. A hole only
+  shows the page's own background, so the fan's fading backdrop is
+  drawn in Claude as an `html::after` rule appended to the style
+  (`claudeShade`, the disc's computed gradient; both views share the
+  zoom, so page pixels carry over). Size the region
+  to the window: GDI refuses an `i32::MAX` one (that silently cut
+  nothing). To inspect claude.ai live, start the reader with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>
+  --remote-debugging-address=127.0.0.1` and use the DevTools protocol;
+  restart it without afterwards (the port reaches the signed-in
+  session). Requests name a fixed `Section` address only; links
+  outside Claude's hosts open in the browser. The rail lists the
+  sidebar sections instead of headings, shown while Contents is pinned
+  (the only way to unpin is the Contents spoke; there's no Unpin
+  button). Unpinned, the view is wide enough for Claude's own sidebar.
   `place.rs`: floating in the work area's corner nearest the click,
   or pinned as an app bar (`SHAppBarMessage`) on the nearer side;
   sizes scale by the larger of DPI and monitor height / 1080, and the
@@ -392,6 +445,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   `## [Unreleased]` in `CHANGELOG.md` as they're made. `tools\release.ps1`
   publishes the version in `Cargo.toml` (checks, package, tag, GitHub
   release with the changelog's notes).
+- `tools\package.ps1` also runs `node --check` on the `<script>` of
+  `shell.html` and `ui.html` (warns and skips without Node).
 - `tools\package.ps1` builds `dist\wallflex-<version>.zip` (exe,
   `docs/SETUP.md`, the default config, licences) and the installer
   `dist\wallflex-<version>-setup.exe` from `installer\wallflex.iss`

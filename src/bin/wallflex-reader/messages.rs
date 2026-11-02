@@ -7,7 +7,11 @@
 //! "style": STYLE}`, `{"type": "corner", "corner": NAME}` or
 //! `{"type": "convert", "path": NAME}` (HTML or LaTeX to Markdown with
 //! pandoc) or `{"type": "web", "url": ADDRESS}` (fetch a web page for
-//! reader mode). The app
+//! reader mode) or the Claude page's `{"type": "claude", "go": "new" |
+//! "chats" | "projects" | "artifacts"}`, `{"type": "claudeview", "rect":
+//! [L, T, R, B], "show": BOOL, "holes": [[L, T, R, B, ROUND], ...]}`,
+//! `{"type": "claudestyle", "css": CSS,
+//! "mode": "light" | "dark"}` and `{"type": "claudeoff"}`. The app
 //! answers with `list` (the guides, the last one shown, whether it's
 //! pinned and to which side, the style and the menu dot's corner),
 //! `show` (a guide: a reading page as `html`, a file to load as `url`,
@@ -21,6 +25,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::claude::{Hole, Mode, Section};
 use crate::convert;
 use crate::corner::Corner;
 use crate::guides::{self, Kind};
@@ -61,6 +66,16 @@ pub enum Request {
     Rail(u32),
     /// Save this Markdown as a new guide named after this title.
     Save(String, String),
+    /// Show this part of claude.ai (starting its view if needed).
+    Claude(Section),
+    /// Place the Claude view at this rectangle (left, top, right,
+    /// bottom, in device pixels of the page), show or hide it, and cut
+    /// these holes in it for the page's menu and panels.
+    ClaudeView([i32; 4], bool, Vec<Hole>),
+    /// Leave Claude: close its view.
+    ClaudeOff,
+    /// Style claude.ai with this stylesheet (not yet checked) and mode.
+    ClaudeStyle(String, Mode),
 }
 
 /// A request as the page sends it.
@@ -89,6 +104,18 @@ struct RawRequest {
     url: Option<String>,
     /// Where the page was pressed, for `move`.
     at: Option<(i32, i32)>,
+    /// A part of Claude's sidebar, for `claude`.
+    go: Option<Section>,
+    /// The Claude view's rectangle, for `claudeview`.
+    rect: Option<[i32; 4]>,
+    /// Whether the Claude view shows, for `claudeview`.
+    show: Option<bool>,
+    /// Where the page's menu and panels are over it, for `claudeview`.
+    holes: Option<Vec<Hole>>,
+    /// The stylesheet, for `claudestyle`.
+    css: Option<String>,
+    /// Claude's light or dark look, for `claudestyle`.
+    mode: Option<Mode>,
 }
 
 /// Reads a request from the page's JSON; `None` if it isn't one.
@@ -109,6 +136,14 @@ pub fn parse_request(json: &str) -> Option<Request> {
         "save" => Request::Save(raw.title?, raw.text?),
         "contents" => Request::Contents(raw.on?),
         "rail" => Request::Rail(raw.width?),
+        "claude" => Request::Claude(raw.go?),
+        "claudeview" => Request::ClaudeView(
+            raw.rect?,
+            raw.show?,
+            raw.holes.unwrap_or_default(),
+        ),
+        "claudeoff" => Request::ClaudeOff,
+        "claudestyle" => Request::ClaudeStyle(raw.css?, raw.mode?),
         _ => return None,
     })
 }
@@ -334,6 +369,43 @@ mod tests {
     use super::{Navigation, Request, converted, judge, parse_request, show};
     use crate::corner::Corner;
     use crate::place::Edge;
+
+    #[test]
+    fn reads_claude_requests() {
+        use crate::claude::{Mode, Section};
+        assert_eq!(
+            parse_request(r#"{"type":"claude","go":"chats"}"#),
+            Some(Request::Claude(Section::Chats))
+        );
+        assert_eq!(parse_request(r#"{"type":"claude","go":"x"}"#), None);
+        assert_eq!(
+            parse_request(
+                r#"{"type":"claudeview","rect":[1,2,3,4],"show":true}"#
+            ),
+            Some(Request::ClaudeView([1, 2, 3, 4], true, Vec::new()))
+        );
+        assert_eq!(
+            parse_request(
+                r#"{"type":"claudeview","rect":[0,0,9,9],"show":true,
+                "holes":[[1,2,3,4,5]]}"#
+            ),
+            Some(Request::ClaudeView(
+                [0, 0, 9, 9],
+                true,
+                vec![[1, 2, 3, 4, 5]]
+            ))
+        );
+        assert_eq!(
+            parse_request(r#"{"type":"claudeoff"}"#),
+            Some(Request::ClaudeOff)
+        );
+        assert_eq!(
+            parse_request(
+                r#"{"type":"claudestyle","css":"a{}","mode":"dark"}"#
+            ),
+            Some(Request::ClaudeStyle("a{}".to_owned(), Mode::Dark))
+        );
+    }
 
     #[test]
     fn reads_requests() {

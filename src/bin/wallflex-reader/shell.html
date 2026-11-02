@@ -363,7 +363,20 @@ body.rail #rail { display: flex; }
 body.rail iframe { margin-left: var(--rail-w); width: calc(100% - var(--rail-w)); }
 body[data-corner="top-left"] #rail { padding-top: 44px; }
 body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
+/* The Claude page: the app lays claude.ai's own view over this slot, and
+   the rail lists Claude's sidebar. The top band keeps the menu dot
+   uncovered. */
+#claude-slot {
+  display: none;
+  position: absolute;
+  inset: 48px 0 0 0;
+}
+body[data-corner^="bottom"] #claude-slot { inset: 0 0 48px 0; }
+body.claude #claude-slot { display: block; }
+body.claude.rail #claude-slot { left: var(--rail-w); }
+body.claude .toc-head { display: none; }
 @media (max-width: 520px) {
+  body.claude.rail #claude-slot { left: 0; }
   body.rail #rail { display: none; }
   body.rail iframe { margin-left: 0; width: 100%; }
 }
@@ -619,10 +632,10 @@ body[data-corner="bottom-left"] #rail { padding-bottom: 44px; }
     <div id="rail-grip" title="Drag to resize (double-click for the usual width)"></div>
     <div class="toc-head">
       <button id="rail-fold" title="Fold all sections" aria-label="Fold all sections">&minus;</button>
-      <button id="rail-unfold" title="Unfold all sections" aria-label="Unfold all sections">+</button>
-      <button id="rail-unpin" title="Unpin the contents">Unpin</button></div>
+      <button id="rail-unfold" title="Unfold all sections" aria-label="Unfold all sections">+</button></div>
     <div id="rail-list"></div>
   </div>
+  <div id="claude-slot"></div>
   <div id="sun" hidden></div>
   <div id="toc-tip" role="tooltip"></div>
   <div id="menu" role="listbox" hidden>
@@ -816,6 +829,7 @@ function applyStyle() {
   const page = view && view.srcdoc && view.contentDocument;
   if (page && page.documentElement) styleElement(page.documentElement);
   fillStylePanel();
+  sendClaudeStyle();
 }
 
 function setStyle(change) {
@@ -911,7 +925,7 @@ function onList(message) {
     $("error").hidden = true;
     return;
   }
-  if (!webUrl && (!current || !guides.some((g) => g.path === current))) {
+  if (!claudeOn && !webUrl && (!current || !guides.some((g) => g.path === current))) {
     open(message.start);
   }
   if (!$("menu").hidden) fillMenu();
@@ -1292,6 +1306,7 @@ function onSaved(message) {
 }
 
 function openWeb(address) {
+  leaveClaude();
   const text = address.trim();
   if (!text) return;
   closeMenu();
@@ -1341,6 +1356,7 @@ function onWeb(message) {
 
 function open(path) {
   if (!path) return;
+  leaveClaude();
   webUrl = null;
   webPage = null;
   webStack = [];
@@ -1547,6 +1563,14 @@ function refreshRail() {
     railFrame = null;
   }
   railItems = [];
+  // On the Claude page the column is Claude's sections, shown while
+  // Contents is pinned like a guide's headings.
+  if (claudeOn) {
+    document.body.classList.toggle("rail", tocPinned);
+    $("toc-button").setAttribute("aria-pressed", String(tocPinned));
+    fillClaudeRail();
+    return;
+  }
   const found = tocPinned ? pageHeadings() : null;
   document.body.classList.toggle("rail", Boolean(found && found.length));
   $("toc-button").setAttribute("aria-pressed", String(tocPinned));
@@ -1858,6 +1882,374 @@ function setTocPinned(on) {
   send({ type: "contents", on });
 }
 
+/* ---- Claude: claude.ai in the app's own view ------------------------
+   The rail shows Claude's sidebar sections; the page only reports where
+   the view goes and when something of the page's own covers it. */
+const CLAUDE_SECTIONS = [
+  ["new", "New chat"], ["chats", "Chats"],
+  ["projects", "Projects"], ["artifacts", "Artifacts"],
+];
+let claudeOn = false;
+let claudeSection = "new";
+
+function fillClaudeRail() {
+  const list = $("rail-list");
+  list.textContent = "";
+  for (const [key, label] of CLAUDE_SECTIONS) {
+    const row = document.createElement("div");
+    row.className = "toc-row";
+    row.style.paddingLeft = "4px";
+    const item = document.createElement("button");
+    item.className = "toc-item" + (key === claudeSection ? " current" : "");
+    item.textContent = label;
+    item.addEventListener("click", () => openClaude(key));
+    const spacer = document.createElement("span");
+    spacer.className = "toc-spacer";
+    row.append(spacer, item);
+    list.append(row);
+  }
+}
+
+function openClaude(section) {
+  if (!claudeOn) {
+    claudeOn = true;
+    current = null;
+    webUrl = null;
+    webPage = null;
+    webStack = [];
+    removeView();
+    $("empty").hidden = true;
+    $("error").hidden = true;
+    document.body.classList.add("claude");
+    setTitle("Claude");
+    document.title = "Claude";
+  }
+  claudeSection = section;
+  refreshRail();
+  sendClaudeStyle();
+  send({ type: "claude", go: section });
+  closeMenu();
+  syncClaude();
+}
+
+// The reading style as a stylesheet for claude.ai. Claude keeps its
+// look in variables set on many elements, so these are set on all of
+// them, ahead of its own. Message text takes the reading font, size and
+// spacing; the page, its cards and the text take the theme's colours.
+const DARK_THEMES = ["dark", "black"];
+const CODE_SHARE = 0.875;
+const LIGHT_CODE_FILTER = "brightness(0.5) saturate(1.6)";
+// Claude's other text sizes (its thinking steps, labels, the reply box)
+// are fixed, in px at its own 16px message size; they're scaled with the
+// reading size so they keep the same proportion to the messages, but
+// never below a legible floor.
+const CLAUDE_PROSE_PX = 16;
+const CLAUDE_TEXT_PX = {
+  "--cds-font-size-body": 14,
+  "--cds-font-size-body--own": 14,
+  "--cds-font-size-caption": 12,
+  "--cds-font-size-footnote": 13,
+  "--cds-font-size-heading": 15,
+  "--cds-font-size-title": 22,
+  "--cmp-font-size": 15,
+};
+// Each size's line height, by the same names with "font-size" swapped.
+const CLAUDE_LEADING = {
+  "--cds-font-size-body": "--cds-leading-body",
+  "--cds-font-size-body--own": "--cds-leading-body--own",
+  "--cds-font-size-caption": "--cds-leading-caption",
+  "--cds-font-size-footnote": "--cds-leading-footnote",
+  "--cds-font-size-heading": "--cds-leading-heading",
+  "--cds-font-size-title": "--cds-leading-title",
+  "--cmp-font-size": "--cmp-line-height",
+};
+const CLAUDE_MIN_PX = 9;
+const CLAUDE_ICON_PX = [12, 14, 16, 18, 20, 24, 28, 32];
+// Claude's own sidebar (shown when the view is wide enough, with Contents
+// unpinned) sizes its rows in px, at Claude's 16px; scaled the same way.
+// Its two text sizes keep the legible floor.
+const CLAUDE_SIDEBAR_TEXT_PX = { "--df-row-font": 13, "--df-group-font": 12 };
+const CLAUDE_SIDEBAR_PX = {
+  "--df-row-h": 26,
+  "--df-row-ctl": 20,
+  "--df-row-gap": 4,
+  "--df-icon-size": 16,
+  "--df-leading-slot": 24,
+  "--df-iconless-pad": 8,
+  "--df-group-pt": 12,
+  "--df-new-circle-size": 18,
+  "--df-new-circle-glyph": 13,
+  "--df-chrome-icon-size": 16,
+  "--df-footer-btn-size": 24,
+  "--df-sidebar-width": 288,
+};
+// The corner fan's backdrop (#radial .disc): its opacity when open, and
+// how it fades in and out.
+const DISC_OPACITY = 0.85;
+const DISC_FADE = "opacity 400ms cubic-bezier(0.7, 0, 0.84, 0)";
+const DISC_SHOW = "opacity 0.15s";
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+// "#rrggbb" as [r, g, b] in 0..1.
+function hexRgb(hex) {
+  return [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255);
+}
+
+// `share` of `a` with the rest `b`, as "#rrggbb".
+function mixHex(a, b, share) {
+  const [x, y] = [hexRgb(a), hexRgb(b)];
+  return "#" + x.map((value, i) => {
+    const mixed = Math.round((value * share + y[i] * (1 - share)) * 255);
+    return mixed.toString(16).padStart(2, "0");
+  }).join("");
+}
+
+// "#rrggbb" as Claude's "H S% L%".
+function hslTriple(hex) {
+  const [r, g, b] = hexRgb(hex);
+  const high = Math.max(r, g, b);
+  const low = Math.min(r, g, b);
+  const light = (high + low) / 2;
+  const span = high - low;
+  let hue = 0;
+  let sat = 0;
+  if (span > 0) {
+    sat = span / (1 - Math.abs(2 * light - 1));
+    if (high === r) hue = ((g - b) / span) % 6;
+    else if (high === g) hue = (b - r) / span + 2;
+    else hue = (r - g) / span + 4;
+    hue = (hue * 60 + 360) % 360;
+  }
+  const pct = (n) => (n * 100).toFixed(1) + "%";
+  return `${hue.toFixed(1)} ${pct(sat)} ${pct(light)}`;
+}
+
+function claudeStyle() {
+  let theme = style.theme;
+  if (theme === "auto") theme = darkQuery.matches ? "dark" : "light";
+  const [, , bg, ink] = THEMES.find((t) => t[0] === theme) || THEMES[1];
+  const dark = DARK_THEMES.includes(theme);
+  const font = (FONTS[style.font] || FONTS.segoe)[1];
+  const leading = (SPACINGS[style.spacing] || SPACINGS.normal)[1];
+  const card = dark
+    ? `color-mix(in srgb, ${bg} 90%, ${ink})`
+    : `color-mix(in srgb, ${bg} 55%, #fff)`;
+  const side = `color-mix(in srgb, ${bg} 95%, ${ink})`;
+  // Labels, icons and badges: the ink faded toward the page, never
+  // Claude's own greys, which belong to its own light or dark palette.
+  const secondary = `color-mix(in srgb, ${ink} 78%, ${bg})`;
+  const muted = `color-mix(in srgb, ${ink} 62%, ${bg})`;
+  const vars = {
+    "--font-claude-response": font,
+    "--font-user-message": font,
+    // Its interface text (labels, thinking steps, the reply box) too.
+    "--font-ui": font,
+    "--font-sans": font,
+    "--font-anthropic-sans": font,
+    "--cds-font-size-prose": style.size + "px",
+    "--cds-leading-prose": Math.round(style.size * leading) + "px",
+    "--cds-page-bg": bg,
+    "--cds-surface-0": bg,
+    "--cds-surface-1": bg,
+    "--cds-surface-2": card,
+    "--cds-surface-3": card,
+    "--df-web-sidebar-bg": side,
+    "--cds-text-primary": ink,
+    "--cds-text-secondary": secondary,
+    "--cds-text-muted": muted,
+    "--cds-text-stays-secondary": secondary,
+    "--muted-as-secondary": secondary,
+    "--df-sidebar-muted": muted,
+    "--control-ink": ink,
+    // Older parts take "H S% L%" triples inside hsl().
+    "--text-000": hslTriple(ink),
+    "--text-100": hslTriple(ink),
+    "--text-200": hslTriple(mixHex(ink, bg, 0.78)),
+    "--text-300": hslTriple(mixHex(ink, bg, 0.78)),
+    "--text-400": hslTriple(mixHex(ink, bg, 0.62)),
+    "--text-500": hslTriple(mixHex(ink, bg, 0.62)),
+  };
+  for (const [name, px] of Object.entries(CLAUDE_TEXT_PX)) {
+    const size = Math.max(CLAUDE_MIN_PX, Math.round(style.size * px / CLAUDE_PROSE_PX));
+    vars[name] = size + "px";
+    vars[CLAUDE_LEADING[name]] = Math.round(size * leading) + "px";
+  }
+  vars["--cds-font-size-code"] = Math.round(style.size * CODE_SHARE) + "px";
+  const scaled = (px) => Math.round(style.size * px / CLAUDE_PROSE_PX);
+  for (const [name, px] of Object.entries(CLAUDE_SIDEBAR_TEXT_PX)) {
+    vars[name] = Math.max(CLAUDE_MIN_PX, scaled(px)) + "px";
+  }
+  for (const [name, px] of Object.entries(CLAUDE_SIDEBAR_PX)) {
+    vars[name] = scaled(px) + "px";
+  }
+  const lines = Object.entries(vars)
+    .map(([name, value]) => `  ${name}: ${value} !important;`);
+  // Code blocks: sized with the reading text (Claude's code is 7/8 of
+  // its prose), beating its own !important size class (the :not(#id)
+  // only adds weight). Their token colours follow the account's own
+  // mode, not ours, so on light themes they're darkened, hues kept.
+  const codeSize = Math.round(style.size * CODE_SHARE);
+  const code = "pre code:not(#wallflex-none), pre code:not(#wallflex-none) *";
+  // Claude's padding, gaps and control heights are in rem, so its root
+  // size is the reading size too (with the app holding its compact
+  // density), keeping them in proportion to the text.
+  const root = Math.max(CLAUDE_MIN_PX, style.size);
+  // Parts Claude marks with the opposite mode (the incognito frame's
+  // buttons, on a frame in the text colour) swap the page and ink.
+  const flipped = {
+    "--cds-surface-0": ink,
+    "--cds-surface-1": ink,
+    "--cds-surface-2": `color-mix(in srgb, ${ink} 90%, ${bg})`,
+    "--cds-surface-3": `color-mix(in srgb, ${ink} 90%, ${bg})`,
+    "--cds-text-primary": bg,
+    "--cds-text-secondary": `color-mix(in srgb, ${bg} 78%, ${ink})`,
+    "--cds-text-muted": `color-mix(in srgb, ${bg} 62%, ${ink})`,
+    "--control-ink": bg,
+    "--text-000": hslTriple(bg),
+    "--text-100": hslTriple(bg),
+    "--text-200": hslTriple(mixHex(bg, ink, 0.78)),
+    "--text-300": hslTriple(mixHex(bg, ink, 0.78)),
+    "--text-400": hslTriple(mixHex(bg, ink, 0.62)),
+    "--text-500": hslTriple(mixHex(bg, ink, 0.62)),
+  };
+  const other = dark ? "light" : "dark";
+  const flippedLines = Object.entries(flipped)
+    .map(([name, value]) => `  ${name}: ${value} !important;`);
+  let css = "html, html * {\n" + lines.join("\n") + "\n}\n"
+    + `[data-mode="${other}"], [data-mode="${other}"] * {\n`
+    + flippedLines.join("\n") + "\n}\n"
+    + `html { font-size: ${root}px !important; }\n`
+    + `html, body { background: ${bg} !important; }\n`
+    + `${code} { font-size: ${codeSize}px !important;`
+    + ` line-height: ${Math.round(codeSize * leading)}px !important; }\n`;
+  if (!dark) {
+    css += `pre code:not(#wallflex-none) { filter: ${LIGHT_CODE_FILTER}; }\n`;
+  }
+  // Icons are sized by their width and height attributes, in px, so they
+  // don't follow the root size and would spill out of their (smaller)
+  // buttons: the usual square sizes are given again in rem.
+  for (const px of CLAUDE_ICON_PX) {
+    const rem = px / CLAUDE_PROSE_PX;
+    css += `svg[width="${px}"][height="${px}"] { width: ${rem}rem !important;`
+      + ` height: ${rem}rem !important; }\n`;
+  }
+  return { css, mode: dark ? "dark" : "light" };
+}
+
+// The fan's fade, drawn in Claude as well: a hole in the view can only
+// show this page's own background, so the hole is just the fan's solid
+// middle and its buttons, and Claude draws the same backdrop under it
+// (its view has this page's zoom, so page pixels carry over).
+function claudeShade() {
+  const radial = $("radial");
+  const disc = radial.querySelector(".disc");
+  const box = disc.getBoundingClientRect();
+  const slot = $("claude-slot").getBoundingClientRect();
+  const look = getComputedStyle(disc);
+  const fading = radial.classList.contains("fading");
+  const shown = radial.classList.contains("open") && !fading;
+  return "html::after { content: \"\"; position: fixed;"
+    + " z-index: 2147483647; pointer-events: none;"
+    + ` left: ${box.left - slot.left}px; top: ${box.top - slot.top}px;`
+    + ` width: ${box.width}px; height: ${box.height}px;`
+    + ` border-radius: ${look.borderRadius};`
+    + ` background: ${look.backgroundImage};`
+    + ` opacity: ${shown ? DISC_OPACITY : 0};`
+    + ` transition: ${fading ? DISC_FADE : DISC_SHOW}; }\n`;
+}
+
+let claudeSent = "";
+
+function sendClaudeStyle() {
+  if (!claudeOn) return;
+  const { css, mode } = claudeStyle();
+  const full = css + claudeShade();
+  if (full + mode === claudeSent) return;
+  claudeSent = full + mode;
+  send({ type: "claudestyle", css: full, mode });
+}
+darkQuery.addEventListener("change", () => {
+  if (style.theme === "auto") sendClaudeStyle();
+});
+
+function leaveClaude() {
+  if (!claudeOn) return;
+  claudeOn = false;
+  claudeSent = "";
+  document.body.classList.remove("claude");
+  send({ type: "claudeoff" });
+  refreshRail();
+}
+
+// The view is the app's own window over this page, so it would hide
+// the fan, the guide list, the Aa panel and the rings. Instead the app
+// cuts a hole in it where each of them is (a rounded rectangle: left,
+// top, right, bottom and the corners' diameter, in device pixels), and
+// they show and take clicks as they do over a guide.
+const MAX_HOLES = 64;
+
+function holeAt(box, round, k) {
+  return [box.left, box.top, box.right, box.bottom, round]
+    .map((n) => Math.round(n * k));
+}
+
+// An element's hole, rounded like its corners; null when it's not shown.
+function holeOf(element, k) {
+  const box = element.getBoundingClientRect();
+  if (!box.width || !box.height) return null;
+  const corner = getComputedStyle(element).borderTopLeftRadius;
+  const radius = corner.endsWith("%")
+    ? box.width * parseFloat(corner) / 100
+    : parseFloat(corner) || 0;
+  return holeAt(box, Math.min(radius * 2, box.width, box.height), k);
+}
+
+// Over Claude the fan's backdrop is Claude's own copy (claudeShade), and
+// only its buttons are holes: a hole shows this page's background, with
+// the buttons' shadows, which would end in a hard edge at the hole's.
+function claudeHoles(k) {
+  const holes = [];
+  const radial = $("radial");
+  if (radial.classList.contains("open")) {
+    holes.push(holeOf($("hub"), k));
+    radial.querySelectorAll(".spoke").forEach((spoke) => holes.push(holeOf(spoke, k)));
+    if ($("caption").classList.contains("on")) holes.push(holeOf($("caption"), k));
+  }
+  for (const id of ["menu", "style"]) {
+    if (!$(id).hidden) holes.push(holeOf($(id), k));
+  }
+  if (!$("sun").hidden) {
+    $("sun").querySelectorAll(".pill").forEach((pill) => holes.push(holeOf(pill, k)));
+  }
+  if ($("toc-tip").style.display !== "none") holes.push(holeOf($("toc-tip"), k));
+  return holes.filter(Boolean).slice(0, MAX_HOLES);
+}
+
+// Tells the app where the view goes and where to cut it.
+function syncClaude() {
+  if (!claudeOn) return;
+  const r = $("claude-slot").getBoundingClientRect();
+  const k = window.devicePixelRatio;
+  send({
+    type: "claudeview",
+    rect: [r.left, r.top, r.right, r.bottom].map((n) => Math.round(n * k)),
+    show: true,
+    holes: claudeHoles(k),
+  });
+  sendClaudeStyle();
+}
+// The spokes slide out: cut their holes again where they land.
+$("radial").addEventListener("transitionend", syncClaude);
+const claudeSizes = new ResizeObserver(syncClaude);
+for (const id of ["claude-slot", "menu", "style", "caption", "toc-tip"]) {
+  claudeSizes.observe($(id));
+}
+const claudeWatch = new MutationObserver(syncClaude);
+for (const id of ["radial", "menu", "style", "caption", "toc-tip"]) {
+  claudeWatch.observe($(id), { attributes: true });
+}
+claudeWatch.observe($("sun"), { attributes: true, childList: true });
+
 function closeMenu() {
   $("menu").hidden = true;
   $("pick").setAttribute("aria-expanded", "false");
@@ -1877,11 +2269,29 @@ function fillMenu() {
     none.textContent = guides.length ? "No guides match." : "No guides yet.";
     list.append(none);
   }
+  if (!words.length || "claude".includes(words.join(" "))) {
+    shown.push({ claude: true, path: "", title: "Claude" });
+  }
   if (looksLikeAddress($("filter").value)) {
     shown.push({ web: $("filter").value.trim(), path: "", title: "" });
   }
   let folder = null;
   shown.forEach((guide, index) => {
+    if (guide.claude) {
+      const row = document.createElement("button");
+      row.className = "item" + (claudeOn ? " current" : "");
+      row.setAttribute("role", "option");
+      row.dataset.index = String(index);
+      const label = document.createElement("span");
+      label.textContent = "Claude (claude.ai)";
+      const tag = document.createElement("span");
+      tag.className = "kind";
+      tag.textContent = "WEB";
+      row.append(label, tag);
+      row.addEventListener("click", () => choose(index));
+      list.append(row);
+      return;
+    }
     if (guide.web) {
       const row = document.createElement("button");
       row.className = "item";
@@ -1951,6 +2361,10 @@ function setActive(index) {
 
 function choose(index) {
   const guide = shown[index];
+  if (guide && guide.claude) {
+    openClaude(claudeSection);
+    return;
+  }
   if (guide && guide.web) {
     openWeb(guide.web);
     return;
@@ -2016,7 +2430,6 @@ $("toc-button").addEventListener("click", () => {
 });
 $("toc-button").addEventListener("mouseenter", openSun);
 $("toc-button").addEventListener("mouseleave", closeSunSoon);
-$("rail-unpin").addEventListener("click", () => setTocPinned(false));
 $("rail-grip").addEventListener("pointerdown", (event) => {
   $("rail-grip").setPointerCapture(event.pointerId);
   $("rail-grip").classList.add("drag");
