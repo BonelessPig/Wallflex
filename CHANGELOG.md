@@ -8,6 +8,8 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-02
+
 ### Changed
 
 - Closing the guides reader (the X, Esc, the book icon or clicking
@@ -255,7 +257,8 @@ The first release.
 - Tray menu (settings, log, start with Windows, quit), `--preview` to
   render widgets to a BMP, and a setup guide for friends.
 
-[Unreleased]: https://github.com/BonelessPig/Wallflex/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/BonelessPig/Wallflex/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/BonelessPig/Wallflex/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/BonelessPig/Wallflex/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/BonelessPig/Wallflex/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/BonelessPig/Wallflex/compare/v0.3.0...v0.4.0
