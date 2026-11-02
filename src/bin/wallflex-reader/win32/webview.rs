@@ -456,6 +456,16 @@ impl Site {
         let _ = unsafe { self.webview.Navigate(&HSTRING::from(url)) };
     }
 
+    /// The address shown now (claude.ai's own page changes included);
+    /// `None` if it can't be read.
+    pub fn source(&self) -> Option<String> {
+        let mut uri = PWSTR::null();
+        // SAFETY: `uri` is a valid place for the call to write; the
+        // string it gets is ours to free, which `take_pwstr` does.
+        unsafe { self.webview.Source(&raw mut uri) }.ok()?;
+        Some(take_pwstr(uri))
+    }
+
     /// Fits the control to `bounds` in the window's client area.
     pub fn fit(&self, bounds: RECT) {
         // SAFETY: COM calls on a live interface. If they fail the view

@@ -20,6 +20,8 @@ const HOSTS: [&str; 2] = ["claude.ai", "anthropic.com"];
 
 /// The longest stylesheet the page may send, in bytes.
 pub const MAX_CSS: usize = 8192;
+/// Where a new chat starts.
+const NEW_CHAT: &str = "https://claude.ai/new";
 /// The `<style>` element's id in claude.ai's page.
 const STYLE_ID: &str = "wallflex-style";
 
@@ -167,16 +169,23 @@ pub enum Section {
     Projects,
     /// Artifacts.
     Artifacts,
+    /// Wherever the reader was in Claude when it last closed.
+    Last,
 }
 
 impl Section {
-    /// The address that shows this section.
-    pub const fn url(self) -> &'static str {
+    /// The address that shows this section; `last` is the address the
+    /// reader closed on, used for [`Self::Last`] if it's still one of
+    /// Claude's (else a new chat).
+    pub fn url(self, last: Option<&str>) -> &str {
         match self {
-            Self::New => "https://claude.ai/new",
+            Self::New => NEW_CHAT,
             Self::Chats => "https://claude.ai/recents",
             Self::Projects => "https://claude.ai/projects",
             Self::Artifacts => "https://claude.ai/artifacts",
+            Self::Last => {
+                last.filter(|url| is_claude_host(url)).unwrap_or(NEW_CHAT)
+            }
         }
     }
 }
@@ -204,8 +213,8 @@ pub fn is_claude_host(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_CSS, MAX_HOLES, Mode, Section, is_claude_host, local_holes,
-        style_script,
+        MAX_CSS, MAX_HOLES, Mode, NEW_CHAT, Section, is_claude_host,
+        local_holes, style_script,
     };
 
     #[test]
@@ -247,8 +256,15 @@ mod tests {
         assert_eq!(read("\"new\""), Some(Section::New));
         assert_eq!(read("\"artifacts\""), Some(Section::Artifacts));
         assert_eq!(read("\"settings\""), None);
-        assert!(is_claude_host(Section::Chats.url()));
-        assert!(is_claude_host(Section::Projects.url()));
+        assert!(is_claude_host(Section::Chats.url(None)));
+        assert!(is_claude_host(Section::Projects.url(None)));
+        // The saved address only counts for `Last`, and only on Claude.
+        let chat = "https://claude.ai/chat/1";
+        assert_eq!(read("\"last\""), Some(Section::Last));
+        assert_eq!(Section::Last.url(Some(chat)), chat);
+        assert_eq!(Section::New.url(Some(chat)), NEW_CHAT);
+        assert_eq!(Section::Last.url(Some("https://evil.com/")), NEW_CHAT);
+        assert_eq!(Section::Last.url(None), NEW_CHAT);
     }
 
     #[test]

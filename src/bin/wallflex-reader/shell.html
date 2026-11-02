@@ -916,19 +916,86 @@ function onList(message) {
   guides = message.guides;
   $("where").textContent = message.where;
   setPinned(message.pinned);
+  if (!resumed) resume(message.resume || {});
   const empty = guides.length === 0;
-  $("empty").hidden = !empty;
-  if (empty) {
+  $("empty").hidden = !empty || claudeOn;
+  if (empty && !claudeOn) {
     current = null;
     setTitle("Guides");
     removeView();
     $("error").hidden = true;
     return;
   }
-  if (!claudeOn && !webUrl && (!current || !guides.some((g) => g.path === current))) {
+  if (!claudeOn && !webUrl && !resumingWeb && !opening
+    && (!current || !guides.some((g) => g.path === current))) {
     open(message.start);
   }
   if (!$("menu").hidden) fillMenu();
+}
+
+/* ---- Where the reader is ---------------------------------------------
+   Closing ends the reader, so it tells the app where it is (the web page,
+   null for a guide, and how far down, in SCROLL_FULLths) a moment after
+   scrolling stops; the app saves it on closing and hands it back in the
+   first list, and the reader opens there again. On Claude the app reads
+   the address itself. */
+const SCROLL_FULL = 10000;
+const PLACE_QUIET_MS = 500;
+let resumed = false;
+let resumingWeb = false;
+// The guide asked for and not yet shown: a second list meanwhile (one
+// comes as the window shows, one as the page is ready) mustn't open it
+// again, which would also lose the place it opens at.
+let opening = null;
+let resumeScroll = 0;
+let placeTimer = 0;
+
+function resume(place) {
+  resumed = true;
+  resumeScroll = Number(place.scroll) || 0;
+  if (place.claude) {
+    resumeScroll = 0;
+    openClaude("last");
+  } else if (place.web) {
+    resumingWeb = true;
+    openWeb(place.web);
+  }
+}
+
+// How far down `win` is scrolled, in SCROLL_FULLths.
+function scrollShare(win) {
+  const box = win.document.scrollingElement;
+  const room = box ? box.scrollHeight - box.clientHeight : 0;
+  return room > 0 ? Math.round(SCROLL_FULL * box.scrollTop / room) : 0;
+}
+
+function scrollToShare(win, share) {
+  const box = win.document.scrollingElement;
+  if (!box) return;
+  box.scrollTop = share / SCROLL_FULL * (box.scrollHeight - box.clientHeight);
+}
+
+function sendPlace() {
+  clearTimeout(placeTimer);
+  const doc = readingDocument();
+  const scroll = doc ? scrollShare(doc.defaultView) : 0;
+  send({ type: "place", url: webUrl, scroll });
+}
+
+function queuePlace() {
+  clearTimeout(placeTimer);
+  placeTimer = setTimeout(sendPlace, PLACE_QUIET_MS);
+}
+
+// A reading page has loaded: back to where it was if it's the one the
+// reader closed on, then follow its scrolling.
+function placeLoaded(view, share) {
+  if (view.srcdoc) {
+    const win = view.contentWindow;
+    if (share) requestAnimationFrame(() => scrollToShare(win, share));
+    win.addEventListener("scroll", queuePlace, { passive: true });
+  }
+  sendPlace();
 }
 
 function removeView() {
@@ -937,6 +1004,9 @@ function removeView() {
 }
 
 function onShow(message) {
+  opening = null;
+  const share = resumeScroll;
+  resumeScroll = 0;
   current = message.path;
   setTitle(message.title);
   document.title = message.title;
@@ -960,6 +1030,7 @@ function onShow(message) {
   }
   folded = new Set();
   view.addEventListener("load", refreshRail);
+  view.addEventListener("load", () => placeLoaded(view, share));
   $("main").prepend(view);
 }
 
@@ -1327,11 +1398,17 @@ function restoreTitle() {
 }
 
 function onWeb(message) {
+  const resuming = resumingWeb;
+  resumingWeb = false;
   let page = null;
   if (!message.error) {
     try { page = readable(message.html, message.url); } catch { page = null; }
   }
   if (!page) {
+    if (resuming) {
+      resumeScroll = 0;
+      send({ type: "list" });
+    }
     backing = false;
     restoreTitle();
     showError("Can't read this page", message.error
@@ -1360,6 +1437,7 @@ function open(path) {
   webUrl = null;
   webPage = null;
   webStack = [];
+  opening = path;
   send({ type: "open", path });
 }
 

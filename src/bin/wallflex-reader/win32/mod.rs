@@ -1,11 +1,11 @@
 //! The reader's Win32 side: one borderless window holding a `WebView2`
-//! control, kept hidden until the book icon asks for it.
+//! control, shown where the book icon was clicked.
 //!
 //! Only one copy runs. A second start (another click on the book icon)
 //! hands its `--at` point to the first copy with `WM_COPYDATA` and
-//! exits; the first then shows or hides itself. Hidden for
-//! [`window::EXIT_AFTER_MS`], it exits, so the browser's memory goes
-//! back to Windows.
+//! exits; the first then closes. Closing ends the process, so the
+//! browser's memory goes back to Windows. A start while a closing copy
+//! is still finishing waits for it to go, then opens.
 //!
 //! This module (and its children) may use `unsafe`, like Wallflex's
 //! own `src/win32`; every block says why it's sound.
@@ -19,7 +19,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM,
+    LRESULT, POINT, WPARAM,
 };
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
@@ -57,7 +58,7 @@ const COPY_AT: usize = 0x5752_4154;
 /// `WM_COPYDATA` tag asking the running copy to exit.
 const COPY_QUIT: usize = 0x5752_5155;
 /// How many times a second copy looks for the first copy's window
-/// (which may still be starting).
+/// (which may still be starting), or for a closing copy to finish.
 const FIND_TRIES: u32 = 30;
 /// The wait between those looks.
 const FIND_WAIT: Duration = Duration::from_millis(100);
@@ -107,15 +108,10 @@ thread_local! {
 ///
 /// What stopped it starting.
 pub fn run(launch: &Launch) -> Result<(), String> {
-    // SAFETY: plain values; the name is a static string. The handle is
-    // kept until the process ends, which releases it.
-    let mutex = unsafe { CreateMutexW(None, false, MUTEX) };
-    // SAFETY: reads the calling thread's last error, set just above.
-    let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
-    let _mutex = mutex.map_err(|e| e.message())?;
-    if already {
-        return forward(launch.at);
-    }
+    // The handle is kept until the process ends, which releases it.
+    let Some(_mutex) = claim(launch.at)? else {
+        return Ok(());
+    };
     // SAFETY: once per thread, before any COM use; balanced below.
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
         .ok()
@@ -159,34 +155,58 @@ fn start(launch: &Launch) -> Result<(), String> {
     Ok(())
 }
 
-/// Hands `at` to the running copy, waiting a little for its window.
-fn forward(at: Option<(i32, i32)>) -> Result<(), String> {
+/// Takes the one-copy lock, or hands `at` to the copy holding it
+/// (`None`: handed over). A copy that's closing holds the lock a moment
+/// after its window has gone; then this waits for it to finish.
+fn claim(at: Option<(i32, i32)>) -> Result<Option<HANDLE>, String> {
     let (x, y) = at.unwrap_or_else(pointer);
     let text = format!("{x},{y}");
+    for _ in 0..FIND_TRIES {
+        // SAFETY: plain values; the name is a static string.
+        let mutex = unsafe { CreateMutexW(None, false, MUTEX) };
+        // SAFETY: reads the calling thread's last error, set just above.
+        let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+        let mutex = mutex.map_err(|e| e.message())?;
+        if !already {
+            return Ok(Some(mutex));
+        }
+        // SAFETY: our own handle, not used again. Holding it would keep
+        // the lock alive after the other copy has gone; if it can't be
+        // closed, this start just ends up handing over or giving up.
+        let _ = unsafe { CloseHandle(mutex) };
+        if send_point(&text)? {
+            return Ok(None);
+        }
+        std::thread::sleep(FIND_WAIT);
+    }
+    Err("the running reader didn't answer".to_owned())
+}
+
+/// Hands `text` (the point, `X,Y`) to the running copy's window. False
+/// if there's no window (still starting, or already gone) or the copy
+/// is ending and didn't take it.
+fn send_point(text: &str) -> Result<bool, String> {
+    // SAFETY: the class name is a static string.
+    let Ok(hwnd) = (unsafe { FindWindowW(CLASS, PCWSTR::null()) }) else {
+        return Ok(false);
+    };
     let data = COPYDATASTRUCT {
         dwData: COPY_AT,
         cbData: u32::try_from(text.len()).map_err(|e| e.to_string())?,
         lpData: text.as_ptr().cast_mut().cast(),
     };
-    for _ in 0..FIND_TRIES {
-        // SAFETY: the class name is a static string.
-        if let Ok(hwnd) = unsafe { FindWindowW(CLASS, PCWSTR::null()) } {
-            let address = std::ptr::from_ref(&data).expose_provenance();
-            // SAFETY: `data` and the text it points to outlive the call,
-            // which returns once the window has read them.
-            unsafe {
-                SendMessageW(
-                    hwnd,
-                    WM_COPYDATA,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(address.cast_signed())),
-                );
-            }
-            return Ok(());
-        }
-        std::thread::sleep(FIND_WAIT);
-    }
-    Err("the running reader didn't answer".to_owned())
+    let address = std::ptr::from_ref(&data).expose_provenance();
+    // SAFETY: `data` and the text it points to outlive the call, which
+    // returns once the window has read them.
+    let taken = unsafe {
+        SendMessageW(
+            hwnd,
+            WM_COPYDATA,
+            Some(WPARAM(0)),
+            Some(LPARAM(address.cast_signed())),
+        )
+    };
+    Ok(taken.0 != 0)
 }
 
 /// Asks the running copy to exit. False if none is running.
@@ -283,12 +303,18 @@ extern "system" fn window_proc(
 ) -> LRESULT {
     if msg == WM_COPYDATA {
         if is_quit(lparam) {
+            // Saves where the reader was, as any close does.
+            with_reader(|reader| reader.quit(false));
             // SAFETY: our own window; WM_DESTROY then ends the loop.
             let _ = unsafe { DestroyWindow(hwnd) };
             return LRESULT(1);
         }
-        if let Some(at) = copied_point(lparam) {
-            with_reader(|reader| reader.toggle(at));
+        if copied_point(lparam).is_some() {
+            // Taken (1) unless the reader is ending; then the other copy
+            // waits for it to go and opens instead.
+            let mut taken = true;
+            with_reader(|reader| taken = reader.clicked_again());
+            return LRESULT(isize::from(taken));
         }
         return LRESULT(1);
     }

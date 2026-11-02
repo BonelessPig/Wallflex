@@ -1,12 +1,16 @@
 //! The reader's window: borderless, with rounded corners and the system
 //! shadow, and no taskbar button. Floating, it sits in the corner of the
-//! work area nearest the book icon and hides when it loses focus.
+//! work area nearest the book icon and closes when it loses focus.
 //! Pinned, it's an app bar docked full height to the nearer side, so
 //! maximised windows leave room for it, and it stays until closed.
 //! Either way it can be resized: the panel from any side or corner, the
 //! pane from its inner side, by a thin strip left around the browser.
 //! The panel can also be moved by dragging the page's menu dot, and then
 //! stays where it was put.
+//!
+//! Closing ends the reader, so the browser's memory goes back to
+//! Windows; `reader.json` keeps where it was, and the next start opens
+//! there again.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -14,7 +18,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_COLOR;
 use windows::Win32::Foundation::{
@@ -49,11 +52,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, HTBOTTOM,
     HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
     HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    IDC_ARROW, KillTimer, LoadCursorW, MINMAXINFO, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-    SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SWP_SHOWWINDOW, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow,
-    WA_INACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY,
+    IDC_ARROW, LoadCursorW, MINMAXINFO, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SW_HIDE, SWP_HIDEWINDOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, WA_INACTIVE,
+    WINDOW_EX_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_DESTROY,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_ERASEBKGND,
     WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCHITTEST,
     WM_NCLBUTTONDOWN, WM_SIZE, WM_TIMER, WNDCLASSW, WNDPROC, WS_CHILD,
@@ -74,20 +77,19 @@ use crate::place::{
 use crate::saved::Saved;
 use crate::web;
 
-/// How long the window may stay hidden before the reader exits, in
-/// milliseconds.
-pub const EXIT_AFTER_MS: u32 = 120_000;
 /// The smallest and largest zoom remembered, on top of the usual size.
 const MIN_ZOOM: f64 = 0.25;
 /// See [`MIN_ZOOM`].
 const MAX_ZOOM: f64 = 5.0;
 /// Zoom changes smaller than this aren't worth saving.
 const ZOOM_STEP: f64 = 0.001;
-/// The timer that counts that down.
+/// Ends the reader a moment after it closed on losing the focus.
 const EXIT_TIMER: usize = 1;
-/// A book-icon click this soon after the window hid itself (because the
-/// same click took the focus away) leaves it hidden.
-const TOGGLE_GRACE: Duration = Duration::from_millis(800);
+/// How long that moment is, in milliseconds. A click on the book icon
+/// takes the focus first, and then starts a second copy that hands its
+/// point here: this copy must still be here to take it, or the second
+/// would open the reader again at once.
+const CLOSE_GRACE_MS: u32 = 800;
 /// The app bar's notifications.
 const WM_APPBAR: u32 = WM_APP + 1;
 /// Posted when the window loses the focus.
@@ -98,6 +100,9 @@ const WM_ACTIVATED: u32 = WM_APP + 3;
 const WM_CONVERTED: u32 = WM_APP + 4;
 /// Posted when the Claude view's control has been made.
 pub(super) const WM_SITE_READY: u32 = WM_APP + 5;
+/// Posted to end the reader once it has closed (not done inside a
+/// browser event, which mustn't destroy the browser's window).
+const WM_FINISH: u32 = WM_APP + 6;
 /// The low 16 bits of a message parameter.
 const LOW_WORD: usize = 0xFFFF;
 /// Bits in a word: where a message parameter's high word starts.
@@ -149,6 +154,16 @@ thread_local! {
     static BACKGROUND: Cell<COLORREF> = const { Cell::new(COLORREF(0)) };
 }
 
+/// How the reader is closing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Closing {
+    /// It lost the focus, and waits a moment for the click that took it
+    /// (see [`CLOSE_GRACE_MS`]).
+    Lingering,
+    /// It's ending as soon as it can.
+    Ending,
+}
+
 /// A monitor, as far as placing the window cares.
 #[derive(Clone, Copy)]
 struct Screen {
@@ -178,8 +193,8 @@ pub struct Reader {
     shown: bool,
     /// Whether it's registered as an app bar.
     appbar: bool,
-    /// When it last hid itself on losing the focus.
-    hidden_at: Option<Instant>,
+    /// How it's closing, once it is.
+    closing: Option<Closing>,
     /// The page's zoom for this monitor, before the user's own.
     base_zoom: f64,
     /// How much bigger than given the window is on its monitor.
@@ -241,7 +256,7 @@ impl Reader {
             at: (0, 0),
             shown: false,
             appbar: false,
-            hidden_at: None,
+            closing: None,
             base_zoom: 1.0,
             scale: Scale::new(BASE_DPI, 0),
             placed: Rect::default(),
@@ -263,28 +278,9 @@ impl Reader {
         self.view.close();
     }
 
-    /// The book icon was clicked at `at`: shows the window there, or
-    /// hides it if it's showing.
-    pub fn toggle(&mut self, at: (i32, i32)) {
-        if self.shown {
-            self.hide(false);
-        } else if self
-            .hidden_at
-            .take()
-            .is_some_and(|hidden| hidden.elapsed() < TOGGLE_GRACE)
-        {
-            // The click that hid the window: it stays hidden.
-        } else {
-            self.show(at);
-        }
-    }
-
     /// Shows the window next to `at` and brings it to the front.
     pub fn show(&mut self, at: (i32, i32)) {
-        // SAFETY: plain values; a timer that isn't running is fine.
-        let _ = unsafe { KillTimer(Some(self.hwnd), EXIT_TIMER) };
         self.at = at;
-        self.hidden_at = None;
         self.place();
         self.view.set_visible(true);
         self.place_site();
@@ -293,9 +289,12 @@ impl Reader {
         self.send_list();
     }
 
-    /// Hides the window (`deactivated`: because it lost the focus) and
-    /// starts the countdown to exiting.
-    fn hide(&mut self, deactivated: bool) {
+    /// Closes the reader (`deactivated`: because it lost the focus):
+    /// hides it at once, saves where it was, and ends it once the window
+    /// can go (a moment later if it lost the focus; see
+    /// [`CLOSE_GRACE_MS`]). Once shown, the reader is only hidden by
+    /// closing, so a reader that isn't showing is already closing.
+    pub fn quit(&mut self, deactivated: bool) {
         if !self.shown {
             return;
         }
@@ -307,12 +306,49 @@ impl Reader {
         if let Some(site) = &self.site {
             site.set_visible(false);
         }
-        self.hidden_at = deactivated.then(Instant::now);
-        // SAFETY: plain values. If the timer can't start, the reader
-        // just stays until it's closed some other way.
-        let _ = unsafe {
-            SetTimer(Some(self.hwnd), EXIT_TIMER, EXIT_AFTER_MS, None)
-        };
+        self.note_claude();
+        self.remember();
+        // SAFETY: plain values on our own window.
+        let waiting = deactivated
+            && unsafe {
+                SetTimer(Some(self.hwnd), EXIT_TIMER, CLOSE_GRACE_MS, None)
+            } != 0;
+        self.closing = Some(if waiting {
+            Closing::Lingering
+        } else {
+            Closing::Ending
+        });
+        if !waiting {
+            // SAFETY: posting to our own window; plain values. If it
+            // can't be posted the reader stays, hidden, until Wallflex
+            // asks it to quit.
+            let _ = unsafe {
+                PostMessageW(Some(self.hwnd), WM_FINISH, WPARAM(0), LPARAM(0))
+            };
+        }
+    }
+
+    /// The book icon was clicked again: closes the reader. While it
+    /// lingers, this is the click that closed it, and it stays closed.
+    /// False if the click is for a new copy, since this one is ending.
+    pub fn clicked_again(&mut self) -> bool {
+        if self.closing == Some(Closing::Ending) {
+            return false;
+        }
+        self.quit(false);
+        true
+    }
+
+    /// Notes where Claude is, to open there next time: its address while
+    /// its view is open, nothing once the page has left Claude (kept as
+    /// it was while the view is still being made).
+    fn note_claude(&mut self) {
+        if let Some(site) = &self.site {
+            self.saved.claude =
+                site.source().filter(|url| claude::is_claude_host(url));
+        } else if self.site_wait.is_none() {
+            self.saved.claude = None;
+        }
     }
 
     /// Moves the window where it belongs: floating in the corner nearest
@@ -616,7 +652,7 @@ impl Reader {
     /// page request), and [`Self::finish_site`] shows the part then.
     fn open_claude(&mut self, section: Section) {
         if let Some(site) = &self.site {
-            site.navigate(section.url());
+            site.navigate(section.url(self.saved.claude.as_deref()));
         } else if self.site_wait.is_some() {
             self.site_wait = Some(section);
         } else {
@@ -658,7 +694,7 @@ impl Reader {
                 if let Some(script) = &self.site_look {
                     site.restyle(script.clone());
                 }
-                site.navigate(section.url());
+                site.navigate(section.url(self.saved.claude.as_deref()));
                 self.site = Some(site);
                 self.place_site();
             }
@@ -726,7 +762,13 @@ impl Reader {
                     self.saved.side,
                 ));
             }
-            Request::Close => self.hide(false),
+            Request::Close => self.quit(false),
+            Request::Place(url, scroll) => {
+                // Saved when the reader closes, not on every scroll.
+                self.saved.web =
+                    url.filter(|url| web::normalize(url).is_some());
+                self.saved.scroll = scroll;
+            }
             Request::Move(at) => self.drag(at),
             Request::Style(style) => {
                 self.saved.style = style.checked();
@@ -953,6 +995,19 @@ fn finish_job(target: usize, answer: String, busy: &AtomicBool) {
         unsafe { PostMessageW(Some(hwnd), WM_CONVERTED, WPARAM(0), LPARAM(0)) };
 }
 
+/// The window lost the focus (noted a moment ago): a floating reader
+/// closes, unless the focus has come back since (showing the window can
+/// take it away and back).
+fn on_deactivated(hwnd: HWND) {
+    // SAFETY: plain call.
+    let focused = unsafe { GetForegroundWindow() } == hwnd;
+    with_reader(|reader| {
+        if !focused && !reader.saved.pinned {
+            reader.quit(true);
+        }
+    });
+}
+
 /// Handles the window's own messages; `None` passes one to the default
 /// handler. Changes the reader only through [`with_reader`], since some
 /// arrive while it's busy (moving the window sends `WM_SIZE`).
@@ -998,15 +1053,7 @@ pub fn handle_message(
             None
         }
         WM_DEACTIVATED => {
-            // Showing the window can take the focus away and back; only
-            // a focus that's still elsewhere now counts.
-            // SAFETY: plain call.
-            let focused = unsafe { GetForegroundWindow() } == hwnd;
-            with_reader(|reader| {
-                if !focused && !reader.saved.pinned {
-                    reader.hide(true);
-                }
-            });
+            on_deactivated(hwnd);
             Some(LRESULT(0))
         }
         WM_ACTIVATED => {
@@ -1025,13 +1072,15 @@ pub fn handle_message(
             with_reader(|reader| reader.fit());
             Some(LRESULT(0))
         }
-        WM_TIMER if wparam.0 == EXIT_TIMER => {
+        _ if msg == WM_FINISH
+            || (msg == WM_TIMER && wparam.0 == EXIT_TIMER) =>
+        {
             // SAFETY: our own window; WM_DESTROY then ends the loop.
             let _ = unsafe { DestroyWindow(hwnd) };
             Some(LRESULT(0))
         }
         WM_CLOSE => {
-            with_reader(|reader| reader.hide(false));
+            with_reader(|reader| reader.quit(false));
             Some(LRESULT(0))
         }
         WM_APPBAR => {

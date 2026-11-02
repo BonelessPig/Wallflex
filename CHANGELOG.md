@@ -8,6 +8,14 @@ patch number (0.x.**y**) for fixes only.
 
 ## [Unreleased]
 
+### Changed
+
+- Closing the guides reader (the X, Esc, the book icon or clicking
+  elsewhere) now quits it at once instead of keeping it hidden for two
+  minutes, so its memory is freed straight away. It opens again where
+  you left off: the same guide or web page scrolled to the same place,
+  or the same Claude page.
+
 ## [0.6.0] - 2026-11-01
 
 ### Added

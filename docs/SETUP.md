@@ -165,8 +165,9 @@ kept beside it and link to other guides.
   for its sub-sections. Click any to jump there.
 
 The reader needs Microsoft Edge WebView2, which comes with Windows 11.
-It only uses memory while it's open and quits two minutes after it's
-hidden.
+It only uses memory while it's open: closing it quits it, and it opens
+again where you left off (the guide or web page and how far down, or
+the Claude page).
 
 `[panel]` hides parts you don't want (`cpu`, `network`, `ram`, `ssd`,
 or `gpus = [1]` for only the first GPU); by default everything this PC

@@ -4,8 +4,8 @@
 //!
 //! It's a separate program so Wallflex itself stays light: the reader
 //! uses `WebView2` (Edge's engine, part of Windows 11), which costs real
-//! memory, but only while the reader runs. It exits a couple of minutes
-//! after its window is hidden.
+//! memory, but only while the reader runs. Closing it ends it; it opens
+//! again where it was.
 
 // Release builds have no console window; debug builds keep one for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]

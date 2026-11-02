@@ -3,7 +3,9 @@
 //! guide shown, the sizes it was resized to, where the floating panel
 //! was dragged to, how far the page is zoomed
 //! (Ctrl and the mouse wheel), the reading style (theme, font, size,
-//! spacing) and the corner the menu dot sits in.
+//! spacing), the corner the menu dot sits in, and where the reader was
+//! when it closed (the web page or Claude address, and how far down), so
+//! it opens there again.
 
 use std::path::Path;
 
@@ -15,6 +17,8 @@ use crate::style::Style;
 
 /// The file's name, next to the settings file.
 pub const FILE: &str = "reader.json";
+/// [`Saved::scroll`] at the very bottom of the page.
+pub const SCROLL_FULL: u32 = 10_000;
 
 /// What's remembered.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -46,6 +50,14 @@ pub struct Saved {
     /// The pinned contents column's width in page pixels; `None` for
     /// the usual width.
     pub rail: Option<u32>,
+    /// How far down the guide or web page was scrolled when the reader
+    /// closed, in [`SCROLL_FULL`]ths (0 is the top).
+    pub scroll: u32,
+    /// The web page being read (reader mode) when the reader closed.
+    pub web: Option<String>,
+    /// The claude.ai address shown when the reader closed (checked
+    /// before it's opened again).
+    pub claude: Option<String>,
 }
 
 impl Default for Saved {
@@ -62,6 +74,9 @@ impl Default for Saved {
             corner: Corner::default(),
             contents: false,
             rail: None,
+            scroll: 0,
+            web: None,
+            claude: None,
         }
     }
 }
@@ -76,6 +91,7 @@ impl Saved {
             .unwrap_or_default();
         Self {
             style: saved.style.clone().checked(),
+            scroll: saved.scroll.min(SCROLL_FULL),
             ..saved
         }
     }
@@ -94,7 +110,7 @@ impl Saved {
 
 #[cfg(test)]
 mod tests {
-    use super::Saved;
+    use super::{SCROLL_FULL, Saved};
     use crate::corner::Corner;
     use crate::place::Edge;
     use crate::style::Style;
@@ -118,6 +134,9 @@ mod tests {
             corner: Corner::BottomRight,
             contents: true,
             rail: Some(240),
+            scroll: 5_000,
+            web: Some("https://en.wikipedia.org/wiki/Rust".to_owned()),
+            claude: Some("https://claude.ai/chat/1".to_owned()),
         };
         saved.save(&path).unwrap();
         let loaded = Saved::load(&path);
@@ -136,5 +155,15 @@ mod tests {
                 ..Saved::default()
             }
         );
+    }
+
+    #[test]
+    fn keeps_scroll_in_range() {
+        let path = std::env::temp_dir()
+            .join(format!("wallflex-reader-s{}.json", std::process::id()));
+        std::fs::write(&path, "{\"scroll\":99999}").unwrap();
+        let loaded = Saved::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.scroll, SCROLL_FULL);
     }
 }

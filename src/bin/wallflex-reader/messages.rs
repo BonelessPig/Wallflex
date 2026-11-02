@@ -7,13 +7,16 @@
 //! "style": STYLE}`, `{"type": "corner", "corner": NAME}` or
 //! `{"type": "convert", "path": NAME}` (HTML or LaTeX to Markdown with
 //! pandoc) or `{"type": "web", "url": ADDRESS}` (fetch a web page for
-//! reader mode) or the Claude page's `{"type": "claude", "go": "new" |
-//! "chats" | "projects" | "artifacts"}`, `{"type": "claudeview", "rect":
+//! reader mode), `{"type": "place", "url": ADDRESS | null, "scroll": N}`
+//! (where it is, to open there next time) or the Claude page's
+//! `{"type": "claude", "go": "new" | "chats" | "projects" | "artifacts" |
+//! "last"}`, `{"type": "claudeview", "rect":
 //! [L, T, R, B], "show": BOOL, "holes": [[L, T, R, B, ROUND], ...]}`,
 //! `{"type": "claudestyle", "css": CSS,
 //! "mode": "light" | "dark"}` and `{"type": "claudeoff"}`. The app
 //! answers with `list` (the guides, the last one shown, whether it's
-//! pinned and to which side, the style and the menu dot's corner),
+//! pinned and to which side, the style, the menu dot's corner and where
+//! to `resume`),
 //! `show` (a guide: a reading page as `html`, a file to load as `url`,
 //! or an `error`), `converted` (the new guide's `path`, or an `error`),
 //! `web` (the page's `html` and final `url`, with the reading page's
@@ -30,7 +33,7 @@ use crate::convert;
 use crate::corner::Corner;
 use crate::guides::{self, Kind};
 use crate::place::Edge;
-use crate::saved::Saved;
+use crate::saved::{SCROLL_FULL, Saved};
 use crate::style::Style;
 use crate::web;
 
@@ -45,7 +48,7 @@ pub enum Request {
     Open(String),
     /// Dock against this side, or float again if already docked there.
     Pin(Edge),
-    /// Hide the window.
+    /// Close the reader.
     Close,
     /// Open the guides folder in Explorer.
     Folder,
@@ -74,6 +77,9 @@ pub enum Request {
     ClaudeView([i32; 4], bool, Vec<Hole>),
     /// Leave Claude: close its view.
     ClaudeOff,
+    /// Where the page is: the web page shown in reader mode (`None` for
+    /// a guide) and how far down, in [`crate::saved::SCROLL_FULL`]ths.
+    Place(Option<String>, u32),
     /// Style claude.ai with this stylesheet (not yet checked) and mode.
     ClaudeStyle(String, Mode),
 }
@@ -100,8 +106,10 @@ struct RawRequest {
     title: Option<String>,
     /// The Markdown to save, for `save`.
     text: Option<String>,
-    /// The address, for `web`.
+    /// The address, for `web` and `place`.
     url: Option<String>,
+    /// How far down the page is scrolled, for `place`.
+    scroll: Option<u32>,
     /// Where the page was pressed, for `move`.
     at: Option<(i32, i32)>,
     /// A part of Claude's sidebar, for `claude`.
@@ -144,14 +152,16 @@ pub fn parse_request(json: &str) -> Option<Request> {
         ),
         "claudeoff" => Request::ClaudeOff,
         "claudestyle" => Request::ClaudeStyle(raw.css?, raw.mode?),
+        "place" => Request::Place(raw.url, raw.scroll?.min(SCROLL_FULL)),
         _ => return None,
     })
 }
 
 /// The `list` answer: every guide in `folder`, the one to show first
 /// (the last one shown if it's still there, else the first), whether
-/// the reader is pinned (and to which side), the reading style and the
-/// corner the menu dot sits in.
+/// the reader is pinned (and to which side), the reading style, the
+/// corner the menu dot sits in, and where it was when it last closed
+/// (`resume`: on Claude, or on a web page, and how far down).
 pub fn list(folder: &Path, saved: &Saved) -> String {
     let names = guides::list(folder);
     let start = saved
@@ -183,6 +193,11 @@ pub fn list(folder: &Path, saved: &Saved) -> String {
         "contents": saved.contents,
         "rail": saved.rail,
         "where": folder.display().to_string(),
+        "resume": {
+            "claude": saved.claude.is_some(),
+            "web": saved.web,
+            "scroll": saved.scroll,
+        },
     })
     .to_string()
 }
@@ -379,6 +394,10 @@ mod tests {
         );
         assert_eq!(parse_request(r#"{"type":"claude","go":"x"}"#), None);
         assert_eq!(
+            parse_request(r#"{"type":"claude","go":"last"}"#),
+            Some(Request::Claude(Section::Last))
+        );
+        assert_eq!(
             parse_request(
                 r#"{"type":"claudeview","rect":[1,2,3,4],"show":true}"#
             ),
@@ -463,6 +482,17 @@ mod tests {
             Some(Request::Rail(240))
         );
         assert_eq!(parse_request(r#"{"type":"rail","width":-3}"#), None);
+        assert_eq!(
+            parse_request(
+                r#"{"type":"place","url":"https://a.org/","scroll":5}"#
+            ),
+            Some(Request::Place(Some("https://a.org/".to_owned()), 5))
+        );
+        assert_eq!(
+            parse_request(r#"{"type":"place","url":null,"scroll":99999}"#),
+            Some(Request::Place(None, crate::saved::SCROLL_FULL))
+        );
+        assert_eq!(parse_request(r#"{"type":"place"}"#), None);
         assert_eq!(parse_request(r#"{"type":"rm"}"#), None);
         assert_eq!(parse_request("nope"), None);
     }

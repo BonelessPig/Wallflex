@@ -124,7 +124,9 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   HTML, PDF and text files from `Guides\` next to the config in a
   borderless WebView2 window (`webview2-com`, static loader, so no DLL
   to ship). Only its `win32/` uses `unsafe`. One copy: a second start
-  sends its point by `WM_COPYDATA` and the first shows or hides.
+  sends its point by `WM_COPYDATA` and the first closes (`claim` in
+  `win32/mod.rs`; a copy that's ending answers 0, and the new one waits
+  for its lock to go, then opens).
   `guides.rs` checks names (as `library::resolve`) and renders Markdown
   (pulldown-cmark; raw HTML escaped, links rebased, heading ids) and
   text into reading pages shown in a sandboxed `srcdoc` frame without
@@ -220,7 +222,8 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>
   --remote-debugging-address=127.0.0.1` and use the DevTools protocol;
   restart it without afterwards (the port reaches the signed-in
-  session). Requests name a fixed `Section` address only; links
+  session). Requests name a fixed `Section` address only (`last`
+  opens the saved `claude` address if it's still a Claude host); links
   outside Claude's hosts open in the browser. The rail lists the
   sidebar sections instead of headings, shown while Contents is pinned
   (the only way to unpin is the Contents spoke; there's no Unpin
@@ -236,11 +239,19 @@ Rust lives in `%USERPROFILE%\.cargo\bin`; in Git Bash prepend it to
   (floating only) sends `move` with the press point; the app posts
   `WM_NCLBUTTONDOWN`/`HTCAPTION` from there, so the dot stays under the
   pointer, and saves the top-left as `spot` (used while the book icon
-  is on the same monitor; `place::at_spot` keeps it in the work area). It hides on focus loss (unless pinned),
+  is on the same monitor; `place::at_spot` keeps it in the work area).
+  Closing ends the process (`Reader::quit`: hide, save, then
+  `WM_FINISH` destroys the window); WebView2 isn't kept warm, a reopen
+  costs about a second. It closes on focus loss too (unless pinned),
   checking `GetForegroundWindow` when the posted note arrives, since
-  showing it bounces the focus. Hidden 2 minutes, it exits.
-  `reader.json` next to the config keeps pinned, last guide, zoom and
-  the reading style (`style.rs`: theme, font, size, spacing, checked
+  showing it bounces the focus; then it lingers 800 ms
+  (`CLOSE_GRACE_MS`), since a click on the book icon takes the focus
+  before its second copy arrives, and that copy's point is swallowed.
+  `reader.json` next to the config keeps pinned, last guide, zoom,
+  where it closed (`scroll` in 10000ths, from the page's `place`
+  request a moment after scrolling stops; `web`; `claude`, read with
+  `Site::source` on closing), restored from the first `list`'s
+  `resume`, and the reading style (`style.rs`: theme, font, size, spacing, checked
   against known names; the "Aa" panel in `shell.html` owns how each
   looks, as CSS variables and `data-theme` on the reading page's
   `<html>`, set before it loads and live after). HTML and PDF guides
