@@ -32,12 +32,46 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "$Name failed ($LASTEXITCODE)" }
     }
 
+    # A syntax error in a page's script leaves that whole page blank, and
+    # cargo never runs them, so check each one with Node (skipped, with a
+    # warning, if Node isn't installed).
+    function Test-PageScripts {
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if (-not $node) {
+            Write-Warning 'node not found: page scripts not checked'
+            return
+        }
+        $pages = @(
+            'src\bin\wallflex-reader\shell.html',
+            'src\bin\wallflex-settings\ui.html'
+        )
+        $temp = Join-Path ([IO.Path]::GetTempPath()) 'wallflex-page-check.js'
+        try {
+            foreach ($page in $pages) {
+                $html = [IO.File]::ReadAllText((Join-Path $root $page))
+                $found = [regex]::Matches(
+                    $html, '(?s)<script>(.*?)</script>')
+                $index = 0
+                foreach ($script in $found) {
+                    $index++
+                    [IO.File]::WriteAllText($temp, $script.Groups[1].Value)
+                    Invoke-Step "node --check $page (script $index)" {
+                        node --check $temp
+                    }
+                }
+            }
+        } finally {
+            Remove-Item -Force $temp -ErrorAction SilentlyContinue
+        }
+    }
+
     if (-not $SkipChecks) {
         Invoke-Step 'cargo fmt --check' { cargo fmt --check }
         Invoke-Step 'cargo clippy' {
             cargo clippy --all-targets -- -D warnings
         }
         Invoke-Step 'cargo test' { cargo test }
+        Test-PageScripts
     }
     Invoke-Step 'cargo build --release' { cargo build --release }
 
